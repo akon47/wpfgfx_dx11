@@ -27,9 +27,5 @@
     "Microsoft.DotNet.Arcade.Sdk": "10.0.0-beta.26525.101",
     "Microsoft.DotNet.Helix.Sdk": "10.0.0-beta.26525.101",
     "Microsoft.Build.NoTargets": "3.7.56"
-  },
-  "native-tools": {
-    "strawberry-perl": "5.38.0.1",
-    "net-framework-48-ref-assemblies": "0.0.0.1"
   }
 }

@@ -1,9 +1,11 @@
 <Project>
 
-  <!-- Only build the Microsoft.NET.Sdk.WindowsDesktop package on non-Windows. -->
-  <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
-    <ProjectToBuild Include="$(RepoRoot)packaging/Microsoft.NET.Sdk.WindowsDesktop/Microsoft.NET.Sdk.WindowsDesktop.ArchNeutral.csproj" />
-    <ProjectToBuild Include="$(RepoRoot)packaging/Microsoft.Dotnet.Wpf.ProjectTemplates/Microsoft.DotNet.Wpf.ProjectTemplates.ArchNeutral.csproj" />
+  <!-- This repository builds only the native WPF rendering engine (wpfgfx_cor3.dll) and the
+       renamed D3DCompiler redist that it delay-loads. The managed WPF assemblies come from the
+       installed Microsoft.WindowsDesktop.App shared framework and are not built here. -->
+  <ItemGroup>
+    <ProjectToBuild Include="$(RepoRoot)src/Microsoft.DotNet.Wpf/src/WpfGfx/core/dll/wpfgfx.vcxproj" />
+    <ProjectToBuild Include="$(RepoRoot)src/Microsoft.DotNet.Wpf/redist/D3DCompiler/D3DCompiler.vcxproj" />
   </ItemGroup>
 
 </Project>
