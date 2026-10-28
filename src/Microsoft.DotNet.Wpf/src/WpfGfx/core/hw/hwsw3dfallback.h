@@ -135,6 +135,10 @@ private:
     UINT m_uiNewTargetHeight;
 
     CClientMemoryBitmap *m_pWrapperBitmap;
+
+    // D3D11 cannot map a render target. Pixels travel through this staging
+    // twin: uploaded before the 3D pass, read back after it.
+    CD3DSurface *m_pD3DStagingSurface;
 };
 
 

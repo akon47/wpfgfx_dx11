@@ -79,6 +79,7 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - `--rtb <png> [--rtb-hw]`: 그라데이션·텍스트·ps_2_0·ps_3_0 효과·그림자를 `RenderTargetBitmap` 으로 그려 저장한다. `--rtb-hw` 는
   `Dx11Engine.HardwareRenderTargetBitmap = true`(GPU 경로, D27; 스톡 엔진에서는 예외).
 - `--resize <steps>`: 창 크기를 단계별로 키우고 줄이며 매 단계 캡처해 검은 픽셀 비율을 보고한다(D29 플립 모델의 제자리 리사이즈 검증).
+- `--software`: `RenderOptions.ProcessRenderMode = SoftwareOnly` 로 그린다(소프트웨어 래스터라이저 + WARP 3D 폴백, L19).
 - `--fq <png> [--fq-queues N] [--fq-seconds S] [--fq-block]`: 프레임 큐(D19) 시나리오. 워커 스레드가 N개 큐에 60 fps 로 그리고
   `--fq-block` 이면 UI 스레드를 0.5초마다 100 ms 막는다. 결과 줄 `fq: ...` 에 카운터와 250 ms 간격 두 캡처의 변화율이 나온다.
   `tests/assets/smptebars.mp4`는 정지 SMPTE 막대(H.264 160×120, 4초)라 캡처 시점에 무관하다.
@@ -116,7 +117,7 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 .\tests\run-smoke.ps1 -Rid win-x86 -Tfm net8.0-windows   # x86: 먼저 .\build.cmd -configuration Release -platform x86
 ```
 
-행: engine, standard, spin jitter, resize(16 steps), transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
+행: engine, standard, spin jitter, resize(16 steps), software mode, transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
 frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, 선택 bench(일반 창·투명 창, 스톡·D3D11).
 
 의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로
@@ -151,3 +152,33 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 $env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"
 .\tests\SmokeApp\bin\Release\net8.0-windows\win-x64\SmokeApp.exe --wpfgfx tests\out\dll --screenshot tests\out\net8.png --exit
 ```
+
+## dotnet/wpf-test DRT 실행 (`tests/run-drts.ps1`)
+
+업스트림 테스트 저장소의 milcore DRT(2D 브러시·드로잉, 3D, VisualTarget, Freezable, 애니메이션·타이밍·스토리보드, 미디어 API)를
+스톡 엔진과 교체 엔진으로 각각 실행해 종료 코드를 비교한다. DRT 는 프레임워크 종속 앱이라 §5 의 (b) 방식이 필요한데, 머신의 공유
+프레임워크 대신 **임시 폴더에 복사한 런타임**의 `wpfgfx_cor3.dll`·`D3DCompiler_47_cor3.dll` 만 바꾸고 `DOTNET_ROOT` 로 그 복사본을
+가리킨다. 교체 엔진이 실제로 로드됐는지는 `WPFGFX_DX11_LOG` 로그가 생겼는지로 판정한다.
+
+```powershell
+# 1) 테스트 저장소(이 저장소와 같은 .NET 10 브랜치)를 옆에 받는다
+git clone --depth 1 --branch release/10.0 https://github.com/dotnet/wpf-test.git ..\wpf-test
+
+# 2) 이 환경(VS 2022 17.14 + .NET SDK 10)에서는 저장소의 Arcade 빌드가 그대로 돌지 않는다(L18). DRT 프로젝트를 직접 빌드한다.
+#    global.json 의 tools.dotnet 을 설치된 SDK(예: 10.0.401)로 바꾸고 native-tools 항목을 지운 뒤:
+cd ..\wpf-test
+# 한국어 등 CP949 환경: src\Test\Common\Code\Microsoft\Test\Graphics\MathEx.cs 의 "§" 리터럴을 "\u00A7" 로 바꾼다(L18)
+Get-ChildItem -Recurse -Filter *.csproj src\Test\mil\DRT | ForEach-Object {
+    dotnet build $_.FullName -c Release -p:Platform=x64 -p:GenerateAssemblyInfo=false -nologo -v m
+}
+# 산출물: ..\wpf-test\publish\Release\x64\Test\DRT\Drt*.exe (+ DrtFiles\)
+
+# 3) 실행
+cd <이 저장소>
+.\tests\run-drts.ps1 -TestDir ..\wpf-test\publish\Release\x64\Test\DRT            # 엔진 DLL 기본: tests\out\dll
+.\tests\run-drts.ps1 -TestDir <DRT 폴더> -Dll <DLL 폴더> -Drts DrtMil2D,DrtBasic3D   # 일부만
+```
+
+결과는 마크다운 표(DRT, 스톡 종료 코드, D3D11 종료 코드, 엔진 로드 여부, 소요 시간)로 나오고 로그는 `tests\out\drt\` 에 남는다.
+합격: 스톡에서 0 으로 끝나는 DRT 가 교체 엔진에서도 0 으로 끝나고 엔진 로그가 있다. 스톡에서도 실패하는 DRT 는 같은 코드면 통과로 본다.
+DRT 는 대부분 API·동작 검증이고 픽셀 비교는 하지 않는다(렌더링 경로가 예외·행 없이 끝까지 도는지 확인하는 용도).

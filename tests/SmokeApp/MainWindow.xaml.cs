@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         bool exit = false;
         int delayMs = 2000;
         int resizeSteps = 0;
+        bool software = false;
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 1; i < args.Length; i++)
         {
@@ -70,8 +71,15 @@ public partial class MainWindow : Window
             else if (args[i] == "--fq-block") fqBlock = true;
             else if (args[i] == "--spin-jitter" && i + 1 < args.Length) jitterFrames = ParseInt(args[++i]);
             else if (args[i] == "--resize" && i + 1 < args.Length) resizeSteps = ParseInt(args[++i]);
+            else if (args[i] == "--software") software = true;
             else if (args[i] == "--exit") exit = true;
             else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = ParseInt(args[++i]);
+        }
+
+        if (software)
+        {
+            // Software rasterizer for 2D; 3D content goes through the engine's software 3D fallback.
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         }
 
         TransparentWindow? transparent = null;

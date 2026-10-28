@@ -99,7 +99,17 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
 - ❌ 투명 창의 DirectComposition 프레젠트는 하지 않는다(D30): 레이어드 창의 픽셀 단위 히트 테스트가 `UpdateLayeredWindow` 비트맵에 묶여
   있어 리드백을 없앨 수 없다. 비용은 게이트 `bench ... (transparent window)` 행으로 기록한다.
 - 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).
-- dotnet/wpf-test의 DRT 중 렌더링 관련 테스트를 교체 DLL로 실행.
+- ✅ dotnet/wpf-test 의 milcore DRT 실행(2026-10-28, `tests/run-drts.ps1`, 절차는 `docs/BUILD.md`, 함정은 L18). 결과(.NET 10, x64):
+
+  | DRT | 스톡 | D3D11 | 비고 |
+  |---|---|---|---|
+  | DrtMil2D, DrtVisualTarget, DrtChangeable, DrtColorAPI, DrtTiming, DRTStoryboards, DrtMediaAPI, DrtMedia | 0 | 0 | 통과 |
+  | DrtBasic3D | 0 | 0 | 처음엔 `RenderMode.SoftwareOnly` 케이스에서 `UCEERR_RENDERTHREADFAILURE`. 소프트웨어 3D 폴백이 렌더타깃을 직접 Lock 하던 것을 스테이징 텍스처 경유로 고쳤다(L19). |
+  | DrtElement3D | 0 또는 -2 | 0 | 스톡에서 입력 관련 케이스(Reverse Inheritance, Eventing)가 간헐적으로 실패한다. 엔진과 무관. |
+  | DrtAnimation | CLR 예외 | 같은 예외 | 두 엔진에서 같은 관리 예외(0xE0434352)로 끝난다. 엔진과 무관. |
+
+  DRT 는 대부분 API·동작 검증이라 픽셀 비교는 하지 않는다. 소프트웨어 모드는 게이트에 `software mode` 행으로 추가했다
+  (스톡 대비 차이>8 0.18%, 차이>64 0%; 차이는 3D 셀의 WARP 와 D3D9 소프트웨어 래스터라이저 사이 AA 뿐).
 - ✅ x86 빌드·게이트(2026-10-28): `build.cmd -platform x86` 산출물이 .NET 8 x86 앱에서 게이트 전 행 PASS(표준 차이>8 0.04%, 투명 창·미디어·
   RenderTargetBitmap·프레임 큐(큐당 51 µs) 포함). 게이트는 `run-smoke.ps1 -Rid win-x86`. ✅ arm64 빌드(2026-10-28): `build.cmd -platform arm64` 가 경고·오류 0 으로 ARM64 DLL 을 만든다
   (D3DCompiler 재배포 프로젝트에 arm64 구성을 추가했다. SDK 의 arm64 d3dcompiler_47.dll 을 쓴다). arm64 실행 환경이 없어 동작은 미검증.
