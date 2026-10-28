@@ -9,8 +9,8 @@
 //  WpfGfx는 더 이상 <d3d9.h>를 포함하지 않는다. 이 헤더는 세 가지를 제공한다.
 //
 //   1. d3d9types.h와 레이아웃·가드가 같은 값 타입(D3DMATRIX, D3DVECTOR, D3DRECT,
-//      D3DCOLOR, D3DCOLORVALUE). DUCE 프로토콜(wgx_core_types.h, wgx_commands.h)과
-//      CBaseMatrix가 이 레이아웃을 쓰므로 이름과 배치를 유지한다. 가드 매크로를
+//      D3DCOLOR, D3DCOLORVALUE). DUCE 프로토콜(wgx_core_types.h, wgx_commands.h)과.
+//      CBaseMatrix가 이 레이아웃을 쓰므로 이름과 배치를 유지한다. 가드 매크로를.
 //      d3d9types.h와 똑같이 두어 fxjit의 사설 복사본과 같은 번역 단위에서도 충돌하지 않는다.
 //   2. 상위 레이어와 관리 코드가 분기하는 HRESULT 값(D3DERR_*)과 셰이더 버전 인코딩.
 //      관리 코드의 RenderCapability가 PixelShaderVersion을 이 인코딩으로 읽는다.
@@ -99,7 +99,7 @@ typedef struct _D3DMATRIX {
 #define D3DSHADER_VERSION_MINOR(_Version) (((_Version)>>0)&0xFF)
 #endif
 
-// d3d9.h와 같은 값. 디바이스 손실·메모리 부족 등의 분기(uce, api, sw, hw)와
+// d3d9.h와 같은 값. 디바이스 손실·메모리 부족 등의 분기(uce, api, sw, hw)와.
 // 관리 코드로 올라가는 실패 사유가 이 값에 묶여 있다.
 #ifndef _FACD3D
 #define _FACD3D  0x876
@@ -164,10 +164,10 @@ inline HRESULT MilTranslateD3D11Error(HRESULT hr)
 }
 
 //
-// 3. 래퍼 공통 보조 타입
+// 3. 래퍼 공통 보조 타입.
 //
 
-// 디바이스 종류. D3D9의 D3DDEVTYPE_HAL/REF/SW에 대응한다. Software는 WpfGfx 자체
+// 디바이스 종류. D3D9의 D3DDEVTYPE_HAL/REF/SW에 대응한다. Software는 WpfGfx 자체.
 // 소프트웨어 래스터라이저(core/sw)를 뜻하며 D3D11 디바이스가 없다.
 enum MilDeviceKind
 {
@@ -184,7 +184,7 @@ struct MilLockedRect
     void *pBits;
 };
 
-// CD3DDeviceLevel1::Clear 플래그. 철자까지 d3d9types.h와 같아서 <d3d9.h>(D3DImage·EVR interop)를
+// CD3DDeviceLevel1::Clear 플래그. 철자까지 d3d9types.h와 같아서 <d3d9.h>(D3DImage·EVR interop)를.
 // 뒤에 포함해도 재정의 경고가 나지 않는다.
 #define D3DCLEAR_TARGET            0x00000001l
 #define D3DCLEAR_ZBUFFER           0x00000002l
@@ -202,7 +202,7 @@ struct MilLockedRect
 // StretchRect 필터. D3DTEXTUREFILTERTYPE 대체.
 enum MilStretchFilter
 {
-    MilStretchFilter_None   = 0,    // 같은 크기 복사
+    MilStretchFilter_None   = 0,    // 같은 크기 복사.
     MilStretchFilter_Point  = 1,
     MilStretchFilter_Linear = 2,
 };
@@ -217,7 +217,7 @@ struct MilSwapChainParams
     DXGI_SAMPLE_DESC SampleDesc;
     UINT             BackBufferCount;
     bool             GdiCompatible;      // IDXGISurface1::GetDC 가 필요한 창(투명 창)
-    UINT             SyncInterval;       // 0 = 즉시, 1 = 수직 동기
+    UINT             SyncInterval;       // 0 = 즉시, 1 = 수직 동기.
 };
 
 // 2D 텍스처 서브리소스 하나를 가리키는 "서피스" 설명. D3DSURFACE_DESC 대체.

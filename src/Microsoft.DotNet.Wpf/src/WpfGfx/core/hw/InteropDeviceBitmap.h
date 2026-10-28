@@ -71,6 +71,8 @@ protected:
         SharedSurface,
         // Back buffer will be BitBlt to front buffer 
         BitBlt,
+        // User texture is D3D11: copied on our device (same device or shared handle)
+        D3D11Copy,
         // Back buffer will be copied to front buffer through software
         Software
     };
@@ -84,7 +86,8 @@ protected:
         MilPixelFormat::Enum fmtPixel,
         FrontBufferUpdateMethod oUpdateMethod,
         UINT uAdapter,
-        __in IDirect3DSurface9 *pUserSurface
+        __in_opt IDirect3DSurface9 *pUserSurface,
+        __in_opt ID3D11Texture2D *pUserTexture11
         );
 
 private:
@@ -95,6 +98,16 @@ private:
         __in IDirect3DSurface9 *pID3DSurface
         );
     
+    static HRESULT CreateForD3D11Texture(
+        __in ID3D11Texture2D *pUserTexture,
+        __in_range(0, DBL_MAX) double dpiX,
+        __in_range(0, DBL_MAX) double dpiY,
+        UINT uVersion,
+        __in FrontBufferAvailableCallbackPtr pfnAvailable,
+        bool isSoftwareFallbackEnabled,
+        __deref_out CInteropDeviceBitmap **ppInteropDeviceBitmap
+        );
+
     HRESULT UpdateFrontBuffer();
 
     HRESULT CreateFrontBuffer();
@@ -112,6 +125,8 @@ private:
     
     // Will be NULL after Detach() or NotifyAdapterStatus(m_uAdapter, false)
     IDirect3DSurface9 *m_pIUserSurface;
+    // D3D11 user texture (one of the two is set). Released like m_pIUserSurface.
+    ID3D11Texture2D *m_pIUserTexture11;
 
     FrontBufferAvailableCallbackPtr m_pfnAvailable;
     UINT m_uVersion;

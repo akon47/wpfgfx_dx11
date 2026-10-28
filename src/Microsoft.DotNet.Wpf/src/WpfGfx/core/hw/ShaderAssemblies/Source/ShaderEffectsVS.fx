@@ -3,7 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 
-// ShaderEffect 파이프라인의 버텍스 셰이더. 버텍스 상수 버퍼 b0 의 c0..c3 에
+// ShaderEffect 파이프라인의 버텍스 셰이더. 버텍스 상수 버퍼 b0 의 c0..c3 에.
 // 디바이스 변환이 들어온다 (CHwRenderStateManager::SetVertexShaderConstantF).
 
 cbuffer MilVertexShaderConstants : register(b0)

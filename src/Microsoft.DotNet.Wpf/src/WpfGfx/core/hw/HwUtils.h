@@ -36,7 +36,20 @@ HRESULT ReadRenderTargetIntoSysMemBuffer(
 bool IsD3DFailure(HRESULT hr);
 
 //
-// D3DImage 사용자의 D3D9 서피스를 시스템 메모리로 읽는다 (사용자 디바이스로
+// D3DImage 사용자의 D3D11 텍스처를 그 텍스처의 디바이스로 스테이징에 복사해 시스템.
+// 메모리로 읽는다 (소프트웨어 폴백, RenderTargetBitmap).
+//
+HRESULT ReadD3D11TextureIntoSysMemBuffer(
+    __in ID3D11Texture2D *pSourceTexture,
+    __in const CMilRectU &rcCopy,
+    MilPixelFormat::Enum fmtOut,
+    UINT uStrideOut,
+    DBG_ANALYSIS_PARAM_COMMA(UINT cbBufferOut)
+    __out_bcount_full(cbBufferOut) BYTE *pbBufferOut
+    );
+
+//
+// D3DImage 사용자의 D3D9 서피스를 시스템 메모리로 읽는다 (사용자 디바이스로.
 // GetRenderTargetData). InteropDeviceBitmap.cpp 에 정의되어 있다.
 //
 interface IDirect3DSurface9;

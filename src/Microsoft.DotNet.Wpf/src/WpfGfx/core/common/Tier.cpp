@@ -6,8 +6,8 @@
 //+-----------------------------------------------------------------------------
 //
 //  Description:
-//      Graphics acceleration tier computation. 관리 코드의 RenderCapability.Tier가
-//      이 값을 받는다. Tier 2 = 전체 하드웨어 가속. 요구 조건은 D3D9 시절과 같은
+//      Graphics acceleration tier computation. 관리 코드의 RenderCapability.Tier가.
+//      이 값을 받는다. Tier 2 = 전체 하드웨어 가속. 요구 조건은 D3D9 시절과 같은.
 //      의미(PS/VS 2.0, 메모리)를 유지하되 능력 값은 MilDeviceCaps에서 읽는다.
 //
 //------------------------------------------------------------------------------

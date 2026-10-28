@@ -2611,8 +2611,17 @@ CHwBitmapColorSource::CreateTexture(
     Assert(m_d3dsdRequired.Width);
     Assert(m_d3dsdRequired.Height);
 
+    D3D11_TEXTURE2D_DESC desc = m_d3dsdRequired;
+
+    if (pSharedHandle)
+    {
+        // D3DImage: the user's D3D9Ex device opens this texture as a render
+        // target and StretchRects into it.
+        desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+    }
+
     IFC(CD3DVidMemOnlyTexture::Create(
-        &m_d3dsdRequired,
+        &desc,
         m_uLevels,
         fIsEvictable,
         m_pDevice,

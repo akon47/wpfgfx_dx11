@@ -15,7 +15,7 @@
 //  $Description:
 //      Contains CD3DDeviceLevel1 implementation
 //
-//      ID3D11Device / ID3D11DeviceContext 를 감싼다. 래퍼 API 모양은 D3D9 시절과
+//      ID3D11Device / ID3D11DeviceContext 를 감싼다. 래퍼 API 모양은 D3D9 시절과.
 //      같게 유지하고(D9) 내부만 D3D11로 바꿨다.
 //
 //  $ENDTAG

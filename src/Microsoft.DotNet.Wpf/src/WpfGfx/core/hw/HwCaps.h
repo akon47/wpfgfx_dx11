@@ -6,8 +6,8 @@
 //+-----------------------------------------------------------------------------
 //
 //  Description:
-//      디바이스 능력 기술. D3D9의 D3DCAPS9를 대체한다. D3D11에서는 Feature Level이
-//      능력을 결정하므로 값은 Feature Level에서 상수로 도출한다. 관리 코드로 올라가는
+//      디바이스 능력 기술. D3D9의 D3DCAPS9를 대체한다. D3D11에서는 Feature Level이.
+//      능력을 결정하므로 값은 Feature Level에서 상수로 도출한다. 관리 코드로 올라가는.
 //      PixelShaderVersion/VertexShaderVersion은 D3DPS_VERSION 인코딩을 유지한다.
 //
 //------------------------------------------------------------------------------
@@ -28,7 +28,7 @@ struct MilDeviceCaps
     DWORD VertexShaderVersion;                // D3DVS_VERSION(major, minor)
     UINT  MaxPixelShader30InstructionSlots;
 
-    bool  SupportsSharedResources;            // D3D9의 "LDDM/WDDM" 판정에 해당
+    bool  SupportsSharedResources;            // D3D9의 "LDDM/WDDM" 판정에 해당.
     bool  SupportsNonPow2Unconditionally;
     bool  SupportsBorderColor;
     bool  SupportsScissorRect;

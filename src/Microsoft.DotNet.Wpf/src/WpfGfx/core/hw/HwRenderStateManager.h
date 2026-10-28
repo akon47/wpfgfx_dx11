@@ -13,12 +13,12 @@
 //  $Description:
 //      Contains CHwRenderStateManager declaration
 //
-//      파이프라인 상태의 그림자 사본을 들고 있다가 Draw 직전(ApplyStateForDraw)에
-//      바뀐 것만 D3D11 컨텍스트에 바인딩한다. 블렌드·깊이스텐실·래스터라이저·샘플러
-//      상태는 desc를 키로 상태 객체를 캐시한다. 셰이더 상수는 D3D9와 같은 레지스터
+//      파이프라인 상태의 그림자 사본을 들고 있다가 Draw 직전(ApplyStateForDraw)에.
+//      바뀐 것만 D3D11 컨텍스트에 바인딩한다. 블렌드·깊이스텐실·래스터라이저·샘플러.
+//      상태는 desc를 키로 상태 객체를 캐시한다. 셰이더 상수는 D3D9와 같은 레지스터.
 //      번호 체계(float4 c#)를 유지하고 상수 버퍼 하나로 올린다.
 //
-//      버텍스 셰이더나 픽셀 셰이더가 NULL이면 고정 기능 에뮬레이션 셰이더를 쓴다
+//      버텍스 셰이더나 픽셀 셰이더가 NULL이면 고정 기능 에뮬레이션 셰이더를 쓴다.
 //      (CHwFixedFunctionShaders).
 //
 //  $ENDTAG
@@ -582,7 +582,7 @@ private:
     bool m_fVertexFormatDirty;
 
     ID3D11Buffer *m_pVertexBuffer;
-    ID3D11Buffer *m_pNullVertexBuffer;   // 슬롯 MIL_NULL_VERTEX_SLOT: 형식에 없는 속성의 0 값
+    ID3D11Buffer *m_pNullVertexBuffer;   // 슬롯 MIL_NULL_VERTEX_SLOT: 형식에 없는 속성의 0 값.
     UINT m_uVertexStride;
     bool m_fVertexBufferKnown;
     bool m_fVertexBufferDirty;

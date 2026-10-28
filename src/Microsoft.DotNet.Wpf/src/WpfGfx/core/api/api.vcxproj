@@ -54,6 +54,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="api_base.cpp" />
+    <ClCompile Include="api_dx11.cpp" />
     <ClCompile Include="api_basebrushes.cpp" />
     <ClCompile Include="api_brush.cpp" />
     <ClCompile Include="api_codecfactory.cpp" />

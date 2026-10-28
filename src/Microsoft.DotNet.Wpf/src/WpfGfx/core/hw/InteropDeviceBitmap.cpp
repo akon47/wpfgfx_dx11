@@ -12,7 +12,7 @@
 #include "precomp.hpp"
 
 //
-// D3DImage 는 사용자의 IDirect3DSurface9 를 받는다. 그 객체를 vtable 로만 호출하므로
+// D3DImage 는 사용자의 IDirect3DSurface9 를 받는다. 그 객체를 vtable 로만 호출하므로.
 // d3d9.h 의 인터페이스 선언만 필요하고 d3d9.lib 은 링크하지 않는다 (D7).
 #include "d3d9interop.h"
 
@@ -206,20 +206,30 @@ Cleanup:
 //
 //------------------------------------------------------------------------------
 
-/* static */ CInteropDeviceBitmap::FrontBufferUpdateMethod 
+/* static */ CInteropDeviceBitmap::FrontBufferUpdateMethod
 CInteropDeviceBitmap::GetUpdateMethod(
     __in IDirect3DDevice9 *pID3DDevice,
     __in_opt const IDirect3DDevice9Ex *pID3DDeviceEx,
     __in IDirect3DSurface9 *pID3DSurface
     )
-{   
-    UNREFERENCED_PARAMETER(pID3DDevice);
-    UNREFERENCED_PARAMETER(pID3DDeviceEx);
+{
+    //
+    // D3D9Ex devices that can share resources get the shared-surface path:
+    // our D3D11 texture is shared and the user's device copies into it (D7).
+    // Everything else reads the surface back through system memory.
+    //
     UNREFERENCED_PARAMETER(pID3DSurface);
 
-    //
-    // M9 까지는 소프트웨어 복사만 쓴다. 공유 핸들 경로(D7)는 M9 에서 다시 연다.
-    //
+    D3DCAPS9 caps;
+
+    if (   pID3DDeviceEx
+        && SUCCEEDED(pID3DDevice->GetDeviceCaps(&caps))
+        && (caps.Caps2 & D3DCAPS2_CANSHARERESOURCE)
+        && (caps.DevCaps2 & D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES))
+    {
+        return SharedSurface;
+    }
+
     return Software;
 }
 
@@ -255,8 +265,31 @@ CInteropDeviceBitmap::Create(
     D3DSURFACE_DESC desc;
     CInteropDeviceBitmap *pInteropDeviceBitmap = NULL;
         
+        //
+    // D3D11 textures (companion assembly WpfGfx.Dx11, D8) take their own path.
+    //
+    {
+        ID3D11Texture2D *pUserTexture11 = NULL;
+
+        if (SUCCEEDED(pIUserSurface->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&pUserTexture11))))
+        {
+            hr = CreateForD3D11Texture(
+                pUserTexture11,
+                dpiX,
+                dpiY,
+                uVersion,
+                pfnAvailable,
+                isSoftwareFallbackEnabled,
+                ppInteropDeviceBitmap
+                );
+
+            pUserTexture11->Release();
+            goto Cleanup;
+        }
+    }
+
     IFC(pIUserSurface->QueryInterface(
-        __uuidof(IDirect3DSurface9), 
+        __uuidof(IDirect3DSurface9),
         reinterpret_cast<void **>(&pID3DUserSurface)
         ));
     IFC(pID3DUserSurface->GetDesc(&desc));
@@ -349,7 +382,8 @@ CInteropDeviceBitmap::Create(
         MilD3D9FormatToPixelFormat(desc.Format, /* fPremultiplied = */ TRUE),
         method,
         oCreationParams.AdapterOrdinal,
-        pID3DUserSurface
+        pID3DUserSurface,
+        NULL
         );
     IFCOOM(pInteropDeviceBitmap);
     pInteropDeviceBitmap->AddRef();
@@ -385,6 +419,123 @@ Cleanup:
 //      UI thread
 //
 //------------------------------------------------------------------------------
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CInteropDeviceBitmap::CreateForD3D11Texture
+//
+//  Synopsis:
+//      D3DImage.SetBackBuffer with an ID3D11Texture2D. The texture must be a
+//      single 2D BGRA texture (B8G8R8A8/B8G8R8X8), DEFAULT usage. Textures from
+//      another device must be created with D3D11_RESOURCE_MISC_SHARED.
+//
+//------------------------------------------------------------------------------
+
+/* static */ HRESULT
+CInteropDeviceBitmap::CreateForD3D11Texture(
+    __in ID3D11Texture2D *pUserTexture,
+    __in_range(0, DBL_MAX) double dpiX,
+    __in_range(0, DBL_MAX) double dpiY,
+    UINT uVersion,
+    __in FrontBufferAvailableCallbackPtr pfnAvailable,
+    bool isSoftwareFallbackEnabled,
+    __deref_out CInteropDeviceBitmap **ppInteropDeviceBitmap
+    )
+{
+    HRESULT hr = S_OK;
+    ID3D11Device *pUserDevice = NULL;
+    IDXGIDevice *pDXGIDevice = NULL;
+    IDXGIAdapter *pDXGIAdapter = NULL;
+    const CDisplaySet *pDisplaySet = NULL;
+    CD3DDeviceManager *pDeviceManager = CD3DDeviceManager::Get();
+    CInteropDeviceBitmap *pInteropDeviceBitmap = NULL;
+    D3D11_TEXTURE2D_DESC desc;
+    UINT uAdapter = 0;
+
+    pUserTexture->GetDesc(&desc);
+
+    C_ASSERT(SURFACE_RECT_MAX <= INT_MAX);
+
+    if (desc.Width > SURFACE_RECT_MAX || desc.Height > SURFACE_RECT_MAX)
+    {
+        IFC(WGXERR_D3DI_INVALIDSURFACESIZE);
+    }
+
+    if (   desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+        && desc.Format != DXGI_FORMAT_B8G8R8X8_UNORM)
+    {
+        IFC(WGXERR_UNSUPPORTEDPIXELFORMAT);
+    }
+
+    if (desc.ArraySize != 1 || desc.Usage != D3D11_USAGE_DEFAULT)
+    {
+        IFC(WGXERR_D3DI_INVALIDSURFACEUSAGE);
+    }
+
+    pUserTexture->GetDevice(&pUserDevice);
+
+    if (FAILED(pUserDevice->GetDeviceRemovedReason()))
+    {
+        IFC(WGXERR_D3DI_INVALIDSURFACEDEVICE);
+    }
+
+    //
+    // Find the display whose adapter owns the user's device.
+    //
+    IFC(pUserDevice->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&pDXGIDevice)));
+    IFC(pDXGIDevice->GetAdapter(&pDXGIAdapter));
+
+    {
+        DXGI_ADAPTER_DESC adapterDesc;
+        IFC(pDXGIAdapter->GetDesc(&adapterDesc));
+
+        g_DisplayManager.GetCurrentDisplaySet(&pDisplaySet);
+
+        for (UINT i = 0; i < pDisplaySet->GetDisplayCount(); i++)
+        {
+            const LUID luid = pDisplaySet->Display(i)->GetLUID();
+
+            if (   luid.LowPart == adapterDesc.AdapterLuid.LowPart
+                && luid.HighPart == adapterDesc.AdapterLuid.HighPart)
+            {
+                uAdapter = i;
+                break;
+            }
+        }
+    }
+
+    pInteropDeviceBitmap = new CInteropDeviceBitmap(
+        uVersion,
+        pfnAvailable,
+        isSoftwareFallbackEnabled,
+        desc.Width,
+        desc.Height,
+        (desc.Format == DXGI_FORMAT_B8G8R8X8_UNORM) ? MilPixelFormat::BGR32bpp : MilPixelFormat::PBGRA32bpp,
+        D3D11Copy,
+        uAdapter,
+        NULL,
+        pUserTexture
+        );
+    IFCOOM(pInteropDeviceBitmap);
+    pInteropDeviceBitmap->AddRef();
+
+    IFC(pInteropDeviceBitmap->SetResolution(dpiX, dpiY));
+    IFC(pInteropDeviceBitmap->m_cs.Init());
+    IFC(pDeviceManager->AddAdapterStatusListener(pInteropDeviceBitmap));
+
+    *ppInteropDeviceBitmap = pInteropDeviceBitmap;  // steal ref
+    pInteropDeviceBitmap = NULL;
+
+Cleanup:
+    ReleaseInterface(pInteropDeviceBitmap);
+    ReleaseInterface(pDisplaySet);
+    ReleaseInterface(pDXGIAdapter);
+    ReleaseInterface(pDXGIDevice);
+    ReleaseInterface(pUserDevice);
+    CD3DDeviceManager::Release();
+    RRETURN(hr);
+}
+
 CInteropDeviceBitmap::CInteropDeviceBitmap(
     UINT uVersion,
     __in FrontBufferAvailableCallbackPtr pfnAvailable,
@@ -393,17 +544,29 @@ CInteropDeviceBitmap::CInteropDeviceBitmap(
     __in_range(0, SURFACE_RECT_MAX) UINT uHeight,
     MilPixelFormat::Enum fmtPixel,
     FrontBufferUpdateMethod oUpdateMethod,
-    UINT uAdapter,
-    __in IDirect3DSurface9 *pUserSurface
+        UINT uAdapter,
+    __in_opt IDirect3DSurface9 *pUserSurface,
+    __in_opt ID3D11Texture2D *pUserTexture11
     )
-    : 
+    :
     CDeviceBitmap(uWidth, uHeight, fmtPixel),
-    m_pIUserSurface(pUserSurface), m_cUserDirtyRects(0), m_uVersion(uVersion),
+    m_pIUserSurface(pUserSurface), m_pIUserTexture11(pUserTexture11),
+    m_cUserDirtyRects(0), m_uVersion(uVersion),
     m_pfnAvailable(pfnAvailable), m_fIsSoftwareFallbackEnabled(isSoftwareFallbackEnabled), 
     m_oUpdateMethod(oUpdateMethod), m_fIsHwRenderingDisabled(false),
     m_uAdapter(uAdapter), m_pISoftwareBitmap(NULL)
 {
-    m_pIUserSurface->AddRef();
+    Assert((m_pIUserSurface != NULL) != (m_pIUserTexture11 != NULL));
+
+    if (m_pIUserSurface)
+    {
+        m_pIUserSurface->AddRef();
+    }
+
+    if (m_pIUserTexture11)
+    {
+        m_pIUserTexture11->AddRef();
+    }
 
     ZeroMemory(&m_luidDevice, sizeof(m_luidDevice));
 }
@@ -428,6 +591,7 @@ CInteropDeviceBitmap::~CInteropDeviceBitmap()
 
     ReleaseInterface(m_pISoftwareBitmap);
     ReleaseInterface(m_pIUserSurface); 
+    ReleaseInterface(m_pIUserTexture11);
     m_cs.DeInit();
 }
 
@@ -454,6 +618,7 @@ CInteropDeviceBitmap::Detach()
     // need to display the front buffer
     //
     ReleaseInterface(m_pIUserSurface);
+    ReleaseInterface(m_pIUserTexture11);
 
     //
     // We won't remove ourselves from listening to the device manager until 
@@ -514,6 +679,7 @@ CInteropDeviceBitmap::NotifyAdapterStatusInternal(UINT uAdapter, bool fIsValid)
             else
             {
                 ReleaseInterface(m_pIUserSurface);
+                ReleaseInterface(m_pIUserTexture11);
             }
 
             //
@@ -633,7 +799,7 @@ CInteropDeviceBitmap::Present()
     // The user may have ignored our rendering disabled notification and continued 
     // to render so let's silently fail until we get a valid surface again.
     //
-    if (!m_fIsHwRenderingDisabled && m_pIUserSurface)
+    if (!m_fIsHwRenderingDisabled && (m_pIUserSurface || m_pIUserTexture11))
     {
         if (!m_poDeviceBitmapInfo)
         {
@@ -671,7 +837,7 @@ Cleanup:
         hr = S_OK;
     }
 
-    if (m_pIUserSurface && m_fIsHwRenderingDisabled && m_fIsSoftwareFallbackEnabled)
+    if ((m_pIUserSurface || m_pIUserTexture11) && m_fIsHwRenderingDisabled && m_fIsSoftwareFallbackEnabled)
     {
         // If software fallback is enabled and the front buffer is unavailable, we try to fall back to
         // software no matter what.
@@ -769,6 +935,7 @@ CInteropDeviceBitmap::CreateFrontBuffer()
                 // For software copy, we could go with either color source, but we'll go with
                 // a standard DBCS because it's more efficient (not lockable)
                 case Software:
+                case D3D11Copy:
                     IFC(pCache->CreateSharedColorSource(
                         m_PixelFormat,
                         rcBounds,
@@ -821,13 +988,21 @@ HRESULT
 CInteropDeviceBitmap::GetDisplayFromUserDevice(
     __deref_out const CDisplay **ppDisplay
     )
-{ 
-    Assert(m_pIUserSurface);
-
+{
     HRESULT hr = S_OK;
+
     IDirect3DDevice9 *pID3DUserDevice = NULL;
     IDirect3D9 *pID3DUserObject = NULL;
-    const CDisplaySet *pDisplaySet = NULL; 
+    const CDisplaySet *pDisplaySet = NULL;
+
+    if (m_pIUserTexture11)
+    {
+        g_DisplayManager.GetCurrentDisplaySet(&pDisplaySet);
+        IFC(pDisplaySet->GetDisplay(m_uAdapter, ppDisplay));
+        goto Cleanup;
+    }
+
+    Assert(m_pIUserSurface);
 
     IFC(m_pIUserSurface->GetDevice(&pID3DUserDevice));
     IFC(pID3DUserDevice->GetDirect3D(&pID3DUserObject));
@@ -878,11 +1053,22 @@ CInteropDeviceBitmap::UpdateFrontBuffer()
         Assert(m_poDeviceBitmapInfo->m_pbcs);
         Assert(m_poDeviceBitmapInfo->m_pbcs->IsValid());
         
-        IFC(m_poDeviceBitmapInfo->m_pbcs->UpdateSurface(
-            m_cUserDirtyRects,
-            m_rgUserDirtyRects,
-            m_pIUserSurface
-            ));
+        if (m_pIUserTexture11)
+        {
+            IFC(m_poDeviceBitmapInfo->m_pbcs->UpdateSurface(
+                m_cUserDirtyRects,
+                m_rgUserDirtyRects,
+                m_pIUserTexture11
+                ));
+        }
+        else
+        {
+            IFC(m_poDeviceBitmapInfo->m_pbcs->UpdateSurface(
+                m_cUserDirtyRects,
+                m_rgUserDirtyRects,
+                m_pIUserSurface
+                ));
+        }
 
         // Update bitmap validity and dirty it for cross adapter purposes
         for (UINT i = 0; i < m_cUserDirtyRects; ++i)
@@ -967,6 +1153,7 @@ CInteropDeviceBitmap::TryCreateDependentDeviceColorSource(
                 break;
 
             case Software:
+            case D3D11Copy:
                 //
                 // Future Consideration:   WDDM could share surfaces here
                 //
@@ -1064,7 +1251,7 @@ CInteropDeviceBitmap::CopyToSoftwareBitmap(__deref_inout IWGXBitmap **ppBitmap)
     IWGXBitmapLock *pLock = NULL;
     const CMilRectU rcFull(0, 0, m_nWidth, m_nHeight, XYWH_Parameters);
 
-    if (!m_pIUserSurface)
+    if (!m_pIUserSurface && !m_pIUserTexture11)
     {
         IFC(E_FAIL);
     }
@@ -1095,14 +1282,28 @@ CInteropDeviceBitmap::CopyToSoftwareBitmap(__deref_inout IWGXBitmap **ppBitmap)
 
     Assert(cbBitmap == cbStride * m_nHeight);
 
-    IFC(ReadD3D9SurfaceIntoSysMemBuffer(
-        m_pIUserSurface,
-        rcFull,
-        m_PixelFormat,
-        cbStride,
-        DBG_ANALYSIS_PARAM_COMMA(cbBitmap)
-        pData
-        ));
+    if (m_pIUserTexture11)
+    {
+        IFC(ReadD3D11TextureIntoSysMemBuffer(
+            m_pIUserTexture11,
+            rcFull,
+            m_PixelFormat,
+            cbStride,
+            DBG_ANALYSIS_PARAM_COMMA(cbBitmap)
+            pData
+            ));
+    }
+    else
+    {
+        IFC(ReadD3D9SurfaceIntoSysMemBuffer(
+            m_pIUserSurface,
+            rcFull,
+            m_PixelFormat,
+            cbStride,
+            DBG_ANALYSIS_PARAM_COMMA(cbBitmap)
+            pData
+            ));
+    }
 
     if (pSystemMemoryBitmap != NULL)
     {

@@ -29,6 +29,10 @@ $env:CL = "/wd4819"
 MSBuild 노드가 환경 변수를 물려받으므로, 이전 빌드의 노드가 살아 있으면 먼저 끝내야 한다(`-nodeReuse 0`. PowerShell에서 `$false`를 쓰면 문자열 "False"로 전달되어 `Build.ps1`의 `[bool]` 매개변수 바인딩이 실패한다. cmd.exe에서는 `$false`도 된다).
 시스템 로캘을 UTF-8(베타)로 바꾼 경우에는 필요 없다.
 
+같은 이유로 BOM 없는 UTF-8 소스의 한글 주석 줄은 ASCII 문자로 끝나야 한다. 줄 끝 한글의 마지막 바이트가 줄바꿈과 묶여 다음 줄이
+주석에 먹힌다(`docs/LEARNINGS.md` L11). `python tools/check_trailing_nonascii.py src/Microsoft.DotNet.Wpf/src/WpfGfx` 로 검사하고
+`--fix` 로 고친다.
+
 ## 산출물
 
 | 파일 | 경로 |
@@ -42,7 +46,9 @@ MSBuild 노드가 환경 변수를 물려받으므로, 이전 빌드의 노드�
 ## 교체 테스트: tests/SmokeApp
 
 그라데이션, ClearType 텍스트, DropShadow/Blur 효과, OpacityMask, VisualBrush, 타일 브러시, 알파 블렌딩,
-Viewport3D, Clip을 한 창에 그리고, 로드된 그래픽 DLL과 `RenderCapability`를 보고한다.
+Viewport3D, Clip, 사용자 ShaderEffect(ps_2_0/ps_3_0), D3DImage(D3D9Ex 서피스, D3D11 텍스처)를 한 창에 그리고,
+로드된 그래픽 DLL과 `RenderCapability`를 보고한다. 16번 셀(D3D11 텍스처)은 `src/WpfGfx.Dx11`을 참조하며 스톡 엔진에서는
+"D3D11 engine not loaded"를 표시한다.
 
 ```powershell
 # wpfgfx_cor3.dll과 D3DCompiler_47_cor3.dll을 한 폴더에 모은다
@@ -72,6 +78,18 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 공유 프레임워크 폴더만 들어 있다. 머신 전체에 적용하려면
 `%ProgramFiles%\dotnet\shared\Microsoft.WindowsDesktop.App\<버전>\wpfgfx_cor3.dll`을 교체한다(먼저 백업).
 
+## 동반 어셈블리: src/WpfGfx.Dx11
+
+D3D11 엔진에만 있는 기능(엔진 `ID3D11Device` 얻기, `ID3D11Texture2D`를 받는 `D3D11Image`)을 앱에 노출하는 관리 어셈블리(D8).
+일반 SDK 프로젝트이며 Arcade와 무관하다. 스모크 앱이 `ProjectReference`로 쓴다.
+
+```powershell
+dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Release\net8.0-windows\WpfGfx.Dx11.dll
+```
+
+`Dx11Engine.IsAvailable`은 프로세스에 이미 로드된 `wpfgfx_cor3.dll`에서 `WpfGfxDx11_GetInfo` export를 찾는다. 창이 하나 뜬 뒤에
+호출해야 하고, 스톡 DX9 엔진이면 false다.
+
 ## 확인된 사실 (Phase 0)
 
 - 업스트림 소스 그대로 빌드한 DLL이 .NET 8.0.31 런타임에서 Tier 2(하드웨어)로 렌더링된다.
@@ -92,8 +110,6 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - 처음 300번의 `SetTexture` 호출(스테이지, 크기, 포맷), 처음 4번의 `Present` 직후 백버퍼를 로그 폴더에 `present1..4.bmp` 로 저장.
 
 ```powershell
-$env:WPFGFX_DX11_LOG = "$PWD	ests\out\dx11.log"
-.	ests\SmokeAppin\Release
-et8.0-windows\win-x64\SmokeApp.exe --wpfgfx tests\out\dll --screenshot tests\out
-et8.png --exit
+$env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"
+.\tests\SmokeApp\bin\Release\net8.0-windows\win-x64\SmokeApp.exe --wpfgfx tests\out\dll --screenshot tests\out\net8.png --exit
 ```

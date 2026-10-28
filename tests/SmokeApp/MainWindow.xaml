@@ -115,9 +115,14 @@
     <Image Margin="6" Source="{StaticResource CheckerImage}"><Image.Effect><local:TintEffect/></Image.Effect></Image>
     <!-- 14 user ShaderEffect, ps_3_0 bytecode with loop and branch -->
     <Image Margin="6" Source="{StaticResource CheckerImage}"><Image.Effect><local:SplitBlurEffect/></Image.Effect></Image>
-    <!-- 15 reserved: D3DImage (M9) -->
-    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1"><TextBlock Text="D3DImage (M9)" Foreground="#FF808890" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-    <!-- 16 reserved: layered window / misc (M10) -->
-    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1"><TextBlock Text="M10" Foreground="#FF808890" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <!-- 15 D3DImage with an IDirect3DSurface9 from a D3D9Ex device (public contract) -->
+    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1"><Image x:Name="D3D9Cell" Stretch="Fill"/></Border>
+    <!-- 16 D3DImage with an ID3D11Texture2D through WpfGfx.Dx11 (D8); notice on the stock engine -->
+    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1">
+      <Grid>
+        <Image x:Name="D3D11Cell" Stretch="Fill"/>
+        <TextBlock x:Name="D3D11Notice" Text="D3D11" Foreground="#FF808890" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
   </UniformGrid>
 </Window>
