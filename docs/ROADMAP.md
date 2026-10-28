@@ -11,16 +11,18 @@
 - 스모크 앱이 그 DLL을 로드해 .NET 8과 .NET 10에서 Tier 2로 렌더링한다. ✅
 - 저장소가 WpfGfx와 빌드에 필요한 파일만 담는다. ✅
 
-## Phase 1 — D3D9 사용 인벤토리 ⏳
+## Phase 1 — D3D9 사용 인벤토리 ✅ (2026-10-28)
 
 목표: `core/hw`(와 `core/av`, `core/common`, `core/resources`)가 쓰는 D3D9 API 표면을 자동 추출해
 `docs/INVENTORY.md`에 D3D11 매핑표로 정리한다.
 
 합격 기준:
-- IDirect3D* 인터페이스별 메서드 호출 목록과 호출 지점(파일:줄).
-- 열거형 가족(D3DRS_, D3DFMT_, D3DTSS_, D3DTOP_, D3DFVF_, D3DDECL*, D3DUSAGE_, D3DPOOL_, D3DCAPS* 등)별 사용 값과 D3D11 대응.
-- 고정 기능 파이프라인(`hwffshaders.cpp`, D3DTSS/D3DTOP)과 ps_1_1 셰이더 사용처 목록.
-- `core/av`(DXVA2/EVR), `InteropDeviceBitmap`(D3DImage), `PixelShader` 리소스처럼 "렌더링 외" D3D9 의존처 목록.
+- IDirect3D* 인터페이스별 메서드 호출 목록과 호출 지점(파일:줄). ✅ `docs/inventory/call-sites.md`
+- 열거형 가족별 사용 값과 D3D11 대응. ✅ `docs/INVENTORY.md` §4
+- 고정 기능 파이프라인과 ps_1_1 셰이더 사용처 목록. ✅ §3, §5
+- "렌더링 외" D3D9 의존처 목록. ✅ §2
+
+도구: `tools/inventory/d3d9_inventory.py` (재생성 가능).
 
 ## Phase 2 — 설계 ⏳
 
