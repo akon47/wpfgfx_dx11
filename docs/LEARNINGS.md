@@ -125,3 +125,24 @@ x86 에서는 두 번째 핸들이 NULL 로 읽혀 `E_INVALIDARG` 가 났다(HAN
   `DXGI_ERROR_INVALID_CALL` 이 나고 폴백(재생성)이 조용히 일어난다. 로그의 `ResizeBuffers failed` 로 확인한다.
 - `Present1` 의 더티 사각형이 백버퍼를 벗어나면 `DXGI_ERROR_INVALID_CALL` 로 프레젠트 자체가 실패한다. 잘라서 넘긴다.
 - 같은 HWND 에 플립 체인은 하나만 둔다. 디스플레이별 렌더타깃이 둘 이상이면(어댑터가 다른 모니터) 비트블트를 유지한다.
+
+## L18. dotnet/wpf-test 는 이 환경에서 Arcade 빌드가 돌지 않아 DRT 를 직접 빌드한다 (2026-10-28)
+
+- `release/10.0` 의 `global.json` 은 .NET SDK 12 알파를 요구한다. Arcade 가 `.dotnet` 에 내려받지만(tar.gz) 그 SDK 로 "No .NET SDKs were
+  found" 가 난다. 설치된 SDK 10 으로 바꾸면 VS 2022 17.14 의 MSBuild 가 "SDK 10 은 MSBuild 18 이 필요" 라며 거부하고,
+  `-msbuildEngine dotnet` 으로 바꾸면 `Microsoft.DotNet.Arcade.Wpf.Sdk` 의 `ExtendedAssemblyInfo.targets` 가 .NET MSBuild 에 없는
+  `CodeTaskFactory` 를 쓴다. 또 `src\Test\mil\MIL.sln` 은 공개 저장소에 없는 프로젝트(DrtText, DrtImaging)를 참조한다.
+- 해결: DRT csproj 를 `dotnet build ... -p:GenerateAssemblyInfo=false` 로 직접 빌드한다(그 타깃만 건너뛴다). 산출물은
+  `publish\Release\x64\Test\DRT` 에 자동 배치된다. 절차는 `docs/BUILD.md`, 실행은 `tests/run-drts.ps1`.
+- DrtAnimation 이 참조하는 `Common\Code\Microsoft\Test\Graphics\MathEx.cs` 는 Latin-1 파일이라 CP949 컴파일러가 문자열 리터럴의 `§`(0xA7)
+  뒤 따옴표를 삼킨다(L11 과 같은 부류). `-p:CodePage=1252` 는 UTF-8 파일(TestRuntime)을 깨뜨리므로, 그 리터럴만 `"\u00A7"` 로 바꾸고 빌드한다.
+- 교체 엔진으로 실행하는 가장 깨끗한 방법은 공유 프레임워크를 임시 폴더에 복사해 DLL 두 개만 바꾸고 `DOTNET_ROOT` 를 가리키는 것이다.
+  스모크 앱의 `SetDllImportResolver` 는 남의 앱에 쓸 수 없고, 머신 공유 프레임워크를 바꾸면 다른 앱까지 영향을 받는다.
+
+## L19. 소프트웨어 모드의 3D 는 렌더타깃을 Lock 할 수 없다: 스테이징 텍스처를 거친다 (2026-10-28)
+
+`RenderOptions.ProcessRenderMode = SoftwareOnly` 에서 3D 콘텐츠는 `CHw3DSoftwareSurface`(hwsw3dfallback.cpp)가 WARP 디바이스의
+렌더타깃에 그린 뒤 소프트웨어 타깃에 합성한다. D3D9 는 "lockable 렌더타깃" 을 직접 Lock 했지만 D3D11 은 `USAGE_DEFAULT` 텍스처를
+Map 할 수 없어 `CD3DSurface::LockRect` 가 `WGXERR_INVALIDCALL` 을 내고, 관리 쪽에는 `UCEERR_RENDERTHREADFAILURE` 로 올라가
+앱이 죽는다(dotnet/wpf-test DrtBasic3D 로 발견). 렌더타깃과 같은 크기의 스테이징 텍스처를 짝으로 두고, 3D 전에는 스테이징에 쓴
+뒤 `CopySubresourceRegion` 으로 올리고, 3D 뒤에는 `GetRenderTargetData` 로 내려받아 읽는다. 게이트의 `software mode` 행이 이 경로를 지킨다.

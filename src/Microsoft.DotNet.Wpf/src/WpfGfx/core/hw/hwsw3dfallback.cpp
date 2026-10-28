@@ -51,6 +51,7 @@ CHw3DSoftwareSurface::CHw3DSoftwareSurface(
     Assert(kTargetPixelSize == D3DFormatSize(m_d3dfmtTargetSurface));
 
     m_pWrapperBitmap = NULL;
+    m_pD3DStagingSurface = NULL;
 }
 
 //+----------------------------------------------------------------------------
@@ -64,7 +65,7 @@ CHw3DSoftwareSurface::CHw3DSoftwareSurface(
 CHw3DSoftwareSurface::~CHw3DSoftwareSurface()
 {
     ReleaseInterfaceNoNULL(m_pWrapperBitmap);
-
+    ReleaseInterfaceNoNULL(m_pD3DStagingSurface);
     CleanupFreedResources();
 }
 
@@ -198,15 +199,11 @@ CHw3DSoftwareSurface::BeginSw3D(
         // Lock everything within bounds
         //
 
-        IFC(m_pD3DTargetSurface->LockRect(
+        IFC(m_pD3DStagingSurface->LockRect(
             &d3dLock,
             &m_rcBounds,
             0
             ));
-
-        //
-        // Initialize relevant pixels of D3D surface.
-        //
 
         size_t cbWidth = kTargetPixelSize * m_rcBounds.Width();
 
@@ -256,11 +253,22 @@ CHw3DSoftwareSurface::BeginSw3D(
         // Unlock D3D target
         //
 
-        IFC(m_pD3DTargetSurface->UnlockRect());
+        IFC(m_pD3DStagingSurface->UnlockRect());
 
-        //
-        // Finally ready to clear the depth buffer
-        //
+        {
+            // Carry the prepared pixels into the render target.
+            ENTER_DEVICE_FOR_SCOPE(*m_pD3DDevice);
+
+            RECT rcSource = { m_rcBounds.left, m_rcBounds.top, m_rcBounds.right, m_rcBounds.bottom };
+            POINT ptDest = { m_rcBounds.left, m_rcBounds.top };
+
+            IFC(m_pD3DDevice->UpdateSurface(
+                m_pD3DStagingSurface,
+                &rcSource,
+                m_pD3DTargetSurface,
+                &ptDest
+                ));
+        }
 
         if (prZ)
         {
@@ -444,14 +452,10 @@ CHw3DSoftwareSurface::EnsureSurface()
             m_uiNewTargetHeight != m_uHeight)
         {
             ENTER_DEVICE_FOR_SCOPE(*m_pD3DDevice);
-
             ReleaseInterface(m_pD3DTargetSurface);
+            ReleaseInterface(m_pD3DStagingSurface);
         }
     }
-
-    //
-    // Create our TargetSurface if it doesn't exist
-    //
 
     if (!m_pD3DTargetSurface)
     {
@@ -468,10 +472,28 @@ CHw3DSoftwareSurface::EnsureSurface()
             &m_pD3DTargetSurface
             ));
 
+        {
+            ID3D11Texture2D *pStagingTexture = NULL;
+
+            IFC(m_pD3DDevice->CreateSysMemUpdateSurface(
+                m_uiNewTargetWidth,
+                m_uiNewTargetHeight,
+                m_pD3DTargetSurface->Desc().Format,
+                NULL,
+                &pStagingTexture
+                ));
+
+            MIL_THR(CD3DSurface::Create(m_pD3DDevice->GetResourceManager(), pStagingTexture, 0, &m_pD3DStagingSurface));
+            ReleaseInterfaceNoNULL(pStagingTexture);
+
+            if (FAILED(hr))
+            {
+                goto Cleanup;
+            }
+        }
+
         m_uWidth = m_uiNewTargetWidth;
         m_uHeight = m_uiNewTargetHeight;
-
-        // Update bounds and min alpha only have we have a size
         IFC(CBaseRenderTarget::Init());
     }
 
@@ -529,12 +551,22 @@ CHw3DSoftwareSurface::CompositeWithSwRenderTarget(
     // Lock the D3D SW Surface so we can grab it's bits.
     //
 
-    IFC(m_pD3DTargetSurface->LockRect(
+    {
+        // Pull the 3D result back into the staging twin first.
+        ENTER_DEVICE_FOR_SCOPE(*m_pD3DDevice);
+
+        IFC(m_pD3DDevice->GetRenderTargetData(
+            m_pD3DTargetSurface->ID3DTexture(),
+            m_pD3DTargetSurface->Subresource(),
+            m_pD3DStagingSurface->ID3DTexture()
+            ));
+    }
+
+    IFC(m_pD3DStagingSurface->LockRect(
         &d3dLock,
         &rc3DBounds,
-        0
+        D3DLOCK_READONLY
         ));
-
     fSurfaceLocked = true;
 
     if (m_fComposeWithCopy)
@@ -645,7 +677,7 @@ Cleanup:
 
     if (fSurfaceLocked)
     {
-        MIL_THR_SECONDARY(m_pD3DTargetSurface->UnlockRect());
+        MIL_THR_SECONDARY(m_pD3DStagingSurface->UnlockRect());
     }
 
     RRETURN(hr);

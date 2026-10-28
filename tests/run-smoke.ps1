@@ -114,6 +114,12 @@ foreach ($t in $Tfm) {
     if ($rh -match "maxBlack=([0-9.]+)%") { $bh = [double]$matches[1] }
     Add-Row "resize (16 steps, black pixels)" $short ("stock max {0:F2}%, D3D11 max {1:F2}%" -f $bs, $bh) (($bh -le ($bs + 0.5)) -and ($bh -lt 5))
 
+    # ---- software rendering mode: RenderMode.SoftwareOnly, 3D drawn through the software 3D fallback (DrtBasic3D regression guard)
+    [void](Run-Smoke $t $false @("--software", "--screenshot", "$out\$short-stock-sw.png"))
+    $swText = Run-Smoke $t $true @("--software", "--screenshot", "$out\$short-hw-sw.png")
+    $c = Compare-Capture "$out\$short-stock-sw.png" "$out\$short-hw-sw.png" @(4, 16)
+    Add-Row "software mode (ProcessRenderMode)" $short ("diff>8 {0:P2}, diff>64 {1:P2}" -f $c.Diff8, $c.Diff64) (($swText -match "Tier=") -and ($c.Diff64 -lt 0.01))
+
     # ---- transparent (layered) window
     [void](Run-Smoke $t $false @("--screenshot", "$out\$short-stock-t.png", "--transparent", "$out\$short-stock-transparent.png"))
     [void](Run-Smoke $t $true @("--screenshot", "$out\$short-hw-t.png", "--transparent", "$out\$short-hw-transparent.png"))
