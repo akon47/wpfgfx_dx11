@@ -20,6 +20,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "d3d9interop.h"
 
 
 MtDefine(CHwDeviceBitmapColorSource, MILRender, "CHwDeviceBitmapColorSource");
@@ -282,6 +283,11 @@ CHwDeviceBitmapColorSource::CHwDeviceBitmapColorSource(
     CHwBitmapColorSource(pDevice, pBitmap, fmt, d3dsd, uLevels),
     m_hSharedHandle(NULL), m_pSysMemTexture(NULL)
 {
+    m_pISharedTexture9 = NULL;
+    m_pISharedSurface9 = NULL;
+    m_pISharedDevice9NoRef = NULL;
+    m_pUserTexture11 = NULL;
+    m_pUserTexture11KeyNoRef = NULL;
 }
 
 //+-----------------------------------------------------------------------------
@@ -298,6 +304,9 @@ CHwDeviceBitmapColorSource::~CHwDeviceBitmapColorSource(
     )
 {
     ReleaseInterface(m_pSysMemTexture);
+    ReleaseInterface(m_pISharedSurface9);
+    ReleaseInterface(m_pISharedTexture9);
+    ReleaseInterface(m_pUserTexture11);
 }
 
 //+-----------------------------------------------------------------------------
@@ -630,15 +639,350 @@ CHwDeviceBitmapColorSource::UpdateSurfaceSharedHandle(
     __in_ecount(1) IDirect3DSurface9 *pISrcSurface
     )
 {
-    UNREFERENCED_PARAMETER(cDirtyRects);
-    UNREFERENCED_PARAMETER(prgDirtyRects);
-    UNREFERENCED_PARAMETER(pISrcSurface);
+    //
+    // The user's D3D9Ex device opens our (D3D11_RESOURCE_MISC_SHARED) texture
+    // through the shared handle and copies into it with StretchRect. All D3D9
+    // calls go through the user's objects: no d3d9.lib (D7, D14).
+    //
+    HRESULT hr = S_OK;
+    IDirect3DDevice9 *pID3DSrcDevice = NULL;
 
-    //
-    // 공유 핸들 경로(사용자의 D3D9Ex 디바이스가 우리의 공유 텍스처를 여는 D7)는
-    // M9 에서 구현한다. 그때까지는 CInteropDeviceBitmap 이 소프트웨어 복사만 쓴다.
-    //
-    RRETURN(E_NOTIMPL);
+    Assert(m_hSharedHandle);
+
+    IFC(pISrcSurface->GetDevice(&pID3DSrcDevice));
+
+    const D3D11_TEXTURE2D_DESC &desc = m_pVidMemOnlyTexture->D3DSurface0Desc();
+
+    if (m_pISharedTexture9 == NULL || m_pISharedDevice9NoRef != pID3DSrcDevice)
+    {
+        ReleaseInterface(m_pISharedSurface9);
+        ReleaseInterface(m_pISharedTexture9);
+        m_pISharedDevice9NoRef = NULL;
+
+        HANDLE hShared = m_hSharedHandle;
+
+        IFC(pID3DSrcDevice->CreateTexture(
+            desc.Width,
+            desc.Height,
+            1,
+            D3DUSAGE_RENDERTARGET,
+            (desc.Format == DXGI_FORMAT_B8G8R8X8_UNORM) ? D3DFMT_X8R8G8B8 : D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT,
+            &m_pISharedTexture9,
+            &hShared
+            ));
+
+        IFC(m_pISharedTexture9->GetSurfaceLevel(0, &m_pISharedSurface9));
+
+        m_pISharedDevice9NoRef = pID3DSrcDevice;
+    }
+
+    for (UINT i = 0; i < cDirtyRects; ++i)
+    {
+        const RECT *prc = reinterpret_cast<const RECT *>(&prgDirtyRects[i]);
+
+        IFC(pID3DSrcDevice->StretchRect(
+            pISrcSurface,
+            prc,
+            m_pISharedSurface9,
+            prc,
+            D3DTEXF_NONE
+            ));
+    }
+
+    IFC(Flush9(pID3DSrcDevice, m_pISharedSurface9, desc.Width, desc.Height));
+
+Cleanup:
+    ReleaseInterface(pID3DSrcDevice);
+    RRETURN(hr);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CHwDeviceBitmapColorSource::Flush9
+//
+//  Synopsis:
+//      Makes the user's D3D9 device finish its copy into the shared texture
+//      before our device samples it: reading back a tiny rectangle through a
+//      lockable render target stalls until the GPU work is done (the D3D9
+//      engine did the same).
+//
+//------------------------------------------------------------------------------
+
+/* static */ HRESULT
+CHwDeviceBitmapColorSource::Flush9(
+    __in_ecount(1) IDirect3DDevice9 *pID3DDevice,
+    __in_ecount(1) IDirect3DSurface9 *pISurface,
+    UINT uWidth,
+    UINT uHeight
+    )
+{
+    HRESULT hr = S_OK;
+    const UINT uFlushWidth = min(16u, uWidth);
+    const UINT uFlushHeight = min(16u, uHeight);
+    const RECT rcCopy = { 0, 0, static_cast<LONG>(uFlushWidth), static_cast<LONG>(uFlushHeight) };
+    const RECT rcFlush = { 0, 0, 1, 1 };
+    IDirect3DSurface9 *pIFlushSurface = NULL;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+
+    IFC(pISurface->GetDesc(&desc));
+
+    IFC(pID3DDevice->CreateRenderTarget(
+        uFlushWidth,
+        uFlushHeight,
+        desc.Format,
+        D3DMULTISAMPLE_NONE,
+        0,
+        TRUE,       // lockable
+        &pIFlushSurface,
+        NULL
+        ));
+
+    IFC(pID3DDevice->StretchRect(pISurface, &rcCopy, pIFlushSurface, &rcCopy, D3DTEXF_NONE));
+
+    IFC(pIFlushSurface->LockRect(&lr, &rcFlush, D3DLOCK_READONLY));
+    IFC(pIFlushSurface->UnlockRect());
+
+Cleanup:
+    ReleaseInterface(pIFlushSurface);
+    RRETURN(hr);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CHwDeviceBitmapColorSource::UpdateSurface (ID3D11Texture2D)
+//
+//  Synopsis:
+//      Copies the dirty rectangles of a user's D3D11 texture into our texture.
+//      Same device: direct copy. Other device: open the user's texture through
+//      its shared handle (D3D11_RESOURCE_MISC_SHARED required) once, flush the
+//      user's context, then copy.
+//
+//------------------------------------------------------------------------------
+
+HRESULT
+CHwDeviceBitmapColorSource::UpdateSurface(
+    __in UINT cDirtyRects,
+    __in_ecount(cDirtyRects) const CMilRectU *prgDirtyRects,
+    __in_ecount(1) ID3D11Texture2D *pSrcTexture
+    )
+{
+    HRESULT hr = S_OK;
+    ID3D11Device *pSrcDevice = NULL;
+    ID3D11DeviceContext *pSrcContext = NULL;
+    IDXGIResource *pDXGIResource = NULL;
+    ID3D11Texture2D *pCopySourceNoRef = NULL;
+
+    Assert(cDirtyRects > 0);
+
+    ENTER_DEVICE_FOR_SCOPE(*m_pDevice);
+
+    pSrcTexture->GetDevice(&pSrcDevice);
+
+    if (pSrcDevice == m_pDevice->GetD3DDeviceNoRef())
+    {
+        pCopySourceNoRef = pSrcTexture;
+    }
+    else if (!IsSameAdapter(pSrcDevice))
+    {
+        //
+        // Another GPU: handles cannot be shared across adapters. Read the
+        // rectangles back on the user's device and upload them here.
+        //
+        MIL_DX11_LOG("D3DImage D3D11 update: cross-adapter CPU copy (%u rects)", cDirtyRects);
+        IFC(UpdateSurfaceThroughSystemMemory(cDirtyRects, prgDirtyRects, pSrcTexture));
+        goto Cleanup;
+    }
+    else
+    {
+        if (m_pUserTexture11 == NULL || m_pUserTexture11KeyNoRef != pSrcTexture)
+        {
+            ReleaseInterface(m_pUserTexture11);
+            m_pUserTexture11KeyNoRef = NULL;
+
+            HANDLE hShared = NULL;
+
+            IFC(pSrcTexture->QueryInterface(__uuidof(IDXGIResource), reinterpret_cast<void **>(&pDXGIResource)));
+
+            if (FAILED(pDXGIResource->GetSharedHandle(&hShared)) || hShared == NULL)
+            {
+                // Not created with D3D11_RESOURCE_MISC_SHARED
+                IFC(WGXERR_D3DI_INVALIDSURFACEUSAGE);
+            }
+
+            IFC(MilTranslateD3D11Error(m_pDevice->GetD3DDeviceNoRef()->OpenSharedResource(
+                hShared,
+                __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void **>(&m_pUserTexture11)
+                )));
+
+            m_pUserTexture11KeyNoRef = pSrcTexture;
+        }
+
+        // Make the producer's rendering visible to our device.
+        pSrcDevice->GetImmediateContext(&pSrcContext);
+        pSrcContext->Flush();
+
+        pCopySourceNoRef = m_pUserTexture11;
+    }
+
+    {
+        D3D11_TEXTURE2D_DESC descSrc;
+        pSrcTexture->GetDesc(&descSrc);
+
+        ID3D11Texture2D *pDestNoRef = m_pVidMemOnlyTexture->GetD3DTextureNoRef();
+        ID3D11DeviceContext *pContext = m_pDevice->GetD3DContextNoRef();
+
+        if (descSrc.SampleDesc.Count > 1)
+        {
+            pContext->ResolveSubresource(pDestNoRef, 0, pCopySourceNoRef, 0, m_pVidMemOnlyTexture->D3DSurface0Desc().Format);
+        }
+        else
+        {
+            for (UINT i = 0; i < cDirtyRects; ++i)
+            {
+                D3D11_BOX box;
+                box.left = prgDirtyRects[i].left;
+                box.top = prgDirtyRects[i].top;
+                box.front = 0;
+                box.right = prgDirtyRects[i].right;
+                box.bottom = prgDirtyRects[i].bottom;
+                box.back = 1;
+
+                pContext->CopySubresourceRegion(
+                    pDestNoRef,
+                    0,
+                    prgDirtyRects[i].left,
+                    prgDirtyRects[i].top,
+                    0,
+                    pCopySourceNoRef,
+                    0,
+                    &box
+                    );
+            }
+        }
+    }
+
+Cleanup:
+    if (FAILED(hr))
+    {
+        MIL_DX11_LOG("D3DImage D3D11 update failed hr=0x%08x", hr);
+    }
+
+    ReleaseInterface(pDXGIResource);
+    ReleaseInterface(pSrcContext);
+    ReleaseInterface(pSrcDevice);
+    RRETURN(hr);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CHwDeviceBitmapColorSource::IsSameAdapter
+//
+//  Synopsis:
+//      Whether a user's D3D11 device sits on the same adapter as ours.
+//
+//------------------------------------------------------------------------------
+
+bool
+CHwDeviceBitmapColorSource::IsSameAdapter(
+    __in_ecount(1) ID3D11Device *pOtherDevice
+    ) const
+{
+    bool fSame = false;
+    IDXGIDevice *pDXGIDevice = NULL;
+    IDXGIAdapter *pDXGIAdapter = NULL;
+    DXGI_ADAPTER_DESC desc;
+
+    if (   SUCCEEDED(pOtherDevice->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&pDXGIDevice)))
+        && SUCCEEDED(pDXGIDevice->GetAdapter(&pDXGIAdapter))
+        && SUCCEEDED(pDXGIAdapter->GetDesc(&desc)))
+    {
+        const LUID luidOurs = m_pDevice->GetD3DAdapterLUID();
+
+        fSame = (desc.AdapterLuid.LowPart == luidOurs.LowPart && desc.AdapterLuid.HighPart == luidOurs.HighPart);
+    }
+
+    ReleaseInterface(pDXGIAdapter);
+    ReleaseInterface(pDXGIDevice);
+    return fSame;
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CHwDeviceBitmapColorSource::UpdateSurfaceThroughSystemMemory
+//
+//  Synopsis:
+//      Cross-adapter D3D11 path: staging readback on the user's device into
+//      our system memory texture, then upload to the GPU texture.
+//
+//------------------------------------------------------------------------------
+
+HRESULT
+CHwDeviceBitmapColorSource::UpdateSurfaceThroughSystemMemory(
+    UINT cDirtyRects,
+    __in_ecount(cDirtyRects) const CMilRectU *prgDirtyRects,
+    __in_ecount(1) ID3D11Texture2D *pSrcTexture
+    )
+{
+    HRESULT hr = S_OK;
+    bool fUnlockNeeded = false;
+
+    if (!m_pSysMemTexture)
+    {
+        D3D11_TEXTURE2D_DESC descSrc = m_pVidMemOnlyTexture->D3DSurface0Desc();
+        descSrc.MipLevels = 1;
+        descSrc.ArraySize = 1;
+        descSrc.SampleDesc.Count = 1;
+        descSrc.SampleDesc.Quality = 0;
+        descSrc.Usage = D3D11_USAGE_DEFAULT;
+        descSrc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        descSrc.CPUAccessFlags = 0;
+        descSrc.MiscFlags = 0;
+
+        IFC(m_pDevice->CreateLockableTexture(&descSrc, &m_pSysMemTexture));
+    }
+
+    MilLockedRect rcLock;
+    IFC(m_pSysMemTexture->LockRect(&rcLock, NULL, D3DLOCK_NO_DIRTY_UPDATE));
+    fUnlockNeeded = true;
+
+    for (UINT i = 0; i < cDirtyRects; ++i)
+    {
+        IFC(ReadD3D11TextureIntoSysMemBuffer(
+            pSrcTexture,
+            prgDirtyRects[i],
+            m_fmtTexture,
+            static_cast<UINT>(rcLock.Pitch),
+            DBG_ANALYSIS_PARAM_COMMA(m_uBitmapHeight * rcLock.Pitch)
+            static_cast<BYTE *>(rcLock.pBits)
+            ));
+
+        IFC(m_pSysMemTexture->AddDirtyRect(reinterpret_cast<const RECT *>(prgDirtyRects)[i]));
+    }
+
+    IFC(m_pSysMemTexture->UnlockRect());
+    fUnlockNeeded = false;
+
+    IFC(m_pSysMemTexture->EnsureGpuContents());
+
+    IFC(m_pDevice->UpdateTexture(
+        m_pSysMemTexture->GetD3DTextureNoRef(),
+        m_pVidMemOnlyTexture->GetD3DTextureNoRef()
+        ));
+
+Cleanup:
+    if (fUnlockNeeded)
+    {
+        IGNORE_HR(m_pSysMemTexture->UnlockRect());
+    }
+
+    RRETURN(hr);
 }
 
 //+-----------------------------------------------------------------------------

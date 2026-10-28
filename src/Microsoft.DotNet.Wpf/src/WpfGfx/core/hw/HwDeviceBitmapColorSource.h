@@ -22,6 +22,8 @@
 
 // D3DImage 사용자 백 버퍼 (vtable 로만 호출, d3d9.h 는 InteropDeviceBitmap.cpp 에서만 포함)
 interface IDirect3DSurface9;
+interface IDirect3DTexture9;
+interface IDirect3DDevice9;
 
 MtExtern(CHwDeviceBitmapColorSource);
 
@@ -108,6 +110,14 @@ public:
     
     virtual __out_opt CD3DSurface *GetValidTransferSurfaceNoRef();
 
+    // D3DImage with a D3D11 texture: copy the dirty rectangles from the user's
+    // texture (same device, or opened through its shared handle).
+    HRESULT UpdateSurface(
+        __in UINT cDirtyRects,
+        __in_ecount(cDirtyRects) const CMilRectU *prgDirtyRects,
+        __in_ecount(1) ID3D11Texture2D *pSrcTexture
+        );
+
 protected:
 
     CHwDeviceBitmapColorSource(
@@ -177,10 +187,34 @@ private:
         ) const;
 
     // Can be NULL!
-    HANDLE m_hSharedHandle;
+    bool IsSameAdapter(
+        __in_ecount(1) ID3D11Device *pOtherDevice
+        ) const;
 
-    // System memory texture used for software updates in UpdateSurfaceSoftware
+    HRESULT UpdateSurfaceThroughSystemMemory(
+        UINT cDirtyRects,
+        __in_ecount(cDirtyRects) const CMilRectU *prgDirtyRects,
+        __in_ecount(1) ID3D11Texture2D *pSrcTexture
+        );
+
+    static HRESULT Flush9(
+        __in_ecount(1) IDirect3DDevice9 *pID3DDevice,
+        __in_ecount(1) IDirect3DSurface9 *pISurface,
+        UINT uWidth,
+        UINT uHeight
+        );
+
+    HANDLE m_hSharedHandle;
     CD3DLockableTexture *m_pSysMemTexture;
+
+    // D3D9Ex user device: our shared texture opened on that device (cached)
+    IDirect3DTexture9 *m_pISharedTexture9;
+    IDirect3DSurface9 *m_pISharedSurface9;
+    IDirect3DDevice9 *m_pISharedDevice9NoRef;
+
+    // D3D11 user texture on another device: opened on our device (cached)
+    ID3D11Texture2D *m_pUserTexture11;
+    ID3D11Texture2D *m_pUserTexture11KeyNoRef;
 };
 
 

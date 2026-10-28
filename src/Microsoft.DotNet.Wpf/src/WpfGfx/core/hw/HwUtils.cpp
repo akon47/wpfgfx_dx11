@@ -328,3 +328,126 @@ bool IsD3DFailure(HRESULT hr)
     static const HRESULT hrD3DMask = MAKE_D3DHRESULT(0);
     return static_cast<HRESULT>(hr & hrD3DMask) == hrD3DMask;
 }
+
+//+-----------------------------------------------------------------------------
+//
+//  Function:  ReadD3D11TextureIntoSysMemBuffer
+//
+//  Synopsis:  Copies a rectangle of a user's D3D11 texture into a system
+//             memory buffer using the texture's own device (staging copy).
+//             Only the 32bpp BGRA family is supported.
+//
+//------------------------------------------------------------------------------
+
+HRESULT
+ReadD3D11TextureIntoSysMemBuffer(
+    __in ID3D11Texture2D *pSourceTexture,
+    __in const CMilRectU &rcCopy,
+    MilPixelFormat::Enum fmtOut,
+    UINT uStrideOut,
+    DBG_ANALYSIS_PARAM_COMMA(UINT cbBufferOut)
+    __out_bcount_full(cbBufferOut) BYTE *pbBufferOut
+    )
+{
+    HRESULT hr = S_OK;
+    ID3D11Device *pDevice = NULL;
+    ID3D11DeviceContext *pContext = NULL;
+    ID3D11Texture2D *pResolved = NULL;
+    ID3D11Texture2D *pStaging = NULL;
+    ID3D11Texture2D *pSource = pSourceTexture;
+    bool fMapped = false;
+    D3D11_TEXTURE2D_DESC desc;
+
+    const UINT uBitsPerPixel = GetPixelFormatSize(fmtOut);
+
+    if (   rcCopy.right > SURFACE_RECT_MAX
+        || rcCopy.bottom > SURFACE_RECT_MAX
+        || !rcCopy.IsWellOrdered()
+        || uBitsPerPixel != 32)
+    {
+        IFC(E_INVALIDARG);
+    }
+
+    pSourceTexture->GetDesc(&desc);
+    pSourceTexture->GetDevice(&pDevice);
+    pDevice->GetImmediateContext(&pContext);
+
+    if (rcCopy.right > desc.Width || rcCopy.bottom > desc.Height)
+    {
+        IFC(E_INVALIDARG);
+    }
+
+    if (desc.SampleDesc.Count > 1)
+    {
+        D3D11_TEXTURE2D_DESC descResolved = desc;
+        descResolved.MipLevels = 1;
+        descResolved.ArraySize = 1;
+        descResolved.SampleDesc.Count = 1;
+        descResolved.SampleDesc.Quality = 0;
+        descResolved.BindFlags = D3D11_BIND_RENDER_TARGET;
+        descResolved.CPUAccessFlags = 0;
+        descResolved.MiscFlags = 0;
+
+        IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descResolved, NULL, &pResolved)));
+        pContext->ResolveSubresource(pResolved, 0, pSourceTexture, 0, desc.Format);
+        pSource = pResolved;
+    }
+
+    {
+        D3D11_TEXTURE2D_DESC descStaging = desc;
+        descStaging.Width = rcCopy.Width();
+        descStaging.Height = rcCopy.Height();
+        descStaging.MipLevels = 1;
+        descStaging.ArraySize = 1;
+        descStaging.SampleDesc.Count = 1;
+        descStaging.SampleDesc.Quality = 0;
+        descStaging.Usage = D3D11_USAGE_STAGING;
+        descStaging.BindFlags = 0;
+        descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        descStaging.MiscFlags = 0;
+
+        IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descStaging, NULL, &pStaging)));
+
+        D3D11_BOX box;
+        box.left = rcCopy.left;
+        box.top = rcCopy.top;
+        box.front = 0;
+        box.right = rcCopy.right;
+        box.bottom = rcCopy.bottom;
+        box.back = 1;
+
+        pContext->CopySubresourceRegion(pStaging, 0, 0, 0, 0, pSource, 0, &box);
+
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        IFC(MilTranslateD3D11Error(pContext->Map(pStaging, 0, D3D11_MAP_READ, 0, &mapped)));
+        fMapped = true;
+
+        const UINT uBytesPerPixel = uBitsPerPixel / BITS_PER_BYTE;
+        const UINT cbRow = rcCopy.Width() * uBytesPerPixel;
+        BYTE *pbDest = pbBufferOut + static_cast<SIZE_T>(rcCopy.top) * uStrideOut + static_cast<SIZE_T>(rcCopy.left) * uBytesPerPixel;
+        const BYTE *pbSrc = static_cast<const BYTE *>(mapped.pData);
+
+#if DBG_ANALYSIS
+        Assert(static_cast<SIZE_T>(rcCopy.bottom - 1) * uStrideOut + static_cast<SIZE_T>(rcCopy.right) * uBytesPerPixel <= cbBufferOut);
+#endif
+
+        for (UINT y = 0; y < rcCopy.Height(); y++)
+        {
+            CopyMemory(pbDest, pbSrc, cbRow);
+            pbDest += uStrideOut;
+            pbSrc += mapped.RowPitch;
+        }
+    }
+
+Cleanup:
+    if (fMapped)
+    {
+        pContext->Unmap(pStaging, 0);
+    }
+
+    ReleaseInterface(pStaging);
+    ReleaseInterface(pResolved);
+    ReleaseInterface(pContext);
+    ReleaseInterface(pDevice);
+    RRETURN(hr);
+}

@@ -140,3 +140,6 @@ EXPORTS
     WpfGfx_SetDisableBoundsCheckProtection
     RenderOptions_EnableHardwareAccelerationInRdp
 
+; D3D11 engine additions (D8). Not present in the stock DX9 engine.
+    WpfGfxDx11_GetInfo
+    WpfGfxDx11_GetDevice
