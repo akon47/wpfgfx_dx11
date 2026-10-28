@@ -94,8 +94,8 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
 - 플립 모델 스왑체인 전환(D10의 성능 후속 작업).
 - 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).
 - dotnet/wpf-test의 DRT 중 렌더링 관련 테스트를 교체 DLL로 실행.
-- ✅ x86 빌드·스모크(2026-10-28): `build.cmd -platform x86` 산출물이 .NET 8 x86 앱에서 Tier 2, 스톡 대비 차이>8 0.04%·차이>64 0.00%.
-  게이트는 `run-smoke.ps1 -Rid win-x86`. ✅ arm64 빌드(2026-10-28): `build.cmd -platform arm64` 가 경고·오류 0 으로 ARM64 DLL 을 만든다
+- ✅ x86 빌드·게이트(2026-10-28): `build.cmd -platform x86` 산출물이 .NET 8 x86 앱에서 게이트 전 행 PASS(표준 차이>8 0.04%, 투명 창·미디어·
+  RenderTargetBitmap·프레임 큐(큐당 51 µs) 포함). 게이트는 `run-smoke.ps1 -Rid win-x86`. ✅ arm64 빌드(2026-10-28): `build.cmd -platform arm64` 가 경고·오류 0 으로 ARM64 DLL 을 만든다
   (D3DCompiler 재배포 프로젝트에 arm64 구성을 추가했다. SDK 의 arm64 d3dcompiler_47.dll 을 쓴다). arm64 실행 환경이 없어 동작은 미검증.
 - D3D9 흔적 제거 확인(`d3d9.dll`은 미디어 재생(D25) 외에는 로드되지 않음. 이 PC에서는 보안 소프트웨어가 먼저 로드해 확인이 어렵다, L7).
 - ✅ `RenderTargetBitmap`의 하드웨어 경로(2026-10-28, D27, 옵트인). `WpfGfxDx11_SetOption(1, 1)` /
