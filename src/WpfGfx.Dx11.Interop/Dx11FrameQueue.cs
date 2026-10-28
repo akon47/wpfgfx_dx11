@@ -37,10 +37,16 @@ public sealed class Dx11FrameQueue : IDisposable
     private const uint FlagUserTextures = 0x1, FlagEngineTextures = 0x2, FlagOpaque = 0x4;
 
     [StructLayout(LayoutKind.Sequential)]
-    private unsafe struct NativeDesc
+    private struct NativeDesc
     {
         public uint cbSize, uWidth, uHeight, uFormat, cBuffers, uFlags;
-        public fixed long rgSharedHandles[4];
+        // HANDLE rgSharedHandles[4]: pointer-sized (4 bytes on x86, 8 on x64).
+        public IntPtr h0, h1, h2, h3;
+
+        public void SetHandle(int i, IntPtr h)
+        {
+            switch (i) { case 0: h0 = h; break; case 1: h1 = h; break; case 2: h2 = h; break; default: h3 = h; break; }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -105,7 +111,7 @@ public sealed class Dx11FrameQueue : IDisposable
     /// with MISC_SHARED_NTHANDLE | MISC_SHARED_KEYEDMUTEX; the engine duplicates them, so the caller
     /// may close its copies afterwards.
     /// </summary>
-    public static unsafe Dx11FrameQueue Create(int width, int height, IntPtr[] ntSharedHandles, bool opaque = false)
+    public static Dx11FrameQueue Create(int width, int height, IntPtr[] ntSharedHandles, bool opaque = false)
     {
         if (ntSharedHandles.Length < 2 || ntSharedHandles.Length > MaxBuffers) throw new ArgumentOutOfRangeException(nameof(ntSharedHandles));
         EnsureAvailable();
@@ -115,7 +121,7 @@ public sealed class Dx11FrameQueue : IDisposable
             uFormat = 87 /* DXGI_FORMAT_B8G8R8A8_UNORM */, cBuffers = (uint)ntSharedHandles.Length,
             uFlags = FlagUserTextures | (opaque ? FlagOpaque : 0),
         };
-        for (int i = 0; i < ntSharedHandles.Length; i++) desc.rgSharedHandles[i] = (long)ntSharedHandles[i];
+        for (int i = 0; i < ntSharedHandles.Length; i++) desc.SetHandle(i, ntSharedHandles[i]);
         Marshal.ThrowExceptionForHR(WpfGfxDx11_FrameQueue_Create(ref desc, out IntPtr queue));
         return new Dx11FrameQueue(queue, width, height, ntSharedHandles.Length, Dx11FrameQueueTextures.User);
     }
@@ -124,7 +130,7 @@ public sealed class Dx11FrameQueue : IDisposable
     /// Creates a queue whose textures the engine allocates on its own device. Open
     /// <see cref="SharedHandles"/> with ID3D11Device1::OpenSharedResource1 on the producer device.
     /// </summary>
-    public static unsafe Dx11FrameQueue CreateWithEngineTextures(int width, int height, int bufferCount = 3, bool opaque = false)
+    public static Dx11FrameQueue CreateWithEngineTextures(int width, int height, int bufferCount = 3, bool opaque = false)
     {
         if (bufferCount < 2 || bufferCount > MaxBuffers) throw new ArgumentOutOfRangeException(nameof(bufferCount));
         EnsureAvailable();
