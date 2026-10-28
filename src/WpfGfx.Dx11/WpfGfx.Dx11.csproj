@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Companion assembly for the D3D11 WpfGfx engine (D8). It binds to the wpfgfx_cor3.dll that
+       WPF has already loaded, so it works no matter how the app replaced the engine. On the stock
+       DX9 engine Dx11Engine.IsAvailable is false and the extra APIs throw NotSupportedException. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WpfGfx.Dx11</RootNamespace>
+    <AssemblyName>WpfGfx.Dx11</AssemblyName>
+    <Version>0.1.0</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>
