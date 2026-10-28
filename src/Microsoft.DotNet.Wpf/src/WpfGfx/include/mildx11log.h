@@ -29,5 +29,10 @@ void MilDx11LogD3DMessages(__in_opt IUnknown *pD3DDevice, __in_z const char *psz
 // 텍스처를 로그 폴더에 <name>.bmp 로 저장한다(진단용).
 void MilDx11DumpTexture(__in IUnknown *pD3DDevice, __in IUnknown *pD3DContext, __in IUnknown *pTexture, __in_z const char *pszName);
 
+// 테스트 훅: 환경 변수 WPFGFX_DX11_TEST_DEVICE_LOSS=<n> 이 있으면 n번째 Present 에서.
+// 한 번만 true 를 돌려준다. 엔진은 그 Present 를 디바이스 손실로 취급해 복구 경로를 탄다.
+// (실제 GPU 제거를 일으킬 공개 API 가 D3D11 에는 없다.) 변수가 없으면 항상 false.
+bool MilDx11TestInjectDeviceLoss();
+
 #define MIL_DX11_LOG(...) \
     do { if (MilDx11LogEnabled()) { MilDx11Log(__VA_ARGS__); } } while (0)

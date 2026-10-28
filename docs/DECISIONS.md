@@ -195,3 +195,22 @@ COLOR0/1, TEXCOORD0~7) 하나를 선언하고, 형식에 없는 속성은 입력
 않는다). 입력은 효과 VS 가 내는 COLOR0 과 TEXCOORD0 뿐이고, 그 밖의 선언은 0 으로 채운다. 예측 레지스터·서브루틴·깊이 출력·
 큐브/볼륨 샘플러·다중 렌더 타깃은 실패로 돌려 WPF 의 통과 셰이더 폴백(InvalidPixelShaderEncountered)을 타게 한다.
 엔진 자체의 통과 셰이더 리소스는 이미 SM4(DXBC) 이므로 변환기를 거치지 않는다.
+
+## D23. 디바이스는 디스플레이별로 두고, 한 HWND에 디스플레이 수만큼 스왑체인을 만든다 (2026-10-28)
+
+스톡 D3D9 엔진은 모니터(D3D9 어댑터)마다 디바이스를 만들고 창이 걸친 모니터마다 스왑체인을 같은 HWND에 만들어 자기 영역만 프레젠트한다.
+D3D11에서도 이 구조를 그대로 둔다(`CD3DDeviceManager::FindDeviceMatch`는 디스플레이 인덱스로 매칭). 같은 GPU의 두 모니터면 D3D11 디바이스가
+두 개 생기지만, DXGI 비트블트 모델(`SEQUENTIAL`)은 한 HWND에 여러 스왑체인을 허용하므로 동작은 스톡과 같다(M10에서 확인).
+LUID가 같은 디스플레이가 디바이스 하나를 공유하는 최적화(캐시·셰이더 중복 제거)는 Phase 4 성능 항목이다. 플립 모델로 바꾸면 HWND당 스왑체인이
+하나여야 하므로 그때는 이 결정을 다시 본다(D10).
+
+투명 창은 GDI 호환 스왑체인(`DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE`) + `CD3DSwapChainWithSwDC`(백버퍼를 시스템 메모리 DIB로 읽어
+`UpdateLayeredWindow`)로 간다. 스톡도 lockable 백버퍼를 읽어 올렸으므로 비용은 같다. `IDXGISurface1::GetDC` 직접 경로는 쓰지 않는다.
+
+## D24. 디바이스 손실 복구는 엔진 테스트 훅으로 검증한다 (2026-10-28)
+
+D3D11에는 디바이스 제거를 일으키는 공개 API가 없고(D3D12의 `RemoveDevice`에 해당하는 것이 없다), TDR을 강제하는 방법은 PC 전체에 영향을 준다.
+그래서 진단 로그(D22)와 같은 방식의 환경 변수 `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>`을 두어 n번째 `Present`를 `D3DERR_DEVICELOST`로 처리하고
+그 디바이스의 `CheckDeviceState`도 실패하게 한다. 이것으로 엔진의 복구 경로(`MarkUnusable` → 디바이스 목록 정리 → 새 디바이스·스왑체인·
+리소스 재생성 → D3DImage 프런트 버퍼 알림)를 끝까지 검증한다. 드라이버가 실제로 리소스를 무효화하는 상황은 이 훅이 흉내내지 못하므로
+실제 GPU 제거·TDR 검증은 Phase 4에 남긴다. 변수가 없으면 비용은 카운터 하나다.

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -45,6 +45,23 @@ internal static class InteropCells
         else
         {
             d3d11Notice.Text = "D3D11 engine not loaded";
+        }
+    }
+
+    /// <summary>
+    /// The D3DImage contract after a device loss: the front buffer goes away, and when it comes
+    /// back the app must set its back buffer again. The simulated loss (WPFGFX_DX11_TEST_DEVICE_LOSS)
+    /// leaves the app's own device intact, so the same surface is set again.
+    /// </summary>
+    private static void OnFrontBufferAvailableChanged(D3DImage image, string name, Action setBackBuffer)
+    {
+        Console.WriteLine($"{name} D3DImage front buffer available={image.IsFrontBufferAvailable}");
+        if (image.IsFrontBufferAvailable)
+        {
+            image.Lock();
+            setBackBuffer();
+            image.AddDirtyRect(new Int32Rect(0, 0, (int)Width, (int)Height));
+            image.Unlock();
         }
     }
 
@@ -137,6 +154,8 @@ internal static class InteropCells
         image.SetBackBuffer(D3DResourceType.IDirect3DSurface9, surface);
         image.AddDirtyRect(new Int32Rect(0, 0, (int)Width, (int)Height));
         image.Unlock();
+        image.IsFrontBufferAvailableChanged += (_, _) =>
+            OnFrontBufferAvailableChanged(image, "D3D9Ex", () => image.SetBackBuffer(D3DResourceType.IDirect3DSurface9, surface));
         // The device and surface are intentionally kept alive for the life of the process.
         return image;
     }
@@ -186,6 +205,8 @@ internal static class InteropCells
             image.SetBackBuffer(texture);
             image.AddDirtyRect(new Int32Rect(0, 0, (int)Width, (int)Height));
             image.Unlock();
+            image.IsFrontBufferAvailableChanged += (_, _) =>
+                OnFrontBufferAvailableChanged(image, "D3D11", () => image.SetBackBuffer(texture));
             return image;
         }
         finally

@@ -70,6 +70,9 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
   `wpfgfx_cor3.dll`로 돌린다. 폴더에 `D3DCompiler_47_cor3.dll`도 있어야 한다(wpfgfx가 자기 폴더에서 지연 로드).
 - `--screenshot <png>`: `PrintWindow`로 창만 캡처한다(다른 창에 가려져도 무관).
 - `--exit`: 보고 후 종료. `--delay <ms>`: 렌더링 대기 시간(기본 2000).
+- `--left <x> --top <y>`: 창 위치. 두 모니터에 걸치게 놓으면 디스플레이별 스왑체인 경로를 탄다.
+- `--transparent <png>`: `AllowsTransparency` 창을 주 창 위에 띄우고 `PrintWindow`로 캡처한다(레이어드 윈도우 프레젠트 경로).
+  다른 창에 가려지지 않았으면 화면 복사본(`*-screen.png`)도 남긴다.
 
 보고서는 stdout과 exe 옆 `smoke-report.txt`에 남는다. 첫 줄 예:
 `Tier=2 RenderMode=Default ps2=True ps3=True maxTex=16384,16384`.
@@ -108,6 +111,8 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
   실패 시점과 매 `Present` 마다 로그로 쏟는다. 시그니처 불일치·잘못된 바인딩 같은 원인이 그대로 나온다.
 - 파이프라인 조립기가 만든 HLSL 전문, 컴파일된 셰이더의 리소스 바인딩(텍스처/샘플러 슬롯)과 `$Globals` 변수 오프셋(리플렉션).
 - 처음 300번의 `SetTexture` 호출(스테이지, 크기, 포맷), 처음 4번의 `Present` 직후 백버퍼를 로그 폴더에 `present1..4.bmp` 로 저장.
+- GDI 프레젠트(투명 창)의 처음 2번은 `UpdateLayeredWindow`에 넘기는 백버퍼를 `gdipresent1..2.bmp`(32비트, 알파 포함)로 저장.
+- `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>`(로그와 별개): n번째 `Present`를 디바이스 손실로 처리해 복구 경로를 시험한다(D24).
 
 ```powershell
 $env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"

@@ -11,7 +11,10 @@ namespace SmokeApp;
 /// <summary>
 /// Renders a fixed set of primitives (gradients, text, effects, 3D, blending) and reports
 /// which graphics DLLs are loaded. Usage:
-///   SmokeApp.exe [--screenshot out.png] [--exit] [--delay ms]
+///   SmokeApp.exe [--screenshot out.png] [--exit] [--delay ms] [--left x] [--top y]
+///                [--transparent out.png]
+/// --left/--top place the main window (e.g. straddling two monitors). --transparent also opens
+/// a layered window (AllowsTransparency) over the main window and captures it from the screen.
 /// The report is printed to stdout and written to smoke-report.txt next to the exe.
 /// </summary>
 public partial class MainWindow : Window
@@ -19,23 +22,41 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        string[] args = Environment.GetCommandLineArgs();
+        for (int i = 1; i < args.Length; i++)
+        {
+            if (args[i] == "--left" && i + 1 < args.Length) Left = ParseInt(args[++i]);
+            else if (args[i] == "--top" && i + 1 < args.Length) Top = ParseInt(args[++i]);
+        }
         Loaded += OnLoaded;
     }
+
+    private static int ParseInt(string s) => int.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         InteropCells.Populate(D3D9Cell, D3D11Cell, D3D11Notice, new WindowInteropHelper(this).Handle);
 
         string? shot = null;
+        string? transparentShot = null;
         bool exit = false;
         int delayMs = 2000;
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--screenshot" && i + 1 < args.Length) shot = args[++i];
+            else if (args[i] == "--transparent" && i + 1 < args.Length) transparentShot = args[++i];
             else if (args[i] == "--exit") exit = true;
-            else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = int.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
+            else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = ParseInt(args[++i]);
         }
+
+        TransparentWindow? transparent = null;
+        if (transparentShot != null)
+        {
+            transparent = new TransparentWindow { Owner = this, Left = Left + 120, Top = Top + 260 };
+            transparent.Show();
+        }
+
         await Task.Delay(delayMs);
 
         string report = BuildReport();
@@ -46,8 +67,27 @@ public partial class MainWindow : Window
         if (shot != null)
         {
             string full = Path.GetFullPath(shot);
-            Capture(full);
-            Console.WriteLine("screenshot=" + full);
+            string method = ScreenCapture.Capture(this, full);
+            Console.WriteLine($"screenshot={full} via {method}");
+        }
+        if (transparent != null && transparentShot != null)
+        {
+            // PrintWindow gives the premultiplied colors regardless of z-order. The composed
+            // result over the main window (which shows the alpha channel at work) can only be read
+            // from the screen, so it is taken when nothing else covers the layered window.
+            string full = Path.GetFullPath(transparentShot);
+            string method = ScreenCapture.Capture(transparent, full);
+            Console.WriteLine($"transparent={full} via {method}");
+            string screenPath = Path.Combine(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(full) + "-screen.png");
+            if (ScreenCapture.IsUnobscured(transparent))
+            {
+                ScreenCapture.CaptureFromScreen(transparent, screenPath);
+                Console.WriteLine($"transparent-screen={screenPath}");
+            }
+            else
+            {
+                Console.WriteLine("transparent-screen=skipped (another window covers the layered window)");
+            }
         }
         if (exit) Close();
     }
@@ -60,6 +100,7 @@ public partial class MainWindow : Window
         HwndSource? src = HwndSource.FromHwnd(hwnd);
         sb.AppendLine($"Tier={tier} RenderMode={src?.CompositionTarget.RenderMode} ps2={RenderCapability.IsPixelShaderVersionSupported(2, 0)} ps3={RenderCapability.IsPixelShaderVersionSupported(3, 0)} maxTex={RenderCapability.MaxHardwareTextureSize}");
         sb.AppendLine($"Runtime={RuntimeInformation.FrameworkDescription} WPF={typeof(Window).Assembly.GetName().Version} ({typeof(Window).Assembly.Location})");
+        sb.AppendLine($"Window=({Left},{Top}) {ActualWidth}x{ActualHeight}");
         sb.AppendLine($"NativeSearch={AppContext.GetData("NATIVE_DLL_SEARCH_DIRECTORIES")}");
         string[] prefixes = { "wpfgfx", "d3d", "dxgi", "presentationnative", "dwrite", "dcomp" };
         foreach (ProcessModule m in Process.GetCurrentProcess().Modules)
@@ -76,32 +117,4 @@ public partial class MainWindow : Window
         }
         return sb.ToString();
     }
-
-    private void Capture(string path)
-    {
-        IntPtr hwnd = new WindowInteropHelper(this).Handle;
-        GetWindowRect(hwnd, out RECT r);
-        int w = r.Right - r.Left, h = r.Bottom - r.Top;
-        using var bmp = new System.Drawing.Bitmap(w, h);
-        using (var g = System.Drawing.Graphics.FromImage(bmp))
-        {
-            // PrintWindow renders only this window (via DWM), independent of z-order,
-            // so overlapping windows never end up in the capture.
-            IntPtr hdc = g.GetHdc();
-            try { PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT); }
-            finally { g.ReleaseHdc(hdc); }
-        }
-        bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-    }
-
-    private const uint PW_RENDERFULLCONTENT = 0x00000002;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 }

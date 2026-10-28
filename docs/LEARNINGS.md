@@ -81,3 +81,9 @@ BOM 없는 UTF-8 소스를 CP949 로캘의 MSVC 는 CP949 로 읽는다(`/wd4819
 뒤따르는 줄바꿈과 2바이트 문자로 묶여 **다음 줄이 주석 속으로 사라진다**. 구조체 멤버 한 줄이 통째로 없어져 "멤버가 아닙니다"
 오류가 났다. 규칙: 주석은 마침표 등 ASCII 로 끝낸다. 확인은 `python tools/check_trailing_nonascii.py src/Microsoft.DotNet.Wpf/src/WpfGfx`
 (`--fix` 를 주면 주석 줄 끝에 마침표를 붙인다).
+
+## L12. 레이어드 윈도우 캡처로는 알파를 검증할 수 없다 (2026-10-28)
+
+`PrintWindow(PW_RENDERFULLCONTENT)`는 레이어드 윈도우를 검정 위에 합성한 결과를 알파 255로 돌려준다(프리멀티플라이드 색은 맞지만 알파는 사라진다).
+화면 복사는 창이 가려지지 않아야 하는데, 백그라운드 프로세스는 `SetForegroundWindow`로 앞에 나올 수 없다(`Topmost`로 올리면 사용자의 다른 창 위에
+뜬다). 그래서 알파는 엔진 쪽 덤프(`gdipresent1.bmp`)로 확인하고, 스모크 앱은 가려지지 않았을 때만 화면 복사본을 남긴다.

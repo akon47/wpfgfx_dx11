@@ -874,6 +874,7 @@ private:
     // Set to true once the device has been marked unusable and then given a
     // chance to destroy resources and notify its manager.
     bool m_fDeviceLostProcessed;
+    bool m_fTestDeviceLost;             // WPFGFX_DX11_TEST_DEVICE_LOSS hook fired on this device
 
     // HRESULT indicating whether the display is invalid
     HRESULT m_hrDisplayInvalid;
