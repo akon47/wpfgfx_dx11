@@ -66,6 +66,12 @@ public partial class MainWindow : Window
             if (Array.Exists(prefixes, p => n.StartsWith(p, StringComparison.Ordinal)))
                 sb.AppendLine($"  {m.ModuleName,-28} {m.FileVersionInfo.FileVersion,-24} {m.FileName}");
         }
+        sb.AppendLine("d3d9 watch: " + App.D3D9WatchStatus);
+        lock (App.D3D9LoadStacks)
+        {
+            foreach (string stack in App.D3D9LoadStacks)
+                sb.AppendLine("d3d9.dll loaded from: " + stack);
+        }
         return sb.ToString();
     }
 
