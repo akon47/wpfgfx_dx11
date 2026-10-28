@@ -112,3 +112,28 @@ EVR 프레젠터(DXVA2/D3D9)는 `IMFDXGIDeviceManager`+`ID3D11VideoProcessor`로
   `InteropDeviceBitmap_Create`에 넘긴다. 네이티브가 `QueryInterface(IID_ID3D11Texture2D)`로 먼저 판별하면 D3D11 텍스처를
   무복사로 받을 수 있고, 관리 코드는 그대로다. `WpfGfx.Dx11`의 `D3D11Image` 헬퍼가 `IsAvailable` 검사 후 이 경로를 쓴다.
   스톡 엔진에서는 헬퍼가 먼저 거부하므로 잘못된 포인터가 네이티브로 가지 않는다.
+
+## D17. D3D11.1 런타임(Windows 8 이상)을 요구한다 (2026-10-28)
+
+`ID3D11DeviceContext1::ClearView`(사각형 단위 클리어, D3D9 `Clear`의 rect 목록 대응)와 `IDXGISwapChain1::Present1`(dirty rect)을
+쓴다. .NET 8 이상 WPF가 지원하는 OS는 모두 D3D11.1을 포함하므로 Windows 7 경로는 두지 않는다. Feature Level은 D5대로 10.0까지 내려간다.
+
+## D18. 고정 기능 파이프라인은 셰이더로 에뮬레이션한다 (2026-10-28)
+
+D3D11에는 고정 기능(FF) 정점 변환·텍스처 스테이지 결합기가 없다. `CHwFFPipeline`과 `CD3DRenderState::SetTextureStageOperation`
+등 호출부를 유지하기 위해 `HwFixedFunctionShaders.cpp`가 정점 포맷별 입력 레이아웃·변환 VS와 텍스처 스테이지 조합별 PS를
+런타임에 조립해 D3DCompile로 만든다. 범프 매핑(`sc_tsoBumpMapTexture`)은 Modulate로 두고 에뮬레이션하지 않는다(FL10 디바이스는
+항상 셰이더 파이프라인을 택하므로 선택되지 않는다). 파이프라인 조립기의 D3D9 문법 HLSL은 M3까지
+`D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY`로 컴파일한다.
+
+## D19. 사용자 D3D11 렌더 루프는 MediaElement 방식의 프레임 큐로 컴포지션에 잇는다 (2026-10-28, 방향)
+
+MediaElement가 빠른 이유는 (1) 컴포지션 엔진과 같은 멀티스레드 디바이스의 텍스처에 다른 스레드가 바로 그리고, (2) 컴포지션 스레드가
+패스마다 가장 최근에 완성된 프레임 하나만 집어 그리며, (3) 새 프레임이 `CMilSlaveVideo::NewFrame` → `ScheduleCompositionPass`로
+UI 스레드 없이 컴포지션을 깨우기 때문이다. D3DImage는 프레임마다 UI 스레드의 Lock/AddDirtyRect/Unlock을 거쳐야 하고 D3D9Ex 공유
+서피스를 요구해 이 셋을 모두 놓친다. HWND마다 스왑체인을 두는 우회는 에어스페이스 문제가 있다.
+
+결정: D8의 `WpfGfx.Dx11`에 "프레임 큐" 객체를 추가한다. 네이티브 export로 텍스처 링(엔진 디바이스 또는 사용자 디바이스의 공유
+텍스처 + keyed mutex)을 만들고, 사용자는 어느 스레드에서든 `Acquire`/`Present`만 호출한다. `Present`가 컴포지션 패스를 예약하고,
+컴포지션은 마지막 Present된 텍스처를 비디오처럼 그린다. 관리 코드는 기존 `D3DImage.SetBackBuffer`에 이 객체를 한 번 넘기는 것으로
+끝난다(네이티브가 QueryInterface로 판별). 소프트웨어 컴포지션에서는 비디오와 같은 리드백 폴백을 쓴다. 세부 API는 M9 이후 확정.
