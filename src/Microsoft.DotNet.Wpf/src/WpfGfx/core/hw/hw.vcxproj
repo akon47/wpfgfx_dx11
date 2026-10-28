@@ -109,6 +109,7 @@
     <ClCompile Include="HwShaderBuilder.cpp" />
     <ClCompile Include="HwShaderCache.cpp" />
     <ClCompile Include="HwShaderEffect.cpp" />
+    <ClCompile Include="HwShaderEffectTranslator.cpp" />
     <ClCompile Include="HwShaderFragmentToHLSLConverter.cpp" />
     <ClCompile Include="HwShaderPipeline.cpp" />
     <ClCompile Include="HwSolidBrush.cpp" />

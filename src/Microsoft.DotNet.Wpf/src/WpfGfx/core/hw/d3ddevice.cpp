@@ -3662,6 +3662,60 @@ CD3DDeviceLevel1::CompilePipelinePixelShader(
 //+-----------------------------------------------------------------------------
 //
 //  Member:
+//      CD3DDeviceLevel1::CompileShaderEffectPixelShader
+//
+//  Synopsis:
+//      Compiles the HLSL produced by the ShaderEffect translator (entry
+//      "main", ps_4_0). Errors go to the diagnostic log; the caller falls back
+//      to the pass-through shader.
+//
+//------------------------------------------------------------------------------
+
+HRESULT
+CD3DDeviceLevel1::CompileShaderEffectPixelShader(
+    __in_bcount(cbHLSLSource) PCSTR pHLSLSource,
+    UINT cbHLSLSource,
+    __deref_out_ecount(1) ID3D11PixelShader ** const ppPixelShader
+    )
+{
+    MtSetDefault(Mt(D3DCompiler));
+
+    std::shared_ptr<buffer> pShader;
+    std::shared_ptr<buffer> pErr;
+
+    if (MilDx11LogEnabled())
+    {
+        MilDx11LogText("ShaderEffect HLSL", pHLSLSource, cbHLSLSource);
+    }
+
+    HRESULT hr =
+        shader::compile(
+            std::string(pHLSLSource, pHLSLSource + cbHLSLSource),
+            "main",
+            "ps_4_0",
+            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
+            pShader, pErr);
+
+    if (SUCCEEDED(hr))
+    {
+        dxlayer::data blob = pShader->get_buffer_data();
+        MilDx11LogShaderBindings("ShaderEffect PS", blob.buffer, static_cast<SIZE_T>(blob.buffer_size));
+        hr = CreatePixelShader(blob.buffer, static_cast<SIZE_T>(blob.buffer_size), ppPixelShader);
+    }
+
+    if (FAILED(hr))
+    {
+        MIL_DX11_LOG("ShaderEffect PS compile failed hr=0x%08x: %s", hr,
+                     pErr ? static_cast<const char *>(pErr->get_buffer_data().buffer) : "");
+        hr = shader::handle_errors_and_transform_hresult(hr, pErr);
+    }
+
+    RRETURN(HandleDIE(hr));
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
 //      CD3DDeviceLevel1::CreateVertexShader / CreatePixelShader
 //
 //------------------------------------------------------------------------------

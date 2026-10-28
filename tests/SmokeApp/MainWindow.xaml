@@ -1,7 +1,8 @@
 ﻿<Window x:Class="SmokeApp.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SmokeApp" Width="900" Height="640" Left="40" Top="40"
+        xmlns:local="clr-namespace:SmokeApp"
+        Title="SmokeApp" Width="900" Height="840" Left="40" Top="40"
         WindowStartupLocation="Manual" ResizeMode="NoResize" Background="#FF202428">
   <Window.Resources>
     <DrawingImage x:Key="CheckerImage">
@@ -15,7 +16,7 @@
       </DrawingImage.Drawing>
     </DrawingImage>
   </Window.Resources>
-  <UniformGrid Columns="4" Rows="3" Margin="8">
+  <UniformGrid Columns="4" Rows="4" Margin="8">
     <!-- 1 linear gradient -->
     <Rectangle Margin="6">
       <Rectangle.Fill>
@@ -110,5 +111,13 @@
       <Rectangle Fill="#FF208080"/>
       <TextBlock Text="Clip + Opacity" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Grid>
+    <!-- 13 user ShaderEffect, ps_2_0 bytecode (compiled at run time) -->
+    <Image Margin="6" Source="{StaticResource CheckerImage}"><Image.Effect><local:TintEffect/></Image.Effect></Image>
+    <!-- 14 user ShaderEffect, ps_3_0 bytecode with loop and branch -->
+    <Image Margin="6" Source="{StaticResource CheckerImage}"><Image.Effect><local:SplitBlurEffect/></Image.Effect></Image>
+    <!-- 15 reserved: D3DImage (M9) -->
+    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1"><TextBlock Text="D3DImage (M9)" Foreground="#FF808890" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <!-- 16 reserved: layered window / misc (M10) -->
+    <Border Margin="6" BorderBrush="#FF505860" BorderThickness="1"><TextBlock Text="M10" Foreground="#FF808890" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
   </UniformGrid>
 </Window>

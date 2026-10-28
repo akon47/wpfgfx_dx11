@@ -269,6 +269,13 @@ public:
         __deref_out_ecount(1) ID3D11PixelShader ** const ppPixelShader
         );
 
+    // ShaderEffect: D3D9 바이트코드를 HLSL 로 변환한 결과를 ps_4_0 으로 컴파일한다 (D6).
+    HRESULT CompileShaderEffectPixelShader(
+        __in_bcount(cbHLSLSource) PCSTR pHLSLSource,
+        UINT cbHLSLSource,
+        __deref_out_ecount(1) ID3D11PixelShader ** const ppPixelShader
+        );
+
     HRESULT CreateVertexShader(
         __in_bcount(cbBytecode) const void *pvBytecode,
         SIZE_T cbBytecode,

@@ -10,6 +10,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "HwShaderEffectTranslator.h"
 
 MtDefine(CHwPixelShaderEffect, CD3DDeviceLevel1, "CHwPixelShaderEffect");
 MtDefine(CHwPixelShaderEffect_NotImplementedAndShouldAlwaysBeZero, CHwPixelShaderEffect, "Not implemented and therefore meaningless.");
@@ -65,8 +66,37 @@ CHwPixelShaderEffect::Init(
 {
     HRESULT hr = S_OK;
 
-    // M8 까지는 DX9 바이트코드이므로 생성이 실패한다 (D6: 변환기는 M8).
-    IFC(pDevice->CreatePixelShader(pPixelShaderByteCode, sizeInBytes, &m_pD3DPixelShader));
+    //
+    // The bytecode is D3D9 ps_2_0/ps_3_0 (public ShaderEffect contract, D6):
+    // translate it to HLSL and compile for ps_4_0. Translation failures leave
+    // the caller to its pass-through fallback.
+    //
+    if (sizeInBytes >= sizeof(DWORD) && *reinterpret_cast<const DWORD *>(pPixelShaderByteCode) == 0x43425844 /* 'DXBC' */)
+    {
+        // Already SM4 bytecode (the engine's own pass-through shader resource).
+        IFC(pDevice->CreatePixelShader(pPixelShaderByteCode, sizeInBytes, &m_pD3DPixelShader));
+    }
+    else
+    {
+        std::string hlsl;
+
+        hr = MilTranslateD3D9PixelShaderToHLSL(pPixelShaderByteCode, sizeInBytes, &hlsl);
+
+        if (FAILED(hr))
+        {
+            MIL_DX11_LOG("ShaderEffect translate failed hr=0x%08x cb=%u tok0=0x%08x tok1=0x%08x",
+                         hr, sizeInBytes,
+                         sizeInBytes >= 4 ? *reinterpret_cast<const DWORD *>(pPixelShaderByteCode) : 0,
+                         sizeInBytes >= 8 ? *reinterpret_cast<const DWORD *>(pPixelShaderByteCode + 4) : 0);
+            IFC(hr);
+        }
+
+        IFC(pDevice->CompileShaderEffectPixelShader(
+            hlsl.c_str(),
+            static_cast<UINT>(hlsl.size()),
+            &m_pD3DPixelShader
+            ));
+    }
 
     CD3DResource::Init(pDevice->GetResourceManager(), sizeInBytes /* this is a guess for the shader size, but that is ok */);
 
