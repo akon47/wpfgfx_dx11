@@ -24,7 +24,7 @@
 //
 //  Function:  MilD3D9FormatToPixelFormat
 //
-//  Synopsis:  D3DImage 서피스와 D3D9 기반 미디어 버퍼의 포맷을 MIL 픽셀 포맷으로
+//  Synopsis:  D3DImage 서피스와 D3D9 기반 미디어 버퍼의 포맷을 MIL 픽셀 포맷으로.
 //             바꾼다. 업스트림 D3DFormatToPixelFormat의 D3D9 분기를 그대로 옮겼다.
 //
 //------------------------------------------------------------------------------

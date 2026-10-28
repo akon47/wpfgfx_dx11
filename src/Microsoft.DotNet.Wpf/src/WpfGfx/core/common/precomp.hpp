@@ -24,7 +24,7 @@
 
 #include "sw\swinit.h"
 
-#include "d3d9interop.h"     // dxva2api.h/evr.h 가 D3D9 타입을 쓴다
+#include "d3d9interop.h"     // dxva2api.h/evr.h 가 D3D9 타입을 쓴다.
 #include "mfapi.h"
 #include "dxva2api.h"
 #include "evr.h"

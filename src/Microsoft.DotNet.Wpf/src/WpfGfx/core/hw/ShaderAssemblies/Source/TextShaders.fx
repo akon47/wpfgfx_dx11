@@ -11,8 +11,8 @@
 //      $Keywords:
 //
 //  $Description:
-//      텍스트 렌더링 픽셀 셰이더. 예전 hlslTextShaders20A.fx 의 ps_2_0 어셈블리를
-//      SM4 HLSL로 옮긴 것이다. 글리프 알파 텍스처는 DXGI_FORMAT_A8_UNORM 이므로
+//      텍스트 렌더링 픽셀 셰이더. 예전 hlslTextShaders20A.fx 의 ps_2_0 어셈블리를.
+//      SM4 HLSL로 옮긴 것이다. 글리프 알파 텍스처는 DXGI_FORMAT_A8_UNORM 이므로.
 //      샘플 결과의 .a 에 알파가 있다.
 //
 //      상수 레지스터 번호는 CD3DRenderState 가 올리는 c# 번호와 같다.

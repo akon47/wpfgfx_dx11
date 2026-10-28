@@ -6,12 +6,12 @@
 //+-----------------------------------------------------------------------------
 //
 //  Description:
-//      D3D11에는 고정 기능 파이프라인이 없다. WpfGfx는 몇 군데(RenderTexture, 글리프
+//      D3D11에는 고정 기능 파이프라인이 없다. WpfGfx는 몇 군데(RenderTexture, 글리프.
 //      텍스처 쌍 그리기 등)에서 "버텍스 셰이더 없음 + 변환 상태", "픽셀 셰이더 없음 +
 //      텍스처 스테이지 연산"에 의존하므로, 그 조합을 작은 HLSL로 에뮬레이션한다.
 //
-//      - 버텍스 형식마다 입력 레이아웃과 변환 전용 버텍스 셰이더 하나
-//      - 텍스처 스테이지 연산 조합(키)마다 픽셀 셰이더 하나
+//      - 버텍스 형식마다 입력 레이아웃과 변환 전용 버텍스 셰이더 하나.
+//      - 텍스처 스테이지 연산 조합(키)마다 픽셀 셰이더 하나.
 //
 //      셰이더는 처음 쓸 때 D3DCompile로 만들고 디바이스 수명 동안 캐시한다.
 //
@@ -66,8 +66,8 @@ struct MilTextureStageState
 
 //
 // 모든 버텍스 셰이더(고정 기능 에뮬레이션, 파이프라인 조립기, 효과)가 공유하는 입력 선언.
-// D3D11은 입력 레이아웃과 VS 입력 시그니처의 시맨틱·레지스터가 맞아야 하므로, 모든 VS가
-// 같은 순서로 같은 속성을 선언한다. 버텍스 형식에 없는 속성은 입력 레이아웃이 슬롯
+// D3D11은 입력 레이아웃과 VS 입력 시그니처의 시맨틱·레지스터가 맞아야 하므로, 모든 VS가.
+// 같은 순서로 같은 속성을 선언한다. 버텍스 형식에 없는 속성은 입력 레이아웃이 슬롯.
 // MIL_NULL_VERTEX_SLOT 의 0 버퍼(인스턴스 단계 0)에서 읽게 해 항상 0 이 들어온다.
 // 선언 순서가 입력 레지스터 번호를 정하므로 바꾸지 않는다.
 //
@@ -92,7 +92,7 @@ struct MilTextureStageState
 #define MIL_VERTEX_INPUT_ELEMENT_COUNT 12
 
 //
-// 고정 기능 에뮬레이션 상수 버퍼 (VS b1). 열 우선(packing) 규약은 파이프라인 셰이더와
+// 고정 기능 에뮬레이션 상수 버퍼 (VS b1). 열 우선(packing) 규약은 파이프라인 셰이더와.
 // 같다: C++에서 전치해서 올리고 HLSL에서 mul(pos, m)으로 쓴다.
 //
 struct MilFixedFunctionVSConstants
@@ -151,8 +151,8 @@ private:
     ID3D11Device *m_pDevice;
 
     ID3D11InputLayout *m_rgpInputLayouts[MilVertexFormat_Count];
-    ID3D11VertexShader *m_pVertexShader;      // 형식과 무관한 변환 VS 하나
-    ID3DBlob *m_pVertexShaderBlob;             // 입력 레이아웃 생성용 시그니처
+    ID3D11VertexShader *m_pVertexShader;      // 형식과 무관한 변환 VS 하나.
+    ID3DBlob *m_pVertexShaderBlob;             // 입력 레이아웃 생성용 시그니처.
 
     struct PixelShaderEntry
     {

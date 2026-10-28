@@ -1068,7 +1068,7 @@ CHwRenderStateManager::SetVertexFormat(MilVertexFormatId format)
         m_fVertexFormatKnown = true;
         m_fVertexFormatDirty = true;
 
-        // 고정 기능 VS는 형식에 따라 다르다
+        // 고정 기능 VS는 형식에 따라 다르다.
         if (m_pVertexShader == NULL)
         {
             m_fVertexShaderDirty = true;
@@ -1185,7 +1185,7 @@ CHwRenderStateManager::ApplyBlendState()
         desc.RenderTarget[0].SrcBlend = m_blend.Enable ? m_blend.SrcBlend : D3D11_BLEND_ONE;
         desc.RenderTarget[0].DestBlend = m_blend.Enable ? m_blend.DestBlend : D3D11_BLEND_ZERO;
         desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        // D3D9의 단일 블렌드 모드는 알파 채널에도 같은 인자를 쓴다. 색 전용 인자는
+        // D3D9의 단일 블렌드 모드는 알파 채널에도 같은 인자를 쓴다. 색 전용 인자는.
         // 알파에 맞는 것으로 바꾼다.
         desc.RenderTarget[0].SrcBlendAlpha = desc.RenderTarget[0].SrcBlend;
         desc.RenderTarget[0].DestBlendAlpha = desc.RenderTarget[0].DestBlend;
@@ -1422,8 +1422,8 @@ Cleanup:
 //
 //  Member:    CHwRenderStateManager::CreateNullVertexBuffer
 //
-//  Synopsis:  버텍스 형식에 없는 속성(법선, 반사색, 추가 텍스처 좌표)을 0 으로
-//             공급하는 작은 버퍼. 입력 레이아웃이 슬롯 MIL_NULL_VERTEX_SLOT 에서
+//  Synopsis:  버텍스 형식에 없는 속성(법선, 반사색, 추가 텍스처 좌표)을 0 으로.
+//             공급하는 작은 버퍼. 입력 레이아웃이 슬롯 MIL_NULL_VERTEX_SLOT 에서.
 //             인스턴스 단계 0 으로 읽는다(HwFixedFunctionShaders.cpp).
 //
 //------------------------------------------------------------------------------
@@ -1654,7 +1654,7 @@ Cleanup:
 //
 //  Function:   CHwRenderStateManager::SetDefaultState
 //
-//  Synopsis:   Sets the default values for all the state. D3D9 시절 기본값과
+//  Synopsis:   Sets the default values for all the state. D3D9 시절 기본값과.
 //              같은 의미를 유지한다.
 //
 //-------------------------------------------------------------------------

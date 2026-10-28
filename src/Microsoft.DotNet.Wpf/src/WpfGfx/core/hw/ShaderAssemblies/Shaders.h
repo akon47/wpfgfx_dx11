@@ -5,7 +5,7 @@
 
 //+-----------------------------------------------------------------------------
 //
-//  셰이더 리소스 ID. ShaderAssemblies.targets가 fxc로 만든 바이트코드를
+//  셰이더 리소스 ID. ShaderAssemblies.targets가 fxc로 만든 바이트코드를.
 //  ResourceFileTemplate\EmbeddedShaders.RC가 이 ID로 RCDATA에 넣는다.
 //
 //------------------------------------------------------------------------------

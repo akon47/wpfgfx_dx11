@@ -115,7 +115,7 @@ CHwFixedFunctionShaders::Init(
 //
 //  Member:    CHwFixedFunctionShaders::BuildInputElements
 //
-//  Synopsis:  버텍스 형식의 D3D11 입력 요소. 시맨틱 이름은 파이프라인 셰이더
+//  Synopsis:  버텍스 형식의 D3D11 입력 요소. 시맨틱 이름은 파이프라인 셰이더.
 //             조립기와 공유한다: POSITION, NORMAL, COLOR0/1, TEXCOORDn.
 //
 //------------------------------------------------------------------------------
@@ -127,8 +127,8 @@ CHwFixedFunctionShaders::BuildInputElements(
     )
 {
     //
-    // MIL_HLSL_VERTEX_INPUT 의 모든 속성을 선언한다. 형식에 있는 속성은 슬롯 0 의
-    // 버텍스 데이터에서, 없는 속성은 슬롯 MIL_NULL_VERTEX_SLOT 의 0 버퍼에서 읽는다
+    // MIL_HLSL_VERTEX_INPUT 의 모든 속성을 선언한다. 형식에 있는 속성은 슬롯 0 의.
+    // 버텍스 데이터에서, 없는 속성은 슬롯 MIL_NULL_VERTEX_SLOT 의 0 버퍼에서 읽는다.
     // (인스턴스 데이터, 단계 0 = 모든 버텍스가 첫 요소를 읽는다).
     //
     UINT c = 0;

@@ -222,7 +222,7 @@ CD3DModuleLoaderInternal::CreateD3DObjects(
     HRESULT hr = S_OK;
     IDXGIFactory1 *pFactory = NULL;
 
-    // 팩터리 생성은 여러 DLL 로드를 유발한다. 어딘가 잘못된 코드가 FPU 설정을
+    // 팩터리 생성은 여러 DLL 로드를 유발한다. 어딘가 잘못된 코드가 FPU 설정을.
     // 깨뜨려도 우리 코드가 영향을 받지 않도록 보호한다(D3D9 시절부터의 보호).
     FPUStateSandbox oGuard;
 

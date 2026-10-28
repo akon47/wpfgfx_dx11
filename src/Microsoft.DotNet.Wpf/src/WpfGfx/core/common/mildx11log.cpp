@@ -15,7 +15,7 @@
 #include <d3d11sdklayers.h>
 #include <strsafe.h>
 
-static LONG s_lLogState = 0;            // 0 = 미확인, 1 = 꺼짐, 2 = 켜짐
+static LONG s_lLogState = 0;            // 0 = 미확인, 1 = 꺼짐, 2 = 켜짐.
 static char s_szLogPath[MAX_PATH] = {};
 
 bool MilDx11LogEnabled()
@@ -132,7 +132,7 @@ void MilDx11LogText(__in_z const char *pszTitle, __in_bcount(cb) const char *pTe
 //
 //  Function:  MilDx11DumpTexture
 //
-//  Synopsis:  진단용. 2D 텍스처(백버퍼 등)를 스테이징으로 복사해 32bpp BMP 로
+//  Synopsis:  진단용. 2D 텍스처(백버퍼 등)를 스테이징으로 복사해 32bpp BMP 로.
 //             저장한다. 로그 파일과 같은 폴더에 <pszName>.bmp 로 쓴다.
 //
 //------------------------------------------------------------------------------

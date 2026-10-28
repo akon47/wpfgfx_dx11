@@ -17,8 +17,8 @@
 //      Contains also CD3DLockableTexturePair class declaration and stack based
 //      lock helper class for it.
 //
-//      D3D9의 D3DPOOL_MANAGED 텍스처를 대체한다: CPU가 쓰는 STAGING 텍스처와 GPU가
-//      읽는 DEFAULT 텍스처 한 쌍이며, LockRect로 더럽힌 영역을 EnsureGpuContents에서
+//      D3D9의 D3DPOOL_MANAGED 텍스처를 대체한다: CPU가 쓰는 STAGING 텍스처와 GPU가.
+//      읽는 DEFAULT 텍스처 한 쌍이며, LockRect로 더럽힌 영역을 EnsureGpuContents에서.
 //      CopySubresourceRegion으로 올린다.
 //
 //  $ENDTAG
