@@ -25,7 +25,7 @@ public class BenchWindow : Window
     private int _frames;
     private double _lastRenderTime = -1;
 
-    public BenchWindow(int seconds)
+    public BenchWindow(int seconds, bool transparent = false)
     {
         _seconds = seconds;
         Title = "SmokeApp bench";
@@ -34,6 +34,13 @@ public class BenchWindow : Window
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
         Background = new SolidColorBrush(Color.FromRgb(0x20, 0x24, 0x28));
+        if (transparent)
+        {
+            // Layered window: the engine reads the frame back and calls UpdateLayeredWindow.
+            AllowsTransparency = true;
+            WindowStyle = WindowStyle.None;
+            Background = new SolidColorBrush(Color.FromArgb(0xC0, 0x20, 0x24, 0x28));
+        }
         Content = _canvas;
         var rnd = new Random(12345);
 

@@ -78,6 +78,7 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - `--media <file> --media-shot <png>`: `MediaElement` 창을 띄워 재생하고 캡처한다(`core/av` EVR 프레젠터 경로, D25).
 - `--rtb <png> [--rtb-hw]`: 그라데이션·텍스트·ps_2_0·ps_3_0 효과·그림자를 `RenderTargetBitmap` 으로 그려 저장한다. `--rtb-hw` 는
   `Dx11Engine.HardwareRenderTargetBitmap = true`(GPU 경로, D27; 스톡 엔진에서는 예외).
+- `--resize <steps>`: 창 크기를 단계별로 키우고 줄이며 매 단계 캡처해 검은 픽셀 비율을 보고한다(D29 플립 모델의 제자리 리사이즈 검증).
 - `--fq <png> [--fq-queues N] [--fq-seconds S] [--fq-block]`: 프레임 큐(D19) 시나리오. 워커 스레드가 N개 큐에 60 fps 로 그리고
   `--fq-block` 이면 UI 스레드를 0.5초마다 100 ms 막는다. 결과 줄 `fq: ...` 에 카운터와 250 ms 간격 두 캡처의 변화율이 나온다.
   `tests/assets/smptebars.mp4`는 정지 SMPTE 막대(H.264 160×120, 4초)라 캡처 시점에 무관하다.
@@ -115,8 +116,8 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 .\tests\run-smoke.ps1 -Rid win-x86 -Tfm net8.0-windows   # x86: 먼저 .\build.cmd -configuration Release -platform x86
 ```
 
-행: engine, standard, transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in), frame queues(8, UI blocked),
-frame queues on stock(폴백), 선택 straddling, bench.
+행: engine, standard, spin jitter, resize(16 steps), transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
+frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, 선택 bench(일반 창·투명 창, 스톡·D3D11).
 
 의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로
 클라이언트 영역만 뜬다(제목 표시줄은 포커스에 따라 색이 달라진다).

@@ -282,6 +282,17 @@ HRESULT CDesktopRenderTarget::Init(
     //
     // Create all of the render targets
     //
+    //
+    // D29: one hardware render target for the whole desktop when every display
+    // sits on the same adapter (D28 shares the device). The window is rendered
+    // once instead of once per display it touches, and the HWND ends up with a
+    // single swap chain.
+    //
+    bool fSingleHwRT =
+           m_cRT > 1
+        && !(dwFlags & MilRTInitialization::SoftwareOnly)
+        && DisplaySet()->AllDisplaysShareAdapter();
+
     for (UINT i = 0; i < m_cRT; i++)
     {
         MetaData &metadata = m_rgMetaData[i];
@@ -289,7 +300,11 @@ HRESULT CDesktopRenderTarget::Init(
         CDisplay const *pDisplay = DisplaySet()->Display(i);
         Assert(pDisplay);
 
-        if (fLimitRenderToDisplayBounds)
+        if (fSingleHwRT)
+        {
+            metadata.rcVirtualDeviceBounds = DisplaySet()->GetBounds();
+        }
+        else if (fLimitRenderToDisplayBounds)
         {
             metadata.rcVirtualDeviceBounds = pDisplay->GetDisplayRect();
         }
@@ -341,6 +356,7 @@ HRESULT CDesktopRenderTarget::Init(
                 pDisplay,
                 d3dDeviceType,
                 dwFlags,
+                fSingleHwRT || m_cRT == 1,   // D29: sole target of the HWND
                 &metadata.pHwDisplayRT
                 ));
 
@@ -348,6 +364,16 @@ HRESULT CDesktopRenderTarget::Init(
             {
                 MIL_DX11_LOG("CHwDisplayRenderTarget::Create failed hr=0x%08x", hr);
             }
+        }
+
+        if (fSingleHwRT && !metadata.pHwDisplayRT)
+        {
+            // No hardware target for the whole desktop: start over per display.
+            fSingleHwRT = false;
+            metadata.rcVirtualDeviceBounds.SetEmpty();
+            hr = S_OK;
+            i = UINT_MAX;
+            continue;
         }
 
         // Is SW allowed?
@@ -451,6 +477,14 @@ HRESULT CDesktopRenderTarget::Init(
             metadata.pInternalRT = metadata.pSwHWNDRT;
         }
         metadata.pInternalRT->AddRef();
+
+        if (fSingleHwRT)
+        {
+            Assert(i == 0);
+            SetSingleSubRT();
+            MIL_DX11_LOG("desktop RT: one hardware target for %u displays on one adapter", DisplaySet()->GetDisplayCount());
+            break;
+        }
     }
 
     IFC(EditMetaData());

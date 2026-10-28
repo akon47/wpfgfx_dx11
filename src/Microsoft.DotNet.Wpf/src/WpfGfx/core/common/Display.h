@@ -269,6 +269,10 @@ public:
 
     UINT GetDisplayCount() const {return m_rgpDisplays.GetCount();}
 
+    // D29: true when every display sits on the same (known) adapter, so one
+    // hardware device and one render target can serve the whole desktop.
+    bool AllDisplaysShareAdapter() const;
+
     HRESULT GetDisplay(
         UINT uDisplayIndex,
         __deref_outro_ecount(1) CDisplay const * * ppDisplay

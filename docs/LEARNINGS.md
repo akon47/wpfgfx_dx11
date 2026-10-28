@@ -113,3 +113,15 @@ D3D11 에서는 프라이빗 메모리 200 MB 이상·GPU 로컬 메모리 100 M
 프레임 큐 서술자(`WpfGfxFrameQueueDesc`)의 `HANDLE rgSharedHandles[4]` 를 관리 쪽에서 `long` 네 개로 두었더니 x64 에서는 돌아가고
 x86 에서는 두 번째 핸들이 NULL 로 읽혀 `E_INVALIDARG` 가 났다(HANDLE 은 포인터 크기). 새 export 구조체는 `IntPtr` 필드로 쓰고,
 게이트를 `-Rid win-x86` 으로도 돌린다. 실패한 시나리오가 창을 남기면 앱이 끝나지 않으므로 테스트는 `finally` 로 정리한다.
+
+## L17. DXGI 플립 모델은 프레젠트 뒤 백버퍼를 떼고, ResizeBuffers 는 "지금" 참조가 없어야 한다 (2026-10-28)
+
+- 플립 체인에서 `Present1` 이 성공하면 런타임이 백버퍼 0 을 OM 스테이지에서 떼어낸다. 엔진은 "현재 렌더타깃" 을 캐시하므로
+  (`m_pCurrentRenderTargetNoRef`) 그대로 두면 다음 `SetRenderTarget` 이 생략되고 프레임이 아무 데도 안 그려진다. 프레젠트 뒤 캐시를 비운다.
+- 버퍼 1 은 읽기 전용이고 방금 프레젠트한 프레임이다. 부분 갱신 엔진은 프레젠트 뒤 더티 영역을 버퍼 1→0 으로 복사하면 중간 서피스 없이
+  "백버퍼 내용 보존" 의미를 얻는다(D29).
+- `ResizeBuffers` 는 래퍼가 쥔 참조·뷰·파이프라인 바인딩이 전부 없어야 성공한다. 이 엔진은 놓은 `CD3DResource` 를 SList 에 모아 두고
+  **다음 프레젠트에** 파괴하므로(`DestroyResources`), 리사이즈 전에 `DestroyResources(WithDelay)` 를 직접 불러야 한다. 안 그러면
+  `DXGI_ERROR_INVALID_CALL` 이 나고 폴백(재생성)이 조용히 일어난다. 로그의 `ResizeBuffers failed` 로 확인한다.
+- `Present1` 의 더티 사각형이 백버퍼를 벗어나면 `DXGI_ERROR_INVALID_CALL` 로 프레젠트 자체가 실패한다. 잘라서 넘긴다.
+- 같은 HWND 에 플립 체인은 하나만 둔다. 디스플레이별 렌더타깃이 둘 이상이면(어댑터가 다른 모니터) 비트블트를 유지한다.

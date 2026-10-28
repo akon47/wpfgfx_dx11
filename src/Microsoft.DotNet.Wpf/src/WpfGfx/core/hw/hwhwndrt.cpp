@@ -251,6 +251,12 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
     // Release old resources
     //
 
+    if (m_pD3DTargetSurface)
+    {
+        // A bound back buffer would keep DXGI from resizing the chain (D29).
+        m_pD3DDevice->ReleaseUseOfRenderTarget(m_pD3DTargetSurface);
+    }
+
     ReleaseInterface(m_pD3DTargetSurface);
 
     if (m_pD3DIntermediateMultisampleTargetSurface)
@@ -272,16 +278,34 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
         }
     }
 
-    ReleaseInterface(m_pD3DSwapChain);
-
     //
     // Don't render when minimized or empty
     //
 
     if (uWidth == 0 || uHeight == 0)
     {
+        ReleaseInterface(m_pD3DSwapChain);
         m_fEnableRendering = FALSE;
         goto Cleanup;
+    }
+
+    //
+    // D29: a flip model chain is resized in place. Recreating it would show
+    // the window's never painted redirection surface in between.
+    //
+
+    if (   m_pD3DSwapChain
+        && m_pD3DSwapChain->IsValid()
+        && m_pD3DSwapChain->IsFlipModel())
+    {
+        if (FAILED(m_pD3DSwapChain->Resize(uWidth, uHeight)))
+        {
+            ReleaseInterface(m_pD3DSwapChain);
+        }
+    }
+    else
+    {
+        ReleaseInterface(m_pD3DSwapChain);
     }
 
     //
@@ -295,11 +319,14 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
     // Create flipping chain
     //
 
-    IFCSUB1(m_pD3DDevice->CreateAdditionalSwapChain(
-        &m_MILDC,    
-        &m_D3DPresentParams,
-        &m_pD3DSwapChain
-        ));
+    if (!m_pD3DSwapChain)
+    {
+        IFCSUB1(m_pD3DDevice->CreateAdditionalSwapChain(
+            &m_MILDC,
+            &m_D3DPresentParams,
+            &m_pD3DSwapChain
+            ));
+    }
 
     //
     // Get the current back buffer and update CHwDisplayRenderTarget
