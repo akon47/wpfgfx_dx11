@@ -262,6 +262,7 @@ CD3DDeviceLevel1::CD3DDeviceLevel1(
     m_fInScene = false;
 
     m_fDeviceLostProcessed = false;
+    m_fTestDeviceLost = false;
     m_hrDisplayInvalid = S_OK;
 
     m_dwGPUMarkerFlags = 0;
@@ -2921,6 +2922,15 @@ CD3DDeviceLevel1::PresentWithD3D(
 
     END_DEVICE_ALLOCATION;
 
+    if (SUCCEEDED(hr) && MilDx11TestInjectDeviceLoss())
+    {
+        // Test hook (WPFGFX_DX11_TEST_DEVICE_LOSS): behave as if DXGI had
+        // reported DXGI_ERROR_DEVICE_REMOVED on this present.
+        MIL_DX11_LOG("test hook: injecting device loss on this Present");
+        m_fTestDeviceLost = true;
+        hr = D3DERR_DEVICELOST;
+    }
+
     static LONG s_cPresentLogs = 0;
 
     if (InterlockedIncrement(&s_cPresentLogs) <= 20)
@@ -3127,6 +3137,21 @@ CD3DDeviceLevel1::PresentWithGDI(
         rcSource,
         OUT &hdcBackBuffer
         ));
+
+    if (MilDx11LogEnabled())
+    {
+        // Diagnostics: the first two GDI-presented back buffers (layered
+        // windows) go to the log folder as gdipresent1..2.bmp so the
+        // premultiplied alpha handed to UpdateLayeredWindow can be inspected.
+        static LONG s_cGdiPresentDumps = 0;
+        LONG cDump = InterlockedIncrement(&s_cGdiPresentDumps);
+        if (cDump <= 2)
+        {
+            char szName[32];
+            StringCchPrintfA(szName, ARRAYSIZE(szName), "gdipresent%d", cDump);
+            MilDx11DumpTexture(m_pD3DDevice, m_pD3DContext, pBackBufferSurface->ID3DTexture(), szName);
+        }
+    }
 
     *pfPresentProcessed = true;
 
@@ -4946,8 +4971,14 @@ CD3DDeviceLevel1::CheckDeviceState(
 
     MIL_THR(MilTranslateD3D11Error(m_pD3DDevice->GetDeviceRemovedReason()));
 
+    if (m_fTestDeviceLost)
+    {
+        hr = D3DERR_DEVICELOST;
+    }
+
     if (FAILED(hr))
     {
+        MIL_DX11_LOG("CheckDeviceState: device lost hr=0x%08x", hr);
         MIL_THR(WGXERR_DISPLAYSTATEINVALID);
         MarkUnusable(false /* This call is already entry protected. */);
     }

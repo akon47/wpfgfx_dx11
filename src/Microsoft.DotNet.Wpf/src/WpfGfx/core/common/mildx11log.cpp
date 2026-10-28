@@ -34,6 +34,27 @@ bool MilDx11LogEnabled()
     return lState == 2;
 }
 
+bool MilDx11TestInjectDeviceLoss()
+{
+    static LONG s_lTarget = -1;         // -1 = 미확인, 0 = 꺼짐, n = n번째 Present.
+    static LONG s_cPresents = 0;
+
+    if (s_lTarget < 0)
+    {
+        char szValue[16] = {};
+        DWORD cch = GetEnvironmentVariableA("WPFGFX_DX11_TEST_DEVICE_LOSS", szValue, ARRAYSIZE(szValue));
+        LONG lTarget = (cch > 0 && cch < ARRAYSIZE(szValue)) ? atol(szValue) : 0;
+        InterlockedCompareExchange(&s_lTarget, max(lTarget, 0L), -1);
+    }
+
+    if (s_lTarget == 0)
+    {
+        return false;
+    }
+
+    return InterlockedIncrement(&s_cPresents) == s_lTarget;
+}
+
 void __cdecl MilDx11Log(__in_z const char *pszFormat, ...)
 {
     if (!MilDx11LogEnabled())
