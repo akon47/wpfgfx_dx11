@@ -690,6 +690,17 @@ private:
 
     HRESULT EnsureScratchIndexBuffer(UINT cIndices);
 
+    // D3D11 validates the depth stencil against the render target when both are
+    // bound; drop a depth buffer whose size or sample count no longer fits.
+    void DropIncompatibleDepthStencil();
+
+    HRESULT ResolveMultisampleRect(
+        __in_ecount(1) CD3DSurface *pSourceSurface,
+        __in_ecount(1) const RECT &rcSource,
+        __inout_ecount(1) CD3DSurface *pDestSurface,
+        __in_ecount(1) const RECT &rcDest
+        );
+
     HRESULT StretchRectScaled(
         __in_ecount(1) CD3DSurface *pSourceSurface,
         __in_ecount(1) const RECT &rcSource,
@@ -725,6 +736,12 @@ private:
 
     MIL_FORCEINLINE HRESULT HandleDIE(HRESULT hr)
     {
+        if (FAILED(hr))
+        {
+            MIL_DX11_LOG("HandleDIE hr=0x%08x", hr);
+            MilDx11LogD3DMessages(m_pD3DDevice, "HandleDIE");
+        }
+
         if (hr == D3DERR_DRIVERINTERNALERROR)
         {
             // Return WGXERR_DISPLAYSTATEINVALID to upstream callers.
@@ -819,6 +836,10 @@ private:
     // Hint for what depth buffer to release when releasing a RT from use.
     // It is meaningless unless m_pCurrentRenderTargetNoRef is not NULL.
     CD3DSurface *m_pDepthStencilBufferForCurrentRTNoRef;
+
+    // Non-multisampled scratch for resolving a sub-rectangle of a multisample
+    // surface (ResolveSubresource only handles whole subresources).
+    ID3D11Texture2D *m_pMSAAResolveScratch;
 
     LUID m_luidD3DAdapter;
     UINT m_uAdapterOrdinal;

@@ -280,6 +280,12 @@ CD3DDeviceManager::CreateD3D11Device(
     }
 #endif
 
+    // 진단 로그가 켜져 있으면 디버그 레이어의 검증 메시지도 로그로 받는다.
+    if (MilDx11LogEnabled())
+    {
+        uFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    }
+
     D3D_DRIVER_TYPE driverType;
 
     switch (type)
@@ -320,6 +326,25 @@ CD3DDeviceManager::CreateD3D11Device(
             ppContext
             ));
 
+        if (hr == DXGI_ERROR_SDK_COMPONENT_MISSING && (uFlags & D3D11_CREATE_DEVICE_DEBUG))
+        {
+            // SDK layers not installed: retry without the debug layer
+            uFlags &= ~D3D11_CREATE_DEVICE_DEBUG;
+
+            MIL_THR(D3D11CreateDevice(
+                pAdapter,
+                driverType,
+                NULL,
+                uFlags,
+                rgLevels,
+                ARRAYSIZE(rgLevels),
+                D3D11_SDK_VERSION,
+                ppDevice,
+                pFeatureLevel,
+                ppContext
+                ));
+        }
+
         if (hr == E_INVALIDARG)
         {
             // Runtime without 11.1 support: retry from 11.0
@@ -358,6 +383,8 @@ CD3DDeviceManager::CreateD3D11Device(
         }
 #endif
     }
+
+    MIL_DX11_LOG("D3D11CreateDevice hr=0x%08x driverType=%d featureLevel=0x%x flags=0x%x", hr, driverType, *pFeatureLevel, uFlags);
 
     if (FAILED(hr))
     {
@@ -1114,6 +1141,11 @@ Cleanup:
     {
         ReleaseInterface(*ppDeviceLevel1);
         MIL_THR(WGXERR_DISPLAYSTATEINVALID);
+    }
+
+    if (FAILED(hr))
+    {
+        MIL_DX11_LOG("GetD3DDeviceAndPresentParams failed hr=0x%08x adapter=%u kind=%d flags=0x%x", hr, uAdapter, type, dwFlags);
     }
 
     RRETURN(hr);

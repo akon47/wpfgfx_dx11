@@ -535,6 +535,8 @@ CPartitionManager::ZombifyPartitionAndCompleteProcessing(
         //       partition. Look at stack backtrace capture to determine the root
         //       cause of the failure.
         // 
+        MIL_DX11_LOG("render thread failure: hr=0x%08x", hrFailureCode);
+
         MilUnexpectedError(hrFailureCode, TEXT("The render thread failed unexpectedly."));
 
         pPartition->m_hrZombieNotificationFailureReason = WGXERR_UCE_RENDERTHREADFAILURE;

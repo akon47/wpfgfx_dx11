@@ -323,10 +323,13 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
 
     IFC(ClearInvalidatedRects());
 
+    MIL_DX11_LOG("UpdateFlippingChain ok %ux%u", uWidth, uHeight);
+
 SubCleanup1:
 
     if (FAILED(hr))
     {
+        MIL_DX11_LOG("UpdateFlippingChain failed hr=0x%08x %ux%u", hr, uWidth, uHeight);
         //
         // Remember if the display is invalid, because we want to be consistent
         // about returning WGXERR_DISPLAYSTATEINVALID during Present.

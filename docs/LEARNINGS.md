@@ -54,3 +54,23 @@ D3DImage(D7)와 EVR/DXVA2(D16)는 `<d3d9.h>`를 포함해야 하고, `common/pre
 `CSwRenderTargetSurface::Begin3D`는 3D 폴백 디바이스 생성이 그 두 코드로 실패할 때만 "3D 불가"로 넘어가고, 다른 코드는 그대로
 전파되어 **프레임 전체가 그려지지 않는다**(창이 흰색, 예외는 없음). 디바이스가 없는 상황을 알리는 코드는 `D3DERR_NOTAVAILABLE`로
 통일한다(M1 게이트 `d3dloader.cpp`).
+
+## L10. D3D9 가 암묵적으로 해 주던 것들 — D3D11 에서 직접 맞춰야 한 목록 (2026-10-28)
+
+하드웨어 경로를 처음 켰을 때 디버그 레이어와 백버퍼 덤프로 찾은 차이. 모두 `docs/DESIGN.md` 설계대로 코드에 반영되어 있다.
+
+- **Clear 는 클립을 따르지 않는다.** `CHwSurfaceRenderTarget::Clear` 는 클립(시저)만 걸고 `Clear(0, NULL)` 을 불렀다.
+  D3D9 는 뷰포트·시저 안만 지웠지만 `ClearRenderTargetView` 는 전체를 지워 더티 영역 밖이 검게 사라졌다 → 클립이 있으면 `ClearView`.
+- **입력 레이아웃과 VS 시그니처는 레지스터까지 맞아야 한다.** VS 마다 입력 선언이 다르면 "mismatched hardware registers" 오류.
+  모든 VS 가 `MIL_HLSL_VERTEX_INPUT` 하나를 선언하고, 형식에 없는 속성은 슬롯 1 의 0 버퍼에서 읽는다(`HwFixedFunctionShaders.cpp`).
+- **PS 입력은 VS 출력의 부분집합이어야 하고 순서가 같아야 한다.** 고정 기능 PS 가 UV0~7 을 요구하므로 VS 출력도 UV0~7 을 항상 낸다.
+- **SM4 의 `$Globals` 는 쓰지 않는 전역도 자리를 차지한다.** 한 HLSL 에 VS/PS 상수를 같이 두면 PS 의 c0 이 VS 상수로 밀린다.
+  조립기는 `#ifdef MIL_VS` / `MIL_PS` 로 절반씩 감싸고 컴파일 때 define 을 붙인다.
+- **같은 리소스를 RT 와 SRV 로 동시에 묶을 수 없다.** 런타임이 SRV 를 조용히 풀어 버리므로 그림자 상태가 어긋난다.
+  RT 를 바꿀 때 충돌하는 SRV 만 그림자 상태에서 지운다(효과는 텍스처를 먼저 걸고 RT 를 바꾼다. 전부 풀면 안 된다).
+- **DXGI 스왑체인은 B8G8R8X8 을 받지 않는다.** X8 은 "대상 알파 없음" 표시로만 두고 실제 렌더 타깃은 전부 B8G8R8A8 로 만든다
+  (`CreateRenderTargetUntracked`). 포맷이 다르면 `CopySubresourceRegion`/`ResolveSubresource` 가 실패한다.
+- **`Present1` 더티 사각형은 창 서피스를 사각형 안만 갱신한다.** D3D9 는 창 서피스가 새로 만들어지면 전체를 다시 복사했지만 DXGI 는
+  하지 않아 창이 검게 남는다. 전체 프레젠트로 통일(D10 의 dirty rect 항목은 철회).
+- **멀티샘플 서피스의 부분 리졸브.** `ResolveSubresource` 는 서브리소스 전체만 다룬다. 스크래치에 리졸브한 뒤 사각형을 복사한다.
+- **깊이 버퍼는 RT 와 크기·샘플 수가 같아야 바인딩된다.** RT 를 바꿀 때 맞지 않는 깊이 버퍼를 먼저 떼어낸다.

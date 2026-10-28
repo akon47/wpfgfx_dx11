@@ -343,6 +343,11 @@ HRESULT CDesktopRenderTarget::Init(
                 dwFlags,
                 &metadata.pHwDisplayRT
                 ));
+
+            if (FAILED(hr))
+            {
+                MIL_DX11_LOG("CHwDisplayRenderTarget::Create failed hr=0x%08x", hr);
+            }
         }
 
         // Is SW allowed?
