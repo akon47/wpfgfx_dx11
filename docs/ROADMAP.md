@@ -96,6 +96,8 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
   에 더티 사각형을 넘긴다. 크기 변경은 `ResizeBuffers` 제자리(게이트 `resize` 행: 검은 픽셀 0.12%, 스톡과 같음).
   벤치(2026-10-28, 플립 모델): .NET 8 스톡 15.9 → D3D11 20.5 fps, .NET 10 15.0 → 22.5 fps(비트블트 때와 같은 범위, +29~50%).
   투명 창 벤치: 스톡 15.1/15.9 → D3D11 17.2/17.2 fps. 리드백 + `UpdateLayeredWindow` 가 상한이다(D30).
+  후속(D31, 2026-10-28): 리드백을 창 크기 스테이징 하나로 더티 영역만 하고 플립 체인을 3버퍼로 바꿔 투명 창 전체 갱신 17.0 → 19.5 fps,
+  부분 갱신 59.7 → 107.6 fps(스톡 98). 게이트 `bench ... (transparent, partial update)` 행.
 - ❌ 투명 창의 DirectComposition 프레젠트는 하지 않는다(D30): 레이어드 창의 픽셀 단위 히트 테스트가 `UpdateLayeredWindow` 비트맵에 묶여
   있어 리드백을 없앨 수 없다. 비용은 게이트 `bench ... (transparent window)` 행으로 기록한다.
 - 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).

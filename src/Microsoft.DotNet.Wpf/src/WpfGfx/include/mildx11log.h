@@ -66,3 +66,16 @@ bool MilDx11TestInjectDeviceLoss();
 
 #define MIL_DX11_LOG(...) \
     do { if (MilDx11LogEnabled()) { MilDx11Log(__VA_ARGS__); } } while (0)
+
+// Timing probes (log-gated): accumulate per slot, print avg/max every 300 samples.
+enum MilDx11TimingSlot
+{
+    MilDx11Timing_GdiReadback = 0,
+    MilDx11Timing_Ulw,
+    MilDx11Timing_WaitToPresent,
+    MilDx11Timing_VBlankWait,
+    MilDx11Timing_Count
+};
+
+void MilDx11TimingAdd(MilDx11TimingSlot slot, double ms);
+double MilDx11QpcMs();

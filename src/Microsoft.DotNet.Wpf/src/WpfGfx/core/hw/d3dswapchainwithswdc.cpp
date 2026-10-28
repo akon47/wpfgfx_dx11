@@ -13,6 +13,7 @@
 //
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 //+----------------------------------------------------------------------------
 //
@@ -37,7 +38,8 @@ CD3DSwapChainWithSwDC::CD3DSwapChainWithSwDC(
             ),
       m_hdcCopiedBackBuffer(hdcPresentVia),
       m_hbmpCopiedBackBuffer(NULL),
-      m_pBuffer(NULL)
+      m_pBuffer(NULL),
+      m_pStagingTexture(NULL)
 {
 }
 
@@ -63,6 +65,15 @@ CD3DSwapChainWithSwDC::~CD3DSwapChainWithSwDC()
     {
         DeleteObject(m_hbmpCopiedBackBuffer);
     }
+
+    ReleaseInterface(m_pStagingTexture);
+}
+
+void
+CD3DSwapChainWithSwDC::ReleaseD3DResources()
+{
+    ReleaseInterface(m_pStagingTexture);
+    CD3DSwapChain::ReleaseD3DResources();
 }
 
 
@@ -132,6 +143,24 @@ CD3DSwapChainWithSwDC::Init(
         m_hbmpCopiedBackBuffer
         ));
 
+    {
+        D3D11_TEXTURE2D_DESC descStaging;
+        ZeroMemory(&descStaging, sizeof(descStaging));
+        descStaging.Width = surfDesc.Width;
+        descStaging.Height = surfDesc.Height;
+        descStaging.MipLevels = 1;
+        descStaging.ArraySize = 1;
+        descStaging.Format = surfDesc.Format;
+        descStaging.SampleDesc.Count = 1;
+        descStaging.SampleDesc.Quality = 0;
+        descStaging.Usage = D3D11_USAGE_STAGING;
+        descStaging.BindFlags = 0;
+        descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        descStaging.MiscFlags = 0;
+
+        IFC(Device().CreateTexture(&descStaging, NULL, &m_pStagingTexture));
+    }
+
 Cleanup:
     RRETURN(hr);
 }
@@ -169,15 +198,54 @@ CD3DSwapChainWithSwDC::GetDC(
 
     BYTE *pbBuffer = reinterpret_cast<BYTE*>(m_pBuffer) + cbBufferInset;
 
-    IFC(m_rgBackBuffers[iBackBuffer]->ReadIntoSysMemBuffer(
-        rcDirty,
-        0,
-        NULL,
-        D3DFormatToPixelFormat(surfDesc.Format, TRUE),
-        m_stride,
-        DBG_ANALYSIS_PARAM_COMMA(m_cbBuffer - cbBufferInset)
-        pbBuffer
-        ));
+    //
+    // D31: copy only the dirty rectangle into the persistent staging texture
+    // and from there into the DIB. No per-present allocation.
+    //
+
+    {
+        ID3D11DeviceContext *pContext = Device().GetD3DContextNoRef();
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        double const msStart = MilDx11QpcMs();
+        UINT const cbPixel = D3DFormatSize(surfDesc.Format);
+
+        D3D11_BOX box;
+        box.left = rcDirty.left;
+        box.top = rcDirty.top;
+        box.front = 0;
+        box.right = rcDirty.right;
+        box.bottom = rcDirty.bottom;
+        box.back = 1;
+
+        pContext->CopySubresourceRegion(
+            m_pStagingTexture,
+            0,
+            rcDirty.left,
+            rcDirty.top,
+            0,
+            m_rgBackBuffers[iBackBuffer]->ID3DTexture(),
+            m_rgBackBuffers[iBackBuffer]->Subresource(),
+            &box
+            );
+
+        IFC(MilTranslateD3D11Error(pContext->Map(m_pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped)));
+
+        BYTE const *pbSource =
+              static_cast<BYTE const *>(mapped.pData)
+            + static_cast<SIZE_T>(mapped.RowPitch) * rcDirty.top
+            + static_cast<SIZE_T>(cbPixel) * rcDirty.left;
+        SIZE_T const cbRow = static_cast<SIZE_T>(cbPixel) * rcDirty.Width();
+
+        for (UINT y = rcDirty.top; y < rcDirty.bottom; y++)
+        {
+            memcpy(pbBuffer, pbSource, cbRow);
+            pbBuffer += m_stride;
+            pbSource += mapped.RowPitch;
+        }
+
+        pContext->Unmap(m_pStagingTexture, 0);
+        MilDx11TimingAdd(MilDx11Timing_GdiReadback, MilDx11QpcMs() - msStart);
+    }
 
     *phdcBackBuffer = m_hdcCopiedBackBuffer;
 

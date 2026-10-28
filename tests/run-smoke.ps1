@@ -194,6 +194,14 @@ foreach ($t in $Tfm) {
         $lth = ($th -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
         Add-Row "bench stock DX9 (transparent window)" $short $lts.Trim() $true
         Add-Row "bench D3D11 (transparent window)" $short $lth.Trim() $true
+
+        # layered window, small dirty region each frame (typical UI): readback cost and GPU back-pressure (D31)
+        $ps = Run-Smoke $t $false @("--bench", "$BenchSeconds", "--bench-transparent", "--bench-partial")
+        $ph = Run-Smoke $t $true @("--bench", "$BenchSeconds", "--bench-transparent", "--bench-partial")
+        $lps = ($ps -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
+        $lph = ($ph -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
+        Add-Row "bench stock DX9 (transparent, partial update)" $short $lps.Trim() $true
+        Add-Row "bench D3D11 (transparent, partial update)" $short $lph.Trim() $true
     }
 }
 

@@ -25,9 +25,10 @@ public class BenchWindow : Window
     private int _frames;
     private double _lastRenderTime = -1;
 
-    public BenchWindow(int seconds, bool transparent = false)
+    public BenchWindow(int seconds, bool transparent = false, bool partial = false)
     {
         _seconds = seconds;
+        _partial = partial;
         Title = "SmokeApp bench";
         Width = 900;
         Height = 700;
@@ -45,6 +46,7 @@ public class BenchWindow : Window
         var rnd = new Random(12345);
 
         // 1200 gradient rectangles, 300 text labels, 120 radial ellipses, 60 blurred panels.
+        // Partial mode: only the first 24 items move, clustered in the top-left 220x220 area, so the dirty region stays small.
         for (int i = 0; i < 1200; i++) Add(MakeRect(rnd), rnd);
         for (int i = 0; i < 300; i++) Add(MakeText(rnd, i), rnd);
         for (int i = 0; i < 120; i++) Add(MakeEllipse(rnd), rnd);
@@ -60,13 +62,18 @@ public class BenchWindow : Window
 
     public Task<string> Completion => _done.Task;
 
+    private const int PartialMovers = 24;
+    private readonly bool _partial;
+
     private void Add(FrameworkElement e, Random rnd)
     {
         var rotate = new RotateTransform(rnd.Next(360));
         e.RenderTransformOrigin = new Point(0.5, 0.5);
         e.RenderTransform = rotate;
-        Canvas.SetLeft(e, rnd.NextDouble() * 860);
-        Canvas.SetTop(e, rnd.NextDouble() * 640);
+        // Partial mode: the first few items move inside the top-left 200x200 area, everything else stays put.
+        bool mover = _partial && _items.Count < PartialMovers;
+        Canvas.SetLeft(e, mover ? rnd.NextDouble() * 160 : rnd.NextDouble() * 860);
+        Canvas.SetTop(e, mover ? rnd.NextDouble() * 160 : rnd.NextDouble() * 640);
         _canvas.Children.Add(e);
         _items.Add((e, rotate, rnd.NextDouble() * 4 - 2, rnd.NextDouble() * 2 - 1));
     }
@@ -106,11 +113,14 @@ public class BenchWindow : Window
         _lastRenderTime = t;
         _frames++;
 
-        foreach (var (element, rotate, speed, dx) in _items)
+        int movers = _partial ? PartialMovers : _items.Count;
+        for (int i = 0; i < movers; i++)
         {
+            var (element, rotate, speed, dx) = _items[i];
             rotate.Angle += speed;
             double left = Canvas.GetLeft(element) + dx;
-            if (left < -80) left = 900; else if (left > 900) left = -80;
+            if (_partial) { if (left < 0) left = 160; else if (left > 160) left = 0; }
+            else { if (left < -80) left = 900; else if (left > 900) left = -80; }
             Canvas.SetLeft(element, left);
         }
 

@@ -379,3 +379,44 @@ Cleanup:
     if (pContext) pContext->Release();
     if (pDevice) pDevice->Release();
 }
+
+//+------------------------------------------------------------------------
+//  Timing probes
+//-------------------------------------------------------------------------
+
+double MilDx11QpcMs()
+{
+    static LARGE_INTEGER s_freq = {};
+    LARGE_INTEGER now;
+
+    if (s_freq.QuadPart == 0)
+    {
+        QueryPerformanceFrequency(&s_freq);
+    }
+
+    QueryPerformanceCounter(&now);
+    return now.QuadPart * 1000.0 / s_freq.QuadPart;
+}
+
+void MilDx11TimingAdd(MilDx11TimingSlot slot, double ms)
+{
+    static const char *const s_rgNames[MilDx11Timing_Count] = { "gdi readback", "ulw", "wait to present", "vblank wait" };
+    static double s_rgSum[MilDx11Timing_Count];
+    static double s_rgMax[MilDx11Timing_Count];
+    static LONG s_rgCount[MilDx11Timing_Count];
+
+    if (!MilDx11LogEnabled() || slot < 0 || slot >= MilDx11Timing_Count)
+    {
+        return;
+    }
+
+    s_rgSum[slot] += ms;
+    if (ms > s_rgMax[slot]) s_rgMax[slot] = ms;
+
+    if (++s_rgCount[slot] % 300 == 0)
+    {
+        MIL_DX11_LOG("timing %s: avg=%.3f ms max=%.3f ms over 300", s_rgNames[slot], s_rgSum[slot] / 300.0, s_rgMax[slot]);
+        s_rgSum[slot] = 0;
+        s_rgMax[slot] = 0;
+    }
+}

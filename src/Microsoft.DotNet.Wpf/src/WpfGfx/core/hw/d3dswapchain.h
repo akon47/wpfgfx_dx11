@@ -107,6 +107,11 @@ public:
         UINT cMax
         );
 
+    static void UnionInto(
+        __inout_ecount(1) CMILSurfaceRect &rcInto,
+        __in_ecount(1) RECT const &rc
+        );
+
 #if DBG
     UINT DbgGetNumBackBuffers() const
     {
@@ -141,6 +146,7 @@ private:
     // CD3DResource methods
     //
 
+protected:
     void ReleaseD3DResources();
 
 private:
@@ -159,7 +165,9 @@ private:
 
     // D29 flip model state.
     bool m_fFlipModel;
+    UINT m_cDXGIBuffers;                        // buffers in the DXGI chain (3 for flip)
     ID3D11Texture2D *m_pPreviousBackBuffer;    // buffer 1: frame just presented
-    mutable bool m_fCopyWholeBackBuffer;       // buffer 0 content unknown (new/resized)
+    mutable UINT m_cWholeCopiesPending;        // fresh buffers still to be filled completely
     mutable CMILSurfaceRect m_rcPendingCopy;   // changes a skipped present left behind
+    mutable CMILSurfaceRect m_rcPreviousFrame; // what the previous rotated present changed
 };

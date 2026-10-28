@@ -310,6 +310,10 @@ D10 이 걱정한 "더티 사각형만 다시 그린다" 가정은 이렇게 지
   `DestroyResources(WithDelay)` 로 즉시 파괴하고, 바인딩된 백버퍼는 먼저 뗀다. 스모크 `--resize 16`: 매 단계 검은 픽셀 0.12% 로 스톡과
   같다(게이트 `resize` 행). 로그에 `ResizeBuffers failed` 가 없어야 한다.
 - 프레젠트 동기 간격은 WPF 가 요구하는 대로 0(`PresentImmediately`)이라 렌더 스레드가 수직 동기에 막히지 않는다.
+- **백버퍼는 3개다(2026-10-28 수정).** 2개면 DWM 이 수직 동기 때 버퍼를 놓아줄 때까지 GPU 가 다음 프레임을 시작하지 못하고, 그 뒤에
+  줄 선 같은 프로세스의 모든 GPU 동기(레이어드 창 리드백, `CopyPixels`)가 평균 8 ms 를 기다렸다(L20). 3개면 GPU 가 항상 빈 버퍼를
+  갖는다. 비용은 창 크기 버퍼 하나. 프레젠트 뒤 복사 범위는 "이번 프레임 ∪ 건너뛴 프레젠트가 남긴 영역 ∪ **직전 프레임**" 이 된다
+  (새 백버퍼는 두 프레젠트 전 상태이므로). 새로 만든 뒤 첫 두 프레젠트는 전체를 복사한다.
 
 측정(게이트 `bench` 행, 2026-10-28)은 `docs/ROADMAP.md` Phase 4 참조.
 
@@ -323,3 +327,15 @@ ROADMAP 의 "투명 창을 DirectComposition + 프리멀티플라이드 알파 �
 - `WS_EX_NOREDIRECTIONBITMAP` 창은 창을 만드는 관리 코드를 바꿔야 해서 D1 밖이다.
 - 스톡 엔진도 같은 리드백(D3D9 `GetRenderTargetData` → ULW)을 하므로 지금 경로가 스톡과 같은 비용 구조다. 비용은 게이트 `bench ...
   (transparent window)` 행으로 측정한다.
+
+## D31. 레이어드 창의 리드백은 창 크기의 스테이징 텍스처 하나로 더티 영역만 한다 (2026-10-28)
+
+`AllowsTransparency` 창은 `UpdateLayeredWindowIndirect` 에 넘길 DIB 를 매 프레임 GPU 에서 읽어 내린다(D30). 종전 구현은 더티
+사각형 크기의 스테이징 텍스처를 **프레젠트마다 만들고 버렸고**(L13 과 같은 부류), 스왑체인에 `GDI_COMPATIBLE` 플래그를 달았지만
+실제로는 서피스의 `GetDC` 를 쓰지 않았다. 이제 `CD3DSwapChainWithSwDC` 가 DIB 와 같은 크기의 스테이징 텍스처를 한 번 만들어 두고,
+프레젠트마다 더티 사각형만 `CopySubresourceRegion` → `Map(READ)` → DIB 로 옮긴다. `GDI_COMPATIBLE` 은 BGRA 가 아닌 형식(서피스
+`GetDC` 가 필요한 경로)에만 남긴다. `UpdateLayeredWindowIndirect` 의 `prcDirty` 는 전부터 더티 사각형이었다.
+
+측정(벤치, 900×700 투명 창): 전체 갱신 17.0 → 19.5 fps, 부분 갱신(움직이는 요소 24개) 59.7 → 107.6 fps(스톡 98). 부분 갱신의
+60 fps 상한은 리드백이 아니라 D29 의 2버퍼 플립 체인이 만든 GPU 정체였고, 3버퍼로 풀렸다(L20).
+`WPFGFX_DX11_LOG` 에 `timing gdi readback/ulw/wait to present/vblank wait` 줄(300회 평균·최대)이 추가됐다.
