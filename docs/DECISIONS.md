@@ -86,6 +86,7 @@ D3D9를 완전히 제거한 DLL을 먼저 만들어 `main`에 올리면, 이후 
 
 모든 지원 OS에 d3d11.dll과 dxgi.dll이 있으므로 `d3dloader.cpp`의 동적 로드 체계는 필요 없다. D3DImage의 `IDirect3DSurface9` 호환은
 사용자 디바이스의 vtable 호출만 쓰므로 `d3d9.h` 헤더만 필요하고 `d3d9.dll`을 링크하거나 로드하지 않는다(DESIGN.md §9).
+예외는 미디어 재생이다: EVR 믹서가 D3D9 전용이라 첫 재생 때 `d3d9.dll`을 지연 로드한다(D25). 렌더링만 하는 앱에서는 여전히 로드되지 않는다.
 
 ## D15. 텍스트 셰이더는 HLSL로 다시 쓰고 ps_1_1·L8 변종과 ShaderGen은 삭제한다 (2026-10-28)
 
@@ -96,6 +97,7 @@ ps_2_0 어셈블리 4종은 수식이 주석으로 남아 있어 HLSL로 옮기�
 
 EVR 프레젠터(DXVA2/D3D9)는 `IMFDXGIDeviceManager`+`ID3D11VideoProcessor`로 다시 써야 하는 독립 작업이다. M11까지는
 하드웨어 비디오 경로를 끄고 `swmediabuffer`(시스템 메모리 프레임 업로드)만 쓴다.
+M11에서 `IMFDXGIDeviceManager` 방식은 표준 EVR 믹서와 맞지 않는 것으로 확인되어 D25로 대체했다.
 
 ## D8. 새 기능은 추가 export + 동반 관리 어셈블리로 노출한다 (방향, 세부는 Phase 2)
 
@@ -214,3 +216,26 @@ D3D11에는 디바이스 제거를 일으키는 공개 API가 없고(D3D12의 `R
 그 디바이스의 `CheckDeviceState`도 실패하게 한다. 이것으로 엔진의 복구 경로(`MarkUnusable` → 디바이스 목록 정리 → 새 디바이스·스왑체인·
 리소스 재생성 → D3DImage 프런트 버퍼 알림)를 끝까지 검증한다. 드라이버가 실제로 리소스를 무효화하는 상황은 이 훅이 흉내내지 못하므로
 실제 GPU 제거·TDR 검증은 Phase 4에 남긴다. 변수가 없으면 비용은 카운터 하나다.
+
+## D25. 미디어는 AV 전용 D3D9Ex 디바이스에서 믹싱하고 공유 서피스로 D3D11에 잇는다 (2026-10-28, D14·D16 수정)
+
+WPF의 미디어 스택은 WMP OCX + DirectShow EVR 필터에 **표준 믹서 + WpfGfx 커스텀 프레젠터**를 꽂은 구조다. Microsoft 문서
+("How to Write an EVR Presenter")대로 표준 믹서와 프레젠터는 Direct3D 9를 쓰며, 표준 믹서와 함께 쓰는 커스텀 프레젠터는
+`IMFVideoDeviceID`로 `IID_IDirect3DDevice9`를 보고해야 한다. 믹서에 `IMFDXGIDeviceManager`를 줄 방법은 없다. 믹서까지 바꾸면
+(커스텀 `IMFTransform` + `ID3D11VideoProcessor`) DirectShow 디코더의 DXVA2 하드웨어 디코드를 잃고 `core/av` 3만 줄의 상당 부분을
+다시 써야 한다. 그래서:
+
+- 엔진 디바이스(`CD3DDeviceLevel1`)마다 같은 어댑터(LUID)의 **D3D9Ex 디바이스**를 하나 만들어 매단다(`core/av/avd3d9.cpp`
+  `AVEnsureMediaDevice9`, `CD3DDeviceLevel1::SetMediaDevice9`). `MULTITHREADED|FPU_PRESERVE|NOWINDOWCHANGES`, 1×1 백버퍼, 프레젠트 없음.
+  프레젠터의 `GetHWDevice`/`GetSWDevice`가 엔진 디바이스를 얻을 때 함께 만들고, DXVA2 매니저 `ResetDevice`에 이 디바이스를 준다.
+  `GetUnderlyingDevice`는 이제 이 디바이스를 돌려준다. `d3d9.dll`은 여기서만 `LoadLibrary` 한다(D14 수정).
+- 믹서 출력 텍스처(`CHWMFMediaBuffer`)는 D3D9Ex에서 **공유 핸들**로 만들고, 엔진 디바이스가 `OpenSharedResource`로 열어
+  `CacheHwTextureOnBitmap`으로 비트맵의 색 소스로 캐시한다(스톡과 같은 무복사 경로). 다른 어댑터의 디스플레이는 기존처럼
+  `GetRenderTargetData`→시스템 메모리 복사.
+- 동기화: 믹서 `ProcessOutput`이 성공할 때마다 `CMFMediaBuffer::NotifyMixerWrote`가 D3D9 이벤트 쿼리로 GPU 완료를 기다린 뒤
+  샘플을 컴포지션에 넘긴다(프레젠터 스레드만 멈춘다). 반대 방향(컴포지션 드로우가 실행되기 전에 믹서가 같은 텍스처를 다시 쓰는
+  경우)은 샘플 큐 깊이와 제출 순서에 기대며, 스톡 D3DImage와 같은 수준의 보장이다.
+- 소프트웨어 폴백(렌더 디바이스가 WARP)도 믹싱은 D3D9Ex에서 한다. EVR 믹서에는 시스템 메모리 모드가 없다. D3D9 HAL이 없으면
+  미디어는 `WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE`로 실패한다(Windows 8 이후 기본 렌더 드라이버가 D3D9도 제공하므로 드물다).
+- 장기: WMP OCX를 `IMFMediaEngine`(DXGI 디바이스 매니저)으로 바꾸면 D3D9 의존이 없어지지만 `wmpstateengine` 등 재작성이 필요해
+  Phase 4 이후 별도 결정으로 둔다.
