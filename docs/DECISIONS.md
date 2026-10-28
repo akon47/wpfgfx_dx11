@@ -52,6 +52,51 @@ SM4 바이트코드를 직접 받는 확장은 관리 쪽 공개 API(`RenderCapa
 앱이 넘기는 `IDirect3DSurface9`를 받으려면 D3D9를 완전히 걷어낼 수 없다. `InteropDeviceBitmap`에서만
 D3D9Ex 디바이스를 만들어 공유 서피스를 거쳐 D3D11 텍스처로 가져온다. 그 외 경로에서 `d3d9.dll`을 로드하지 않는다.
 
+## D9. 래퍼 API는 유지하고 내부만 바꾼다 (2026-10-28)
+
+`CD3DDeviceLevel1`, `CD3DResource` 계열, `CD3DRenderState`/`CHwRenderStateManager`, `CD3DSwapChain`, `CHwSurfaceRenderTarget`의
+클래스 이름과 메서드 모양은 유지한다. 상위 레이어 수십 개 파일이 이 API에 의존하고, D3D9 객체는 전부 이 래퍼 안에 있다.
+바뀌는 것은 래퍼 내부 구현과, 래퍼 바깥으로 새어 나간 D3D9 타입(`IDirect3DSurface9*`, `D3DFORMAT`, `D3DSURFACE_DESC` 등)뿐이다.
+`DESIGN.md` §2·§3.
+
+## D10. 스왑체인은 비트블트 모델(SEQUENTIAL, 백버퍼 1개)로 시작한다 (2026-10-28)
+
+WPF는 더티 사각형만 다시 그리고 백버퍼 내용이 보존된다고 가정한다(D3D9 `D3DSWAPEFFECT_COPY`). 플립 모델은 버퍼가 순환해 이 가정을
+깨므로 영속 서피스와 추가 복사가 필요하다. 먼저 의미가 같은 `DXGI_SWAP_EFFECT_SEQUENTIAL` + `Present1` dirty rect로 동작을 맞추고,
+플립 모델 전환은 성능 작업으로 따로 결정한다. 투명 창은 `GDI_COMPATIBLE` 플래그 + `IDXGISurface1::GetDC`.
+
+## D11. 셰이더 상수는 레지스터 번호 체계를 유지한다 (2026-10-28)
+
+파이프라인 조립기와 효과 코드가 `c#` 레지스터 인덱스(`MILSPHandle`)로 상수를 설정한다. D3D11에서는 `cbuffer`+`packoffset(cN)`로
+같은 번호를 유지하고, `SetVertexShaderConstantF/PixelShaderConstantF`는 그림자 배열에 쓰고 Draw 직전 한 번 업로드한다.
+조립기·효과·텍스트 셰이더의 상수 전달 코드를 손대지 않기 위해서다. 프로필은 `vs_4_0`/`ps_4_0`.
+
+## D12. WIP는 dx11-port 브랜치, main은 항상 초록 (2026-10-28)
+
+D3D9를 직접 치환하면(D4) 빌드가 깨진 구간이 길다. 그 구간은 `dx11-port` 브랜치에서 작업하고, 마일스톤(DESIGN.md §12)마다
+빌드·스모크 게이트를 통과한 상태로 `main`에 병합한다. `main`의 모든 커밋은 CLAUDE.md §3 게이트를 통과한다.
+
+## D13. 첫 마일스톤은 "D3D9 없이 컴파일 + 소프트웨어 렌더링" (2026-10-28)
+
+하드웨어 경로가 하나도 없어도 WpfGfx는 소프트웨어 래스터라이저로 모든 것을 그릴 수 있다(Tier 0). 타입 치환과 래퍼 골격만으로
+D3D9를 완전히 제거한 DLL을 먼저 만들어 `main`에 올리면, 이후 하드웨어 경로를 연산 단위(연산별 소프트웨어 폴백이 이미 있다)로
+켜 나갈 수 있다.
+
+## D14. d3d11.lib/dxgi.lib는 정적 링크, d3d9.dll은 로드하지 않는다 (2026-10-28)
+
+모든 지원 OS에 d3d11.dll과 dxgi.dll이 있으므로 `d3dloader.cpp`의 동적 로드 체계는 필요 없다. D3DImage의 `IDirect3DSurface9` 호환은
+사용자 디바이스의 vtable 호출만 쓰므로 `d3d9.h` 헤더만 필요하고 `d3d9.dll`을 링크하거나 로드하지 않는다(DESIGN.md §9).
+
+## D15. 텍스트 셰이더는 HLSL로 다시 쓰고 ps_1_1·L8 변종과 ShaderGen은 삭제한다 (2026-10-28)
+
+ps_2_0 어셈블리 4종은 수식이 주석으로 남아 있어 HLSL로 옮기기 쉽다. 글리프 텍스처는 `A8_UNORM` 하나로 통일한다
+(FL10.0 필수 포맷). RCDATA 블롭 대신 빌드 때 fxc가 만든 헤더를 쓴다.
+
+## D16. 미디어는 마지막에, 그 전에는 소프트웨어 미디어 버퍼만 (2026-10-28)
+
+EVR 프레젠터(DXVA2/D3D9)는 `IMFDXGIDeviceManager`+`ID3D11VideoProcessor`로 다시 써야 하는 독립 작업이다. M11까지는
+하드웨어 비디오 경로를 끄고 `swmediabuffer`(시스템 메모리 프레임 업로드)만 쓴다.
+
 ## D8. 새 기능은 추가 export + 동반 관리 어셈블리로 노출한다 (방향, 세부는 Phase 2)
 
 관리 코드를 바꾸지 않으므로(D1) DX11 엔진에만 있는 기능(예: D3D11 텍스처를 바로 받는 D3DImage, 엔진 D3D11 디바이스 공유)은

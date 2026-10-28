@@ -67,7 +67,9 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows
 
 ## 7. 커밋 컨벤션
 
-한글, `<type>: <서술형 설명>.` 예: `feat: 프레젠테이션을 DXGI 플립 모델 스왑체인으로 바꿉니다.` type: `feat`, `fix`, `modify`, `refactor`, `style`, `perf`, `build`, `docs`, `chore`, `test`, `release`. 한 커밋은 §3 게이트를 통과한 상태여야 한다(빌드가 깨진 중간 상태 커밋 금지).
+한글, `<type>: <서술형 설명>.` 예: `feat: 프레젠테이션을 DXGI 스왑체인으로 바꿉니다.` type: `feat`, `fix`, `modify`, `refactor`, `style`, `perf`, `build`, `docs`, `chore`, `test`, `release`.
+
+브랜치 규칙(D12): `main`의 모든 커밋은 §3 게이트를 통과한 상태여야 한다. 빌드가 깨지는 긴 작업은 `dx11-port` 브랜치에서 WIP 커밋으로 진행하고, 마일스톤(`docs/DESIGN.md` §12) 합격 때 `main`에 병합한다.
 
 ## 8. 작업 절차
 

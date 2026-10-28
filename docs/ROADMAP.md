@@ -24,34 +24,36 @@
 
 도구: `tools/inventory/d3d9_inventory.py` (재생성 가능).
 
-## Phase 2 — 설계 ⏳
+## Phase 2 — 설계 ✅ (2026-10-28)
 
-목표: 인벤토리를 바탕으로 치환 설계를 `docs/DECISIONS.md`에 확정한다.
+목표: 인벤토리를 바탕으로 치환 설계를 확정한다. 산출물: `docs/DESIGN.md`, `docs/DECISIONS.md` D9~D16.
 
-결정해야 할 것:
-- 디바이스·컨텍스트 모델(스레딩, 멀티 어댑터 `CD3DDeviceManager` 대응), 최소 Feature Level.
-- 스왑체인과 프레젠테이션(HWND별 DXGI 플립 모델, 레이어드 윈도우의 시스템 메모리 경로).
-- 렌더스테이트 → 상태 객체 캐시, FVF/버텍스 선언 → 입력 레이아웃, 포맷 매핑.
-- 셰이더: 런타임 HLSL 조립기의 SM4 출력, 텍스트(ClearType) 셰이더, 3D 조명 셰이더, 고정 기능 제거.
-- ShaderEffect 호환(D6): DX9 바이트코드 → SM4 변환.
-- D3DImage 호환(D7): D3D9Ex 공유 서피스 → D3D11.
-- MediaElement(`core/av`) 처리 순서.
+- 디바이스·컨텍스트·스레딩·오류 매핑·caps: DESIGN §8 ✅
+- 스왑체인과 프레젠테이션: D10, DESIGN §5 ✅
+- 상태 객체 캐시, 입력 레이아웃, 타입 치환: DESIGN §3·§4·§6 ✅
+- 셰이더(조립기 SM4, 텍스트, 효과, 고정 기능 제거): D11, D15, DESIGN §6 ✅
+- ShaderEffect(D6 세부): DESIGN §7 ✅
+- D3DImage(D7 세부): D14, DESIGN §9 ✅
+- 미디어: D16, DESIGN §10 ✅
+- 작업 방식: D12(브랜치), D13(첫 마일스톤) ✅
 
-## Phase 3 — 수직 슬라이스 구현 ⏳
+## Phase 3 — 마일스톤 구현 🔄
 
-작은 단위로 빌드 → 스모크 → 스톡 출력과 비교를 반복한다. 순서:
+`dx11-port` 브랜치에서 작업하고 마일스톤마다 `main`에 병합한다(D12). 마일스톤 표와 합격 기준은 `docs/DESIGN.md` §12.
 
-1. 단색 사각형 하나가 DXGI 스왑체인으로 나온다.
-2. 브러시(단색·선형·방사형 그라데이션), 지오메트리 래스터화.
-3. 비트맵·타일 브러시·텍스처 업로드.
-4. 텍스트(글리프 캐시, ClearType/그레이스케일 셰이더).
-5. 중간 렌더타깃: Opacity, OpacityMask, VisualBrush, Effects(Blur/DropShadow), 클립.
-6. 3D(Viewport3D).
-7. ShaderEffect(D6), D3DImage(D7).
-8. 레이어드 윈도우(AllowsTransparency), 멀티 모니터·어댑터.
-9. MediaElement(`core/av`).
-
-각 단계 합격 기준: 스모크 앱의 해당 셀이 스톡 DX9 출력과 눈으로 구분되지 않는다(의도한 차이 제외).
+| M | 내용 | 상태 |
+|---|---|---|
+| M1 | D3D9 없이 컴파일, 소프트웨어 렌더링(Tier 0) | ⏳ |
+| M2 | 디바이스·스왑체인·클리어·프레젠트 | ⏳ |
+| M3 | 셰이더 파이프라인: 단색·그라데이션·경로 | ⏳ |
+| M4 | 텍스처·비트맵·타일 브러시 | ⏳ |
+| M5 | 텍스트 | ⏳ |
+| M6 | 중간 렌더타깃·효과·클립 | ⏳ |
+| M7 | 3D | ⏳ |
+| M8 | ShaderEffect 변환기 | ⏳ |
+| M9 | D3DImage, 새 export, WpfGfx.Dx11 | ⏳ |
+| M10 | 투명 창, 멀티 어댑터, 디바이스 제거 복구 | ⏳ |
+| M11 | 미디어 | ⏳ |
 
 ## Phase 4 — 검증과 정리 ⏳
 
