@@ -1,0 +1,14 @@
+<Window x:Class="SmokeApp.MediaWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SmokeApp media" Width="360" Height="280"
+        WindowStartupLocation="Manual" ResizeMode="NoResize" ShowInTaskbar="False" Background="#FF202428">
+  <!-- MediaElement cell (M11): the video is a static SMPTE bars clip so the captured frame does
+       not depend on timing. The engine's EVR presenter path (core/av) renders it. -->
+  <Grid>
+    <Border Margin="10" BorderBrush="#FF505860" BorderThickness="1">
+      <MediaElement x:Name="Player" Stretch="Fill" LoadedBehavior="Manual" UnloadedBehavior="Stop" IsMuted="True"
+                    MediaOpened="OnMediaOpened" MediaFailed="OnMediaFailed"/>
+    </Border>
+  </Grid>
+</Window>

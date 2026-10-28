@@ -12,7 +12,7 @@ namespace SmokeApp;
 /// Renders a fixed set of primitives (gradients, text, effects, 3D, blending) and reports
 /// which graphics DLLs are loaded. Usage:
 ///   SmokeApp.exe [--screenshot out.png] [--exit] [--delay ms] [--left x] [--top y]
-///                [--transparent out.png]
+///                [--transparent out.png] [--media file.mp4 --media-shot out.png]
 /// --left/--top place the main window (e.g. straddling two monitors). --transparent also opens
 /// a layered window (AllowsTransparency) over the main window and captures it from the screen.
 /// The report is printed to stdout and written to smoke-report.txt next to the exe.
@@ -39,6 +39,8 @@ public partial class MainWindow : Window
 
         string? shot = null;
         string? transparentShot = null;
+        string? mediaFile = null;
+        string? mediaShot = null;
         bool exit = false;
         int delayMs = 2000;
         string[] args = Environment.GetCommandLineArgs();
@@ -46,6 +48,8 @@ public partial class MainWindow : Window
         {
             if (args[i] == "--screenshot" && i + 1 < args.Length) shot = args[++i];
             else if (args[i] == "--transparent" && i + 1 < args.Length) transparentShot = args[++i];
+            else if (args[i] == "--media" && i + 1 < args.Length) mediaFile = args[++i];
+            else if (args[i] == "--media-shot" && i + 1 < args.Length) mediaShot = args[++i];
             else if (args[i] == "--exit") exit = true;
             else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = ParseInt(args[++i]);
         }
@@ -55,6 +59,13 @@ public partial class MainWindow : Window
         {
             transparent = new TransparentWindow { Owner = this, Left = Left + 120, Top = Top + 260 };
             transparent.Show();
+        }
+
+        MediaWindow? media = null;
+        if (mediaFile != null)
+        {
+            media = new MediaWindow(mediaFile) { Owner = this, Left = Left + 500, Top = Top + 260 };
+            media.Show();
         }
 
         await Task.Delay(delayMs);
@@ -87,6 +98,16 @@ public partial class MainWindow : Window
             else
             {
                 Console.WriteLine("transparent-screen=skipped (another window covers the layered window)");
+            }
+        }
+        if (media != null)
+        {
+            Console.WriteLine("media status: " + media.Status);
+            if (mediaShot != null)
+            {
+                string full = Path.GetFullPath(mediaShot);
+                string method = ScreenCapture.Capture(media, full);
+                Console.WriteLine($"media-shot={full} via {method}");
             }
         }
         if (exit) Close();
