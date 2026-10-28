@@ -96,6 +96,25 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 `Dx11Engine.IsAvailable`은 프로세스에 이미 로드된 `wpfgfx_cor3.dll`에서 `WpfGfxDx11_GetInfo` export를 찾는다. 창이 하나 뜬 뒤에
 호출해야 하고, 스톡 DX9 엔진이면 false다.
 
+## 자동 게이트: tests/run-smoke.ps1
+
+위 루프를 한 번에 돌린다. 스톡 DX9와 지정한 DLL로 .NET 8·10 각각 표준 장면, 투명 창, MediaElement, 모의 디바이스 손실(D24)을
+실행해 클라이언트 영역 캡처를 셀 단위로 비교하고 표로 보고한다(`tests/out/report.md`). 하나라도 FAIL 이면 종료 코드 1.
+
+```powershell
+.\tests\run-smoke.ps1                                   # artifacts 빌드 결과, net8.0-windows + net10.0-windows
+.\tests\run-smoke.ps1 -Dll <폴더> -Tfm net8.0-windows   # 다른 DLL, 한 런타임만
+.\tests\run-smoke.ps1 -Bench -BenchSeconds 8            # 처리량 벤치마크 행 추가(아래)
+.\tests\run-smoke.ps1 -StraddleLeft 2110                # 창을 두 모니터에 걸치는 시나리오 추가(모니터 배치에 맞춰 x 지정)
+```
+
+의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로
+클라이언트 영역만 뜬다(제목 표시줄은 포커스에 따라 색이 달라진다).
+
+`--bench <초>`(스모크 앱 옵션)는 사각형 1200개·텍스트 300개·방사형 타원 120개·블러 패널 60개를 매 프레임 움직이는 장면을 그려
+초당 프레임, 프레임당 프로세스 CPU 시간, 프라이빗 메모리를 보고한다. WPF 는 컴포지터의 프레젠트 알림으로 다음 UI 프레임을
+잡으므로 두 스레드 중 느린 쪽의 속도가 나온다.
+
 ## 확인된 사실 (Phase 0)
 
 - 업스트림 소스 그대로 빌드한 DLL이 .NET 8.0.31 런타임에서 Tier 2(하드웨어)로 렌더링된다.

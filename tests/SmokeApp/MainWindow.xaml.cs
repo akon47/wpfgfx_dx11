@@ -12,7 +12,7 @@ namespace SmokeApp;
 /// Renders a fixed set of primitives (gradients, text, effects, 3D, blending) and reports
 /// which graphics DLLs are loaded. Usage:
 ///   SmokeApp.exe [--screenshot out.png] [--exit] [--delay ms] [--left x] [--top y]
-///                [--transparent out.png] [--media file.mp4 --media-shot out.png]
+///                [--transparent out.png] [--media file.mp4 --media-shot out.png] [--bench seconds]
 /// --left/--top place the main window (e.g. straddling two monitors). --transparent also opens
 /// a layered window (AllowsTransparency) over the main window and captures it from the screen.
 /// The report is printed to stdout and written to smoke-report.txt next to the exe.
@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         string? transparentShot = null;
         string? mediaFile = null;
         string? mediaShot = null;
+        int benchSeconds = 0;
         bool exit = false;
         int delayMs = 2000;
         string[] args = Environment.GetCommandLineArgs();
@@ -50,6 +51,7 @@ public partial class MainWindow : Window
             else if (args[i] == "--transparent" && i + 1 < args.Length) transparentShot = args[++i];
             else if (args[i] == "--media" && i + 1 < args.Length) mediaFile = args[++i];
             else if (args[i] == "--media-shot" && i + 1 < args.Length) mediaShot = args[++i];
+            else if (args[i] == "--bench" && i + 1 < args.Length) benchSeconds = ParseInt(args[++i]);
             else if (args[i] == "--exit") exit = true;
             else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = ParseInt(args[++i]);
         }
@@ -109,6 +111,15 @@ public partial class MainWindow : Window
                 string method = ScreenCapture.Capture(media, full);
                 Console.WriteLine($"media-shot={full} via {method}");
             }
+        }
+        if (benchSeconds > 0)
+        {
+            var bench = new BenchWindow(benchSeconds) { Owner = this, Left = Left + 20, Top = Top + 60 };
+            bench.Show();
+            string result = await bench.Completion;
+            bench.Close();
+            Console.WriteLine("bench: " + result);
+            File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "smoke-report.txt"), "bench: " + result + Environment.NewLine);
         }
         if (exit) Close();
     }
