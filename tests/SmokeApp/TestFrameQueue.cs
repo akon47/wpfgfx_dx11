@@ -144,36 +144,48 @@ internal sealed class FrameQueueWindow : Window
             return "not hardware capable on display 0: consumer falls back";
         }
 
-        var window = new FrameQueueWindow(queueCount) { Owner = owner, Left = owner.Left + 40, Top = owner.Top + 80 };
-        window.Show();
-        window.StartProducer();
-
+        FrameQueueWindow? window = null;
         DispatcherTimer? blocker = null;
-        if (blockUi)
+        try
         {
-            blocker = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-            blocker.Tick += (_, _) => Thread.Sleep(100);   // UI thread stalls, producer must not care
-            blocker.Start();
+            window = new FrameQueueWindow(queueCount) { Owner = owner, Left = owner.Left + 40, Top = owner.Top + 80 };
+            window.Show();
+            window.StartProducer();
+
+            if (blockUi)
+            {
+                blocker = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+                blocker.Tick += (_, _) => Thread.Sleep(100);   // UI thread stalls, producer must not care
+                blocker.Start();
+            }
+
+            await Task.Delay(Math.Max(1000, seconds * 1000 - 400));
+
+            string changed = "";
+            if (shotPath != null)
+            {
+                string first = Path.Combine(Path.GetDirectoryName(shotPath)!, Path.GetFileNameWithoutExtension(shotPath) + "-a.png");
+                ScreenCapture.Capture(window, first);
+                await Task.Delay(250);
+                ScreenCapture.Capture(window, shotPath);
+                changed = string.Format(System.Globalization.CultureInfo.InvariantCulture, " changedBetweenCaptures={0:P1}", ChangedFraction(first, shotPath));
+            }
+
+            blocker?.Stop();
+            window.StopProducer();
+            return window.Report() + changed;
         }
-
-        await Task.Delay(Math.Max(1000, seconds * 1000 - 400));
-
-        string changed = "";
-        if (shotPath != null)
+        finally
         {
-            string first = Path.Combine(Path.GetDirectoryName(shotPath)!, Path.GetFileNameWithoutExtension(shotPath) + "-a.png");
-            ScreenCapture.Capture(window, first);
-            await Task.Delay(250);
-            ScreenCapture.Capture(window, shotPath);
-            changed = string.Format(System.Globalization.CultureInfo.InvariantCulture, " changedBetweenCaptures={0:P1}", ChangedFraction(first, shotPath));
+            // Whatever failed, leave no producer thread or window behind.
+            blocker?.Stop();
+            if (window != null)
+            {
+                window.StopProducer();
+                try { window.DisposeQueues(); } catch { }
+                window.Close();
+            }
         }
-
-        blocker?.Stop();
-        window.StopProducer();
-        string report = window.Report() + changed;
-        window.DisposeQueues();
-        window.Close();
-        return report;
     }
 
     private static double ChangedFraction(string a, string b)
