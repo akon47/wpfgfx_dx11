@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Drop-in gate for wpfgfx_cor3.dll: runs tests/SmokeApp on the stock DX9 engine and on the given
   D3D11 engine for each target framework, captures every scenario, compares them per cell and
@@ -19,7 +19,8 @@ param(
     [switch]$SkipBuild,
     [switch]$Bench,
     [int]$BenchSeconds = 8,
-    [int]$StraddleLeft = -1
+    [int]$StraddleLeft = -1,
+    [string]$Rid = "win-x64"          # win-x86 runs the 32-bit app against a 32-bit engine (-Dll artifacts\bin\wpfgfx\x86\Release)
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,10 +31,11 @@ $out = Join-Path $tests "out"
 $dllDir = Join-Path $out "dll"
 New-Item -ItemType Directory -Force $out, $dllDir | Out-Null
 
-if ($Dll -eq "") { $Dll = Join-Path $repo "artifacts\bin\wpfgfx\x64\Release" }
+$arch = if ($Rid -eq "win-x86") { "x86" } else { "x64" }
+if ($Dll -eq "") { $Dll = Join-Path $repo "artifacts\bin\wpfgfx\$arch\Release" }
 Copy-Item (Join-Path $Dll "wpfgfx_cor3.dll") $dllDir -Force
 $compiler = Join-Path $Dll "D3DCompiler_47_cor3.dll"
-if (-not (Test-Path $compiler)) { $compiler = Join-Path $repo "artifacts\bin\D3DCompiler\x64\Release\D3DCompiler_47_cor3.dll" }
+if (-not (Test-Path $compiler)) { $compiler = Join-Path $repo "artifacts\bin\D3DCompiler\$arch\Release\D3DCompiler_47_cor3.dll" }
 Copy-Item $compiler $dllDir -Force
 
 Add-Type -AssemblyName System.Drawing
@@ -63,7 +65,7 @@ function Compare-Capture([string]$a, [string]$b, [int[]]$excludeCells) {
 }
 
 function Run-Smoke([string]$tfm, [bool]$hw, [string[]]$smokeArgs) {
-    $exe = Join-Path $app "bin\Release\$tfm\win-x64\SmokeApp.exe"
+    $exe = Join-Path $app "bin\Release\$tfm\$Rid\SmokeApp.exe"
     $all = @()
     if ($hw) { $all += @("--wpfgfx", $dllDir) }
     $all += $smokeArgs
@@ -82,7 +84,7 @@ function Add-Row([string]$scenario, [string]$tfm, [string]$detail, [bool]$pass) 
 foreach ($t in $Tfm) {
     if (-not $SkipBuild) {
         Push-Location $app
-        try { & dotnet build -c Release -p:SmokeTfm=$t -nologo -v q | Out-Null } finally { Pop-Location }
+        try { & dotnet build -c Release -p:SmokeTfm=$t -p:SmokeRid=$Rid -nologo -v q | Out-Null } finally { Pop-Location }
     }
     $short = $t -replace "\.0-windows", ""
 
@@ -95,6 +97,14 @@ foreach ($t in $Tfm) {
     Add-Row "engine" $short ("Tier 2 both: {0}; loaded {1}" -f $tierOk, $(if ($dllOk) { "repo DLL 42.42.42.42424" } else { "UNEXPECTED: $dllLine".Trim() })) ($tierOk -and $dllOk)
     $c = Compare-Capture "$out\$short-stock.png" "$out\$short-hw.png" @(4, 16)
     Add-Row "standard (cells 1-15 except 4)" $short ("diff>8 {0:P2}, diff>64 {1:P2}" -f $c.Diff8, $c.Diff64) (($c.Diff64 -lt 0.005) -and ($c.Diff8 -lt 0.015))
+
+    # ---- spin jitter: the rotating cell's body centroid must stay put frame to frame (regression guard for D26)
+    $js = Run-Smoke $t $false @("--spin-jitter", "24")
+    $jh = Run-Smoke $t $true @("--spin-jitter", "24")
+    $devS = 99.0; $devH = 99.0
+    if ($js -match "bodyCentroidMaxDev=([0-9.]+)px") { $devS = [double]$matches[1] }
+    if ($jh -match "bodyCentroidMaxDev=([0-9.]+)px") { $devH = [double]$matches[1] }
+    Add-Row "spin jitter (body centroid max dev)" $short ("stock {0:F2}px, D3D11 {1:F2}px" -f $devS, $devH) (($devH -lt 1.5) -and ($devS -lt 1.5))
 
     # ---- transparent (layered) window
     [void](Run-Smoke $t $false @("--screenshot", "$out\$short-stock-t.png", "--transparent", "$out\$short-stock-transparent.png"))
@@ -117,6 +127,34 @@ foreach ($t in $Tfm) {
     $recovered = ($dl -match "front buffer available=True") -and ($dl -match "Tier=2")
     $c = Compare-Capture "$out\$short-hw.png" "$out\$short-hw-devloss.png" @(4)
     Add-Row "device loss recovery" $short ("front buffer back: {0}; diff>8 vs normal {1:P2}" -f $recovered, $c.Diff8) ($recovered -and ($c.Diff8 -lt 0.005))
+
+    # ---- RenderTargetBitmap: software path must match; the opt-in GPU path is reported
+    $rs = Run-Smoke $t $false @("--rtb", "$out\$short-stock-rtb.png")
+    $rw = Run-Smoke $t $true @("--rtb", "$out\$short-hw-rtb.png")
+    $rh = Run-Smoke $t $true @("--rtb", "$out\$short-hw-rtb-gpu.png", "--rtb-hw")
+    $swOk = ($rs -match "rtb: 320x240") -and ($rw -match "rtb: 320x240")
+    $c = Compare-Capture "$out\$short-stock-rtb.png" "$out\$short-hw-rtb.png" $null
+    Add-Row "RenderTargetBitmap (software)" $short ("rendered both: {0}; diff>8 {1:P2}, diff>64 {2:P2}" -f $swOk, $c.Diff8, $c.Diff64) ($swOk -and ($c.Diff8 -lt 0.001))
+    $gpuOk = ($rh -match "rtb: 320x240 hardware=True")
+    if ($gpuOk) {
+        $c = Compare-Capture "$out\$short-stock-rtb.png" "$out\$short-hw-rtb-gpu.png" $null
+        Add-Row "RenderTargetBitmap (GPU opt-in)" $short ("rendered; vs software diff>8 {0:P2}, diff>64 {1:P2} (ps_3_0 effect only on GPU)" -f $c.Diff8, $c.Diff64) $true
+    } else {
+        Add-Row "RenderTargetBitmap (GPU opt-in)" $short ("not rendered: " + (($rh -split "`n" | Where-Object { $_ -match "^rtb:" } | Select-Object -First 1)).Trim()) $false
+    }
+
+    # ---- frame queues (D19): producer thread + blocked UI thread; stock engine must report the fallback
+    $fs = Run-Smoke $t $false @("--fq", "$out\$short-stock-fq.png", "--fq-queues", "8", "--fq-seconds", "4")
+    $fh = Run-Smoke $t $true @("--fq", "$out\$short-hw-fq.png", "--fq-queues", "8", "--fq-seconds", "4", "--fq-block")
+    $stockLine = (($fs -split "`n" | Where-Object { $_ -match "^fq:" } | Select-Object -First 1)).Trim()
+    $hwLine = (($fh -split "`n" | Where-Object { $_ -match "^fq:" } | Select-Object -First 1)).Trim()
+    $stockOk = $stockLine -match "not available"
+    $changed = 0.0; $us = 999.0
+    if ($hwLine -match "changedBetweenCaptures=([0-9.]+)") { $changed = [double]$matches[1] }
+    if ($hwLine -match "producerUsPerQueueFrame=([0-9.]+)") { $us = [double]$matches[1] }
+    $hwOk = ($hwLine -match "displayed=([1-9][0-9]*)") -and ($changed -gt 30) -and ($us -lt 200)
+    Add-Row "frame queues (8, UI blocked)" $short ($hwLine -replace "^fq: ", "") $hwOk
+    Add-Row "frame queues on stock" $short ($stockLine -replace "^fq: ", "") $stockOk
 
     # ---- optional: window straddling two monitors
     if ($StraddleLeft -ge 0) {
