@@ -126,6 +126,7 @@
     <ClCompile Include="HwVertexBuffer.cpp" />
     <ClCompile Include="HwVidMemTextureManager.cpp" />
     <ClCompile Include="InteropDeviceBitmap.cpp" />
+    <ClCompile Include="FrameQueue.cpp" />
     <ClCompile Include="swfallback.cpp" />
     <ClCompile Include="Waffler.cpp" />
   </ItemGroup>

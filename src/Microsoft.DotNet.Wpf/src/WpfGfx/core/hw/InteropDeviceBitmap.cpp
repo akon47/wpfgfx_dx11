@@ -269,8 +269,25 @@ CInteropDeviceBitmap::Create(
     // D3D11 textures (companion assembly WpfGfx.Dx11, D8) take their own path.
     //
     {
-        ID3D11Texture2D *pUserTexture11 = NULL;
+        CMilFrameQueue *pFrameQueue = NULL;
+        if (SUCCEEDED(pIUserSurface->QueryInterface(IID_IMilFrameQueue, reinterpret_cast<void **>(&pFrameQueue))))
+        {
+            hr = CreateForFrameQueue(
+                pFrameQueue,
+                dpiX,
+                dpiY,
+                uVersion,
+                pfnAvailable,
+                isSoftwareFallbackEnabled,
+                ppInteropDeviceBitmap
+                );
+            pFrameQueue->Release();
+            goto Cleanup;
+        }
+    }
 
+    {
+        ID3D11Texture2D *pUserTexture11 = NULL;
         if (SUCCEEDED(pIUserSurface->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&pUserTexture11))))
         {
             hr = CreateForD3D11Texture(
@@ -432,6 +449,57 @@ Cleanup:
 //------------------------------------------------------------------------------
 
 /* static */ HRESULT
+CInteropDeviceBitmap::CreateForFrameQueue(
+    __in CMilFrameQueue *pFrameQueue,
+    __in_range(0, DBL_MAX) double dpiX,
+    __in_range(0, DBL_MAX) double dpiY,
+    UINT uVersion,
+    __in FrontBufferAvailableCallbackPtr pfnAvailable,
+    bool isSoftwareFallbackEnabled,
+    __deref_out CInteropDeviceBitmap **ppInteropDeviceBitmap
+    )
+{
+    HRESULT hr = S_OK;
+    CD3DDeviceManager *pDeviceManager = CD3DDeviceManager::Get();
+    CInteropDeviceBitmap *pInteropDeviceBitmap = NULL;
+
+    // The front buffer lives on the primary display's device; other displays
+    // get dependent color sources like every other interop bitmap (D23).
+    pInteropDeviceBitmap = new CInteropDeviceBitmap(
+        uVersion,
+        pfnAvailable,
+        isSoftwareFallbackEnabled,
+        pFrameQueue->GetWidth(),
+        pFrameQueue->GetHeight(),
+        pFrameQueue->IsOpaque() ? MilPixelFormat::BGR32bpp : MilPixelFormat::PBGRA32bpp,
+        FrameQueue,
+        0,
+        NULL,
+        NULL
+        );
+    IFCOOM(pInteropDeviceBitmap);
+    pInteropDeviceBitmap->AddRef();
+
+    pInteropDeviceBitmap->m_pFrameQueue = pFrameQueue;
+    pFrameQueue->AddRef();
+
+    IFC(pInteropDeviceBitmap->SetResolution(dpiX, dpiY));
+    IFC(pInteropDeviceBitmap->m_cs.Init());
+    IFC(pDeviceManager->AddAdapterStatusListener(pInteropDeviceBitmap));
+
+    MIL_DX11_LOG("D3DImage bound to frame queue %p (%ux%u)", pFrameQueue, pFrameQueue->GetWidth(), pFrameQueue->GetHeight());
+
+    *ppInteropDeviceBitmap = pInteropDeviceBitmap;  // steal ref
+    pInteropDeviceBitmap = NULL;
+
+Cleanup:
+    ReleaseInterface(pInteropDeviceBitmap);
+    CD3DDeviceManager::Release();
+
+    RRETURN(hr);
+}
+
+HRESULT
 CInteropDeviceBitmap::CreateForD3D11Texture(
     __in ID3D11Texture2D *pUserTexture,
     __in_range(0, DBL_MAX) double dpiX,
@@ -556,7 +624,8 @@ CInteropDeviceBitmap::CInteropDeviceBitmap(
     m_oUpdateMethod(oUpdateMethod), m_fIsHwRenderingDisabled(false),
     m_uAdapter(uAdapter), m_pISoftwareBitmap(NULL)
 {
-    Assert((m_pIUserSurface != NULL) != (m_pIUserTexture11 != NULL));
+    Assert(!(m_pIUserSurface != NULL && m_pIUserTexture11 != NULL));
+    m_pFrameQueue = NULL;
 
     if (m_pIUserSurface)
     {
@@ -590,8 +659,9 @@ CInteropDeviceBitmap::~CInteropDeviceBitmap()
     CD3DDeviceManager::Release();
 
     ReleaseInterface(m_pISoftwareBitmap);
-    ReleaseInterface(m_pIUserSurface); 
+    ReleaseInterface(m_pIUserSurface);
     ReleaseInterface(m_pIUserTexture11);
+    ReleaseInterface(m_pFrameQueue);
     m_cs.DeInit();
 }
 
@@ -619,6 +689,11 @@ CInteropDeviceBitmap::Detach()
     //
     ReleaseInterface(m_pIUserSurface);
     ReleaseInterface(m_pIUserTexture11);
+    if (m_pFrameQueue)
+    {
+        m_pFrameQueue->Unbind();
+        ReleaseInterface(m_pFrameQueue);
+    }
 
     //
     // We won't remove ourselves from listening to the device manager until 
@@ -689,6 +764,10 @@ CInteropDeviceBitmap::NotifyAdapterStatusInternal(UINT uAdapter, bool fIsValid)
             //  source (front buffer) via shared handle or BitBlt. Since we lost the front buffer,
             //  release every color source.
             //
+            if (m_pFrameQueue)
+            {
+                m_pFrameQueue->Unbind();    // re-opened on the device that comes back
+            }
             ReleaseResources();
 
             // Never gets set to false again because next SetBackBuffer will create new bitmap,
@@ -799,7 +878,7 @@ CInteropDeviceBitmap::Present()
     // The user may have ignored our rendering disabled notification and continued 
     // to render so let's silently fail until we get a valid surface again.
     //
-    if (!m_fIsHwRenderingDisabled && (m_pIUserSurface || m_pIUserTexture11))
+    if (!m_fIsHwRenderingDisabled && (m_pIUserSurface || m_pIUserTexture11 || m_pFrameQueue))
     {
         if (!m_poDeviceBitmapInfo)
         {
@@ -837,7 +916,7 @@ Cleanup:
         hr = S_OK;
     }
 
-    if ((m_pIUserSurface || m_pIUserTexture11) && m_fIsHwRenderingDisabled && m_fIsSoftwareFallbackEnabled)
+    if ((m_pIUserSurface || m_pIUserTexture11) && m_fIsHwRenderingDisabled && m_fIsSoftwareFallbackEnabled)   // frame queues have no software copy
     {
         // If software fallback is enabled and the front buffer is unavailable, we try to fall back to
         // software no matter what.
@@ -936,6 +1015,7 @@ CInteropDeviceBitmap::CreateFrontBuffer()
                 // a standard DBCS because it's more efficient (not lockable)
                 case Software:
                 case D3D11Copy:
+                case FrameQueue:
                     IFC(pCache->CreateSharedColorSource(
                         m_PixelFormat,
                         rcBounds,
@@ -995,7 +1075,7 @@ CInteropDeviceBitmap::GetDisplayFromUserDevice(
     IDirect3D9 *pID3DUserObject = NULL;
     const CDisplaySet *pDisplaySet = NULL;
 
-    if (m_pIUserTexture11)
+    if (m_pIUserTexture11 || m_pFrameQueue)
     {
         g_DisplayManager.GetCurrentDisplaySet(&pDisplaySet);
         IFC(pDisplaySet->GetDisplay(m_uAdapter, ppDisplay));
@@ -1041,7 +1121,30 @@ Cleanup:
 //
 //------------------------------------------------------------------------------
 
-HRESULT 
+HRESULT
+CInteropDeviceBitmap::PresentFromFrameQueue()
+{
+    HRESULT hr = S_OK;
+
+    {
+        CGuard<CCriticalSection> oGuard(m_cs);
+
+        if (m_pFrameQueue == NULL || !m_pFrameQueue->HasPendingFrame())
+        {
+            return S_FALSE;
+        }
+
+        // Present() wants a dirty rect: the whole frame.
+        m_cUserDirtyRects = 1;
+        m_rgUserDirtyRects[0] = CMilRectU(0, 0, m_nWidth, m_nHeight, XYWH_Parameters);
+    }
+
+    hr = Present();
+
+    RRETURN1(hr, S_FALSE);
+}
+
+HRESULT
 CInteropDeviceBitmap::UpdateFrontBuffer()
 {
     Assert(m_cUserDirtyRects > 0);
@@ -1053,7 +1156,23 @@ CInteropDeviceBitmap::UpdateFrontBuffer()
         Assert(m_poDeviceBitmapInfo->m_pbcs);
         Assert(m_poDeviceBitmapInfo->m_pbcs->IsValid());
         
-        if (m_pIUserTexture11)
+        if (m_pFrameQueue)
+        {
+            IFC(m_pFrameQueue->BindToDevice(m_poDeviceBitmapInfo->m_pbcs->GetDeviceNoRef()));
+
+            hr = m_pFrameQueue->CopyPendingFrame(m_poDeviceBitmapInfo->m_pbcs);
+
+            if (hr == S_FALSE)
+            {
+                // Nothing new (or the producer still holds the mutex): keep the
+                // previous frame, do not touch validity.
+                m_cUserDirtyRects = 0;
+                goto Cleanup;
+            }
+
+            IFC(hr);
+        }
+        else if (m_pIUserTexture11)
         {
             IFC(m_poDeviceBitmapInfo->m_pbcs->UpdateSurface(
                 m_cUserDirtyRects,
@@ -1154,6 +1273,7 @@ CInteropDeviceBitmap::TryCreateDependentDeviceColorSource(
 
             case Software:
             case D3D11Copy:
+            case FrameQueue:
                 //
                 // Future Consideration:   WDDM could share surfaces here
                 //

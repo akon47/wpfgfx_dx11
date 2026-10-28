@@ -110,6 +110,8 @@ public:
     
     virtual __out_opt CD3DSurface *GetValidTransferSurfaceNoRef();
 
+    __out_ecount(1) CD3DDeviceLevel1 *GetDeviceNoRef() const { return m_pDevice; }
+
     // D3DImage with a D3D11 texture: copy the dirty rectangles from the user's
     // texture (same device, or opened through its shared handle).
     HRESULT UpdateSurface(

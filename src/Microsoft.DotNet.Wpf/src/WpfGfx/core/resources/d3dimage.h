@@ -13,9 +13,8 @@
 
 MtExtern(CMilD3DImageDuce);
 
-class CMilD3DImageDuce : public CMilImageSource
-{
-    friend class CResourceFactory;
+class CMilD3DImageDuce : public CMilImageSource, public IMilFrameQueueNotify
+{    friend class CResourceFactory;
 
 public:
 
@@ -62,6 +61,14 @@ public:
     HRESULT RegisterNotifiers(__in_ecount(1) CMilSlaveHandleTable *pHandleTable);
     override void UnRegisterNotifiers();
 
+    // D19: called by the composition at the start of a pass when the bound
+    // frame queue has a frame pending.
+    void PresentPendingFrame();
+    bool HasPendingFrame() const;
+
+    // IMilFrameQueueNotify (producer thread)
+    override void OnFrameQueueFrame();
+
 protected:
 
     DECLARE_METERHEAP_ALLOC(ProcessHeap, Mt(CMilD3DImageDuce));
@@ -70,6 +77,11 @@ protected:
     virtual ~CMilD3DImageDuce();
 
 private:
+    void RegisterFrameQueue();
+    void UnregisterFrameQueue();
+
+    CComposition *m_pComposition;           // not owned (D19)
+    bool m_fFrameQueueRegistered;
 
     // Can be NULL as the update packet can contain NULL
     CInteropDeviceBitmap *m_pInteropDeviceBitmap;

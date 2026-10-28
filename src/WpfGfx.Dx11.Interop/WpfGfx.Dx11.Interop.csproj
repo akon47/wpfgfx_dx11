@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Producer-side API of the D3D11 engine's frame queue (D19) with no WPF dependency, so a
+       render layer that does not reference WPF can create queues and present frames. The WPF
+       side (binding a queue to an image source) lives in WpfGfx.Dx11. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WpfGfx.Dx11.Interop</RootNamespace>
+    <AssemblyName>WpfGfx.Dx11.Interop</AssemblyName>
+    <Version>0.1.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

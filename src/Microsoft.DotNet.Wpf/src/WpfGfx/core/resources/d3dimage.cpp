@@ -23,7 +23,7 @@ MtDefine(CMilD3DImageDuce, D3DImageResource, "CMilD3DImageDuce");
 //-------------------------------------------------------------------------
 
 CMilD3DImageDuce::CMilD3DImageDuce(__in_ecount(1) CComposition* pComposition)
-    : m_pInteropDeviceBitmap(NULL), m_pISoftwareBitmap(NULL)
+    : m_pInteropDeviceBitmap(NULL), m_pISoftwareBitmap(NULL), m_pComposition(pComposition), m_fFrameQueueRegistered(false)
 {
 
 }
@@ -38,6 +38,7 @@ CMilD3DImageDuce::CMilD3DImageDuce(__in_ecount(1) CComposition* pComposition)
 CMilD3DImageDuce::~CMilD3DImageDuce()
 {
     UnRegisterNotifiers();
+    UnregisterFrameQueue();
 
     ReleaseInterface(m_pInteropDeviceBitmap);
     ReleaseInterface(m_pISoftwareBitmap);
@@ -186,12 +187,14 @@ CMilD3DImageDuce::ProcessUpdate(
 
     // Remove any pre-existing registered resources.
     UnRegisterNotifiers();
+    UnregisterFrameQueue();
 
     ReleaseInterface(m_pInteropDeviceBitmap);
     ReleaseInterface(m_pISoftwareBitmap);
 
     // The bitmaps were AddRef'd before being put on the channel, so we'll steal a ref here...
     m_pInteropDeviceBitmap = reinterpret_cast<CInteropDeviceBitmap *>(pCmd->pInteropDeviceBitmap);
+    RegisterFrameQueue();
 
     if (pCmd->pSoftwareBitmap)
     {
@@ -316,6 +319,83 @@ CMilD3DImageDuce::RegisterNotifiers(__in_ecount(1) CMilSlaveHandleTable *pHandle
 void
 CMilD3DImageDuce::UnRegisterNotifiers()
 {
+}
+
+//+------------------------------------------------------------------------
+//
+//  D19 frame queue: the composition pass presents pending frames without
+//  any channel command from the UI thread.
+//
+//-------------------------------------------------------------------------
+
+void
+CMilD3DImageDuce::RegisterFrameQueue()
+{
+    CMilFrameQueue *pQueue = m_pInteropDeviceBitmap ? m_pInteropDeviceBitmap->GetFrameQueueNoRef() : NULL;
+
+    if (pQueue != NULL && m_pComposition != NULL && !m_fFrameQueueRegistered)
+    {
+        if (SUCCEEDED(m_pComposition->RegisterFrameQueueImage(this)))
+        {
+            m_fFrameQueueRegistered = true;
+            pQueue->SetNotifyTarget(this);
+
+            // A frame presented before the binding shows up right away.
+            if (pQueue->HasPendingFrame())
+            {
+                m_pComposition->ScheduleCompositionPass();
+            }
+        }
+    }
+}
+
+void
+CMilD3DImageDuce::UnregisterFrameQueue()
+{
+    if (m_fFrameQueueRegistered)
+    {
+        CMilFrameQueue *pQueue = m_pInteropDeviceBitmap ? m_pInteropDeviceBitmap->GetFrameQueueNoRef() : NULL;
+
+        if (pQueue != NULL)
+        {
+            pQueue->SetNotifyTarget(NULL);
+        }
+
+        m_pComposition->UnregisterFrameQueueImage(this);
+        m_fFrameQueueRegistered = false;
+    }
+}
+
+bool
+CMilD3DImageDuce::HasPendingFrame() const
+{
+    CMilFrameQueue *pQueue = m_pInteropDeviceBitmap ? m_pInteropDeviceBitmap->GetFrameQueueNoRef() : NULL;
+
+    return pQueue != NULL && pQueue->HasPendingFrame();
+}
+
+void
+CMilD3DImageDuce::OnFrameQueueFrame()
+{
+    // Producer thread: just wake the compositor (thread-safe by design).
+    if (m_pComposition != NULL)
+    {
+        m_pComposition->ScheduleCompositionPass();
+    }
+}
+
+void
+CMilD3DImageDuce::PresentPendingFrame()
+{
+    if (m_pInteropDeviceBitmap != NULL)
+    {
+        HRESULT hr = m_pInteropDeviceBitmap->PresentFromFrameQueue();
+
+        if (hr == S_OK)
+        {
+            NotifyOnChanged(this);
+        }
+    }
 }
 
 

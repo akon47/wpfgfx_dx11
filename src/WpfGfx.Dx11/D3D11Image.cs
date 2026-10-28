@@ -1,4 +1,5 @@
 using System.Windows.Interop;
+using WpfGfx.Dx11.Interop;
 
 namespace WpfGfx.Dx11;
 
@@ -26,6 +27,23 @@ public class D3D11Image : D3DImage
     /// </summary>
     /// <exception cref="NotSupportedException">The D3D11 engine is not loaded, so the pointer would
     /// be handed to an engine that expects IDirect3DSurface9.</exception>
+    /// <summary>
+    /// Shows a frame queue (D19): the engine presents frames the producer publishes with
+    /// <see cref="Dx11FrameQueue.Present"/> without any Lock/Unlock per frame. Call between Lock and
+    /// Unlock once, add a full dirty rect, and unlock; after that the UI thread is not involved.
+    /// Pass null to detach. Re-attach the same queue after <see cref="D3DImage.IsFrontBufferAvailable"/>
+    /// comes back (device loss) or when the image is recreated.
+    /// </summary>
+    public void SetFrameQueue(Dx11FrameQueue? queue)
+    {
+        if (queue != null)
+        {
+            Dx11Engine.EnsureAvailable();
+        }
+
+        SetBackBuffer(D3DResourceType.IDirect3DSurface9, queue?.NativePointer ?? IntPtr.Zero, false);
+    }
+
     public void SetBackBuffer(IntPtr texture2D, bool enableSoftwareFallback = false)
     {
         if (texture2D != IntPtr.Zero)
