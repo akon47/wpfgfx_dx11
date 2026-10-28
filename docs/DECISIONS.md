@@ -113,6 +113,29 @@ EVR 프레젠터(DXVA2/D3D9)는 `IMFDXGIDeviceManager`+`ID3D11VideoProcessor`로
   무복사로 받을 수 있고, 관리 코드는 그대로다. `WpfGfx.Dx11`의 `D3D11Image` 헬퍼가 `IsAvailable` 검사 후 이 경로를 쓴다.
   스톡 엔진에서는 헬퍼가 먼저 거부하므로 잘못된 포인터가 네이티브로 가지 않는다.
 
+## D7·D8 구현 메모 (2026-10-28, M9)
+
+**D3DImage(`IDirect3DSurface9`) — 공개 계약 유지(D7).** `CInteropDeviceBitmap::GetUpdateMethod`가 사용자 디바이스를 판별한다.
+`IDirect3DDevice9Ex`이고 `D3DCAPS2_CANSHARERESOURCE`·`D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES`가 있으면 `SharedSurface`,
+아니면 기존 `Software`(`GetRenderTargetData`로 읽어 올리기). 공유 경로는 방향이 업스트림과 반대다: 엔진이
+`D3D11_RESOURCE_MISC_SHARED`(+`BIND_RENDER_TARGET`) 텍스처를 만들고 그 핸들을 **사용자의 D3D9Ex 디바이스**가
+`CreateTexture(..., &hShared)`로 열어(D3D9Ex는 D3D11 공유 핸들을 A8R8G8B8/X8R8G8B8로 열 수 있다) `StretchRect`로 사용자 서피스를
+복사한다. 복사 완료는 사용자 디바이스에 만든 1×1 lockable 렌더타깃에 `StretchRect`+`LockRect`로 기다린다(`Flush9`). 엔진은
+`d3d9.dll`을 로드하지 않고 사용자 객체의 vtable만 호출한다(D14).
+
+**D3DImage(`ID3D11Texture2D`) — 새 기능(D8).** `InteropDeviceBitmap_Create`가 넘어온 포인터에 `QueryInterface(ID3D11Texture2D)`를
+먼저 시도해 성공하면 `CreateForD3D11Texture`로 간다(관리 코드는 그대로). 조건: 2D·배열 1·`B8G8R8A8/X8_UNORM`·`USAGE_DEFAULT`,
+어댑터 LUID로 디스플레이를 고른다. 갱신 방법 `D3D11Copy`: 엔진 디바이스의 텍스처면 `CopySubresourceRegion`(무복사에 가깝다),
+같은 어댑터의 다른 디바이스면 `MISC_SHARED` 핸들을 `OpenSharedResource`로 열고 사용자 즉시 컨텍스트 `Flush` 뒤 복사(키드 뮤텍스
+없음 — 순서는 D3D9와 같이 Lock/Unlock 프로토콜이 보장), 다른 어댑터면 사용자 디바이스에서 스테이징으로 읽어 시스템 메모리
+텍스처로 올린다(미검증). MSAA 원본은 `ResolveSubresource`.
+
+**export와 동반 어셈블리.** `core/api/api_dx11.cpp`의 `WpfGfxDx11_GetInfo`(cbSize로 시작하는 구조체, ABI 1: Feature Level·디스플레이
+수·어댑터 LUID)와 `WpfGfxDx11_GetDevice`(디스플레이 인덱스 → AddRef된 `ID3D11Device`). 디바이스는 미디어 프레젠터와 같은 경로
+(`GetD3DDeviceAndPresentParams`)로 얻어 창이 없을 때도 만들어진다. `src/WpfGfx.Dx11/`(net8.0-windows): `Dx11Engine.IsAvailable`
+(`GetModuleHandle` + `TryGetExport`), `GetInfo`, `GetDevice`, `D3D11Image : D3DImage`(스톡 엔진이면 `NotSupportedException`).
+즉시 컨텍스트는 엔진 렌더 스레드 것이므로 앱은 쓰지 않는다. 사용자 디바이스+공유 텍스처 방식은 D19의 전제이기도 하다.
+
 ## D17. D3D11.1 런타임(Windows 8 이상)을 요구한다 (2026-10-28)
 
 `ID3D11DeviceContext1::ClearView`(사각형 단위 클리어, D3D9 `Clear`의 rect 목록 대응)와 `IDXGISwapChain1::Present1`(dirty rect)을
