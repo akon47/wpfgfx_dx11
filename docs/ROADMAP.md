@@ -87,14 +87,20 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
   34 MB 뿐이라 대부분 NVIDIA D3D11 사용자 모드 드라이버(`nvwgf2umx`, 81 MB 모듈)가 디바이스마다 예약하는 커밋이다. 디스플레이마다
   디바이스를 만드는 구조(D23)가 이를 두 배로 만들므로, 같은 LUID 디스플레이의 디바이스 공유가 메모리 쪽 첫 과제다.
   텍스트 전용·투명 창 벤치는 미측정.
+  후속(2026-10-28): 프라이빗 메모리가 매초 수 MB 씩 늘다 390 MB 근처에서 멈추는 현상을 추적해 **프레임마다 텍스처를 만들고 버리는**
+  스톡 패턴(효과 중간 렌더타깃, 글리프 업로드용 락 가능 텍스처 쌍)을 찾았다(L13). 텍스처 풀(D26)로 생성 횟수를 54% 줄여 같은 시점의
+  프라이빗 메모리가 368→320 MB. 회전하는 요소의 중간 렌더타깃은 크기가 매 프레임 달라 풀로 못 줄인다. 벤치 fps 는 변화 없음.
 - 투명 창을 DirectComposition + 프리멀티플라이드 알파 스왑체인으로 프레젠트한다(현재는 GPU→CPU 리드백 후 `UpdateLayeredWindow`).
 - 플립 모델 스왑체인 전환(D10의 성능 후속 작업).
 - 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).
 - dotnet/wpf-test의 DRT 중 렌더링 관련 테스트를 교체 DLL로 실행.
-- x86·arm64 빌드.
+- ✅ x86 빌드·스모크(2026-10-28): `build.cmd -platform x86` 산출물이 .NET 8 x86 앱에서 Tier 2, 스톡 대비 차이>8 0.04%·차이>64 0.00%.
+  게이트는 `run-smoke.ps1 -Rid win-x86`. arm64: 툴셋은 있으나 실행 환경이 없어 빌드만 확인 대상(아래 상태 참조).
 - D3D9 흔적 제거 확인(`d3d9.dll`은 미디어 재생(D25) 외에는 로드되지 않음. 이 PC에서는 보안 소프트웨어가 먼저 로드해 확인이 어렵다, L7).
-- `RenderTargetBitmap`의 하드웨어 경로(D8 옵트인). 지금은 `CMILFactory::CreateBitmapRenderTarget`이 항상 소프트웨어
-  `CSwRenderTargetBitmap`을 만들고, `CMilPixelShaderDuce::GetSwPixelShader`의 fxjit은 ps_2_0만 처리해 ps_3_0 `ShaderEffect`는
-  통과 셰이더로 대체된다(dotnet/wpf#7856). D3D11 텍스처 RT + 스테이징 리드백으로 효과를 적용한 비트맵을 만든다. M4 이후.
-- 사용자 D3D11 렌더 루프용 "프레임 큐" 이미지 소스(D19). MediaElement의 샘플 큐 구조를 D3DImage에 열어 Lock/Unlock 없이
-  `Acquire`/`Present`만으로 컴포지션에 잇는다. M9(D3DImage) 다음.
+- ✅ `RenderTargetBitmap`의 하드웨어 경로(2026-10-28, D27, 옵트인). `WpfGfxDx11_SetOption(1, 1)` /
+  `Dx11Engine.HardwareRenderTargetBitmap = true` / `WPFGFX_DX11_HW_RTB=1`. 스모크 `--rtb --rtb-hw`: ps_3_0 효과가 적용된 비트맵이 나오고
+  (스톡은 #7856 대로 통과 셰이더), 옵션을 끈 소프트웨어 경로는 스톡과 픽셀 일치. GPU 결과는 소프트웨어와 차이>8 10.5%(효과 셀 + AA).
+  부수 효과: 즉시 컨텍스트의 런타임 멀티스레드 보호를 켰다(UI 스레드 리드백).
+- ✅ 사용자 D3D11 렌더 루프용 프레임 큐(D19, 2026-10-28): `docs/FRAME_QUEUE.md`. 스모크 `--fq`(큐 8개, UI 스레드 0.5초마다 100 ms 블로킹):
+  생산자 비용 큐당 39 µs, 뮤텍스 실패·타임아웃 0, 표시/Present 1893/1904, 250 ms 간격 캡처 변화 80.6%. 큐 32개도 60 fps 유지(큐당 30 µs,
+  틱당 약 1 ms). 스톡 엔진에서는 능력 질의 false 로 폴백. `WpfGfx.Dx11.Interop`(WPF 무의존)와 `D3D11Image.SetFrameQueue`.
