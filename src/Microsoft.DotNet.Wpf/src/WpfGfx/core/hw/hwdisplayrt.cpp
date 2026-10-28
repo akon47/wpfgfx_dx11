@@ -44,6 +44,7 @@ CHwDisplayRenderTarget::Create(
     __in_ecount(1) CDisplay const *pDisplay,
     MilDeviceKind type,
     MilRTInitialization::Flags dwFlags,
+    bool fFlipModel,
     __deref_out_ecount(1) CHwDisplayRenderTarget **ppRenderTarget
     )
 {
@@ -75,6 +76,9 @@ CHwDisplayRenderTarget::Create(
         &D3DPresentParams,
         &AdapterOrdinalInGroup
         ));
+
+    // D29: one flip model swap chain per HWND. GDI presentation keeps bitblt.
+    D3DPresentParams.FlipModel = fFlipModel && !D3DPresentParams.GdiCompatible;
 
     //
     // Make sure render target format has been tested.

@@ -1223,7 +1223,9 @@ CD3DDeviceLevel1::CheckBadDeviceDrivers(
 
     HRESULT hr = S_OK;
 
-    Assert(m_uAdapterOrdinal == pDisplay->GetDisplayIndex());
+    // D28: the device may serve several displays of one adapter.
+    Assert(   m_luidD3DAdapter.LowPart == pDisplay->GetLUID().LowPart
+           && m_luidD3DAdapter.HighPart == pDisplay->GetLUID().HighPart);
 
     if (!pDisplay->IsRecentDriver())
     {
@@ -1556,9 +1558,26 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
         // SHADER_INPUT: Begin3D copies the back buffer into the multisample
         // intermediate by drawing it (StretchRectScaled).
         desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
-        desc.BufferCount = max(1u, pParams->BackBufferCount);
+        //
+        // D29: flip model (two buffers). WPF keeps redrawing only what
+        // changed; CD3DSwapChain::SyncBackBufferAfterPresent carries the
+        // previous frame into the rotated back buffer so that still holds.
+        //
+        const bool fFlipModel =
+               pParams->FlipModel
+            && !pParams->GdiCompatible
+            && pParams->SampleDesc.Count <= 1;
+
+        desc.BufferCount = fFlipModel ? 2 : max(1u, pParams->BackBufferCount);
         desc.Scaling = DXGI_SCALING_STRETCH;
-        desc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+        desc.SwapEffect = fFlipModel ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_SEQUENTIAL;
+
+        if (fFlipModel)
+        {
+            // A released flip chain of this HWND must be gone before DXGI
+            // accepts a new one; released wrappers normally wait a frame.
+            m_resourceManager.DestroyResources(CD3DResourceManager::WithDelay);
+        }
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
         desc.Flags = pParams->GdiCompatible ? DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE : 0;
 
@@ -1576,6 +1595,22 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
             &pDXGISwapChain
             ));
 
+        if (FAILED(hr) && fFlipModel)
+        {
+            MIL_DX11_LOG("flip model swap chain refused hr=0x%08x, using bitblt", hr);
+
+            desc.BufferCount = max(1u, pParams->BackBufferCount);
+            desc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+
+            hr = MilTranslateD3D11Error(pDXGIFactory->CreateSwapChainForHwnd(
+                m_pD3DDevice,
+                pParams->hDeviceWindow,
+                &desc,
+                NULL,
+                NULL,
+                &pDXGISwapChain
+                ));
+        }
         END_DEVICE_ALLOCATION;
 
         IFC(hr); // placed here to avoid jumping to cleanup immediately on OOVM
@@ -1630,9 +1665,9 @@ Cleanup:
         MarkUnusable(false /* This call is already entry protected. */);
     }
 
-    MIL_DX11_LOG("CreateAdditionalSwapChain hr=0x%08x %ux%u fmt=%d gdi=%d hwnd=%p",
+    MIL_DX11_LOG("CreateAdditionalSwapChain hr=0x%08x %ux%u fmt=%d gdi=%d flip=%d hwnd=%p",
                  hr, pParams->BackBufferWidth, pParams->BackBufferHeight,
-                 pParams->BackBufferFormat, pParams->GdiCompatible, pParams->hDeviceWindow);
+                 pParams->BackBufferFormat, pParams->GdiCompatible, pParams->FlipModel, pParams->hDeviceWindow);
 
     ReleaseInterface(pDXGISwapChain);
     ReleaseInterface(pDXGIFactory);
@@ -2826,15 +2861,39 @@ CD3DDeviceLevel1::Present(
 
     if (pMILDC->PresentWithHAL())
     {
-        IFC(PresentWithD3D(
+        MIL_THR(PresentWithD3D(
             pD3DSwapChain->GetDXGISwapChainNoRef(),
             prcSource,
             prcDest,
             pMILDC,
             pDirtyRegion,
             dwD3DPresentFlags,
+            pD3DSwapChain->IsFlipModel(),
             &fPresentProcessed
             ));
+
+        if (SUCCEEDED(hr) && pD3DSwapChain->IsFlipModel())
+        {
+            //
+            // D29: DXGI rotated the buffers and unbound the back buffer.
+            // Bring the new back buffer up to date and forget the cached
+            // render target so the next frame binds it again.
+            //
+
+            pD3DSwapChain->SyncBackBufferAfterPresent(
+                m_pD3DContext,
+                prcSource,
+                pDirtyRegion,
+                fPresentProcessed
+                );
+
+            if (m_pCurrentRenderTargetNoRef)
+            {
+                ReleaseUseOfRenderTarget(m_pCurrentRenderTargetNoRef);
+            }
+        }
+
+        IFC(hr);
     }
     else
     {
@@ -2885,6 +2944,7 @@ CD3DDeviceLevel1::PresentWithD3D(
     __in_ecount(1) CMILDeviceContext const *pMILDC,
     __in_ecount_opt(1) RGNDATA const * pDirtyRegion,
     DWORD dwD3DPresentFlags,
+    bool fFlipModel,
     __out_ecount(1) bool *pfPresentProcessed
     )
 {
@@ -2930,6 +2990,45 @@ CD3DDeviceLevel1::PresentWithD3D(
 
     params.DirtyRectsCount = 0;
     params.pDirtyRects = NULL;
+
+    RECT rgDirtyRects[CD3DSwapChain::sc_cMaxDirtyRects];
+
+    if (fFlipModel)
+    {
+        //
+        // D29: flip model presents report what changed so DWM composes only
+        // that. Rects must lie inside the buffer or DXGI rejects the call.
+        //
+
+        DXGI_SWAP_CHAIN_DESC1 descChain;
+
+        if (SUCCEEDED(pDXGISwapChain->GetDesc1(&descChain)))
+        {
+            UINT cCollected = CD3DSwapChain::CollectDirtyRects(
+                prcSource,
+                pDirtyRegion,
+                rgDirtyRects,
+                ARRAYSIZE(rgDirtyRects)
+                );
+
+            for (UINT i = 0; i < cCollected; i++)
+            {
+                RECT rc = rgDirtyRects[i];
+
+                rc.left = max(rc.left, 0L);
+                rc.top = max(rc.top, 0L);
+                rc.right = min(rc.right, static_cast<LONG>(descChain.Width));
+                rc.bottom = min(rc.bottom, static_cast<LONG>(descChain.Height));
+
+                if (rc.right > rc.left && rc.bottom > rc.top)
+                {
+                    rgDirtyRects[params.DirtyRectsCount++] = rc;
+                }
+            }
+
+            params.pDirtyRects = (params.DirtyRectsCount > 0) ? rgDirtyRects : NULL;
+        }
+    }
 
     UINT uSyncInterval =
         (pMILDC->GetRTInitializationFlags() & MilRTInitialization::PresentImmediately) ? 0 : 1;

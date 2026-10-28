@@ -267,3 +267,59 @@ D3D11 엔진은 `CMILFactory::CreateBitmapRenderTarget` 에서 `CHwTextureRender
 UI 스레드가 렌더 스레드와 같은 즉시 컨텍스트를 쓰게 되므로(RTB 렌더는 동기 채널, 리드백은 `CDeviceBitmap::Lock`) 디바이스 생성 때
 `ID3D11Multithread::SetMultithreadProtected(TRUE)` 를 켠다. D3D9 의 `D3DCREATE_MULTITHREADED` 에 해당하며 엔진의 디바이스 락은 그 위에 그대로 있다.
 `WpfGfxDx11_GetDevice` 로 디바이스를 받은 앱 코드도 같은 보호를 받는다.
+
+## D28. 같은 어댑터(LUID)의 디스플레이는 하드웨어 디바이스 하나를 공유한다 (2026-10-28, D23 수정)
+
+D23 은 스톡처럼 디스플레이마다 디바이스를 두었다. 같은 GPU 의 모니터 두 개면 D3D11 디바이스가 둘이고(드라이버 커밋이 디바이스마다
+약 180 MB), 걸친 창은 양쪽 디바이스에 리소스를 두 벌 둔다. 이제 `CD3DDeviceManager::FindDeviceMatch` 가 디스플레이 인덱스 대신
+**디스플레이의 어댑터 LUID** 로 하드웨어 디바이스를 찾는다(`DisplaysShareAdapter`). 디스플레이별 렌더타깃·스왑체인 구조는 그대로이며
+(한 HWND 에 디스플레이 수만큼 비트블트 스왑체인), 디바이스·텍스처 캐시·텍스처 풀·미디어 D3D9Ex 디바이스만 공유된다.
+
+- 어댑터 상태 알림(`NotifyAdapterStatus`)은 디바이스가 생기거나 사라질 때 그 LUID 의 **모든** 디스플레이 인덱스로 나간다
+  (`NotifyAdapterStatusForGroup`). D3DImage·프레임 큐는 자기 디스플레이 인덱스만 보므로 바뀐 것이 없다.
+- `CD3DDeviceLevel1::m_uAdapterOrdinal` 은 처음 만든 디스플레이의 인덱스로 남는다(레지스트리 어댑터 기록 용도). 디스플레이-디바이스
+  일치 Assert 는 LUID 비교로 바꿨다.
+- 결과(모니터 2개·GPU 1개, 2026-10-28): 디바이스 2→1. 걸친 창 프라이빗 536→390 MB, GPU 로컬 371→130 MB. 한 모니터 안의 창은
+  344→336 MB(두 번째 디바이스는 거의 놀고 있었다). 걸친 창에서 디바이스 손실을 일으켜도 디바이스 하나가 다시 만들어지고 양쪽이 복구된다.
+- 디바이스는 하나인데 렌더타깃이 디스플레이마다 있으면(이 결정만 적용한 상태) 걸친 창의 블러 셀이 스톡과 1.3% 달랐다(차이>64 는 0).
+  두 렌더타깃이 실현 캐시를 공유하면서 생기는 차이로, D29 가 창마다 렌더타깃 하나로 만들어 없앴다(0.04%). 풀 재사용 때 렌더타깃을
+  클리어해 봤지만 원인이 아니어서 넣지 않았다.
+
+## D29. 어댑터가 같은 디스플레이들은 창마다 하드웨어 렌더타깃 하나를 쓰고, 그 스왑체인은 플립 모델이다 (2026-10-28, D10·D23 수정)
+
+**창 하나에 렌더타깃 하나.** 모든 디스플레이의 LUID 가 같으면(`CDisplaySet::AllDisplaysShareAdapter`) `CDesktopRenderTarget::Init` 이
+디스플레이 수만큼이 아니라 **하나의** `CHwHWNDRenderTarget` 을 만들고 가상 디바이스 경계를 데스크톱 전체로 둔다(소프트웨어 경로의
+`SetSingleSubRT` 와 같은 구조). 창이 두 모니터에 걸쳐도 한 번만 렌더링되고 HWND 에 스왑체인이 하나다. 만들기에 실패하면 디스플레이별
+렌더타깃으로 되돌아간다. 어댑터가 다른 디스플레이(GPU 두 개)는 종전처럼 디스플레이별 렌더타깃·비트블트 스왑체인이다.
+결과(모니터 2개·GPU 1개): 걸친 창이 스톡과 차이>8 0.04%(D28 만으로는 1.31%), 프라이빗 메모리 390→331 MB(한 모니터 안의 창과 같다).
+
+**플립 모델.** HWND 의 유일한 하드웨어 렌더타깃이고 HAL 로 프레젠트하면(투명 창의 GDI 경로 제외) `MilSwapChainParams::FlipModel` 을
+켜고 `CreateAdditionalSwapChain` 이 `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL`·백버퍼 2개로 만든다(DXGI 가 거부하면 비트블트로 폴백).
+D10 이 걱정한 "더티 사각형만 다시 그린다" 가정은 이렇게 지킨다.
+
+- DXGI 는 프레젠트마다 버퍼를 돌리고 버퍼 1 은 **방금 보여준 프레임**(읽기 전용)이 된다. `CD3DSwapChain::SyncBackBufferAfterPresent` 가
+  프레젠트 직후 이번 프레임의 더티 사각형(없으면 프레젠트 사각형, 16개 초과면 경계 사각형)을 버퍼 1 에서 새 백버퍼로 복사해 백버퍼를
+  완전한 상태로 돌려 놓는다. 중간 서피스가 없으니 추가 메모리는 백버퍼 하나뿐이다. 새로 만들거나 크기를 바꾼 뒤 첫 프레젠트와 범위를
+  모르는 경우는 전체를 복사하고, 돌지 않은 프레젠트(가려짐)는 바뀐 영역을 모아 두었다가 다음 프레젠트 뒤에 복사한다.
+- `Present1` 에 같은 더티 사각형을 넘겨 DWM 이 바뀐 부분만 합성하게 한다(비트블트 경로는 종전대로 전체 프레젠트). 사각형은 백버퍼
+  안으로 잘라 넘긴다(벗어나면 `DXGI_ERROR_INVALID_CALL`).
+- 런타임이 플립 프레젠트 뒤 백버퍼를 파이프라인에서 떼므로 디바이스의 렌더타깃 캐시를 비운다(`ReleaseUseOfRenderTarget`).
+  안 하면 다음 프레임이 아무 데도 안 그려진다.
+- 크기 변경은 `CD3DSwapChain::Resize` 가 `ResizeBuffers` 로 제자리에서 한다. 플립 체인을 다시 만들면 그 사이 창이 한 번도 칠한 적 없는
+  리디렉션 서피스를 보이기 때문이다. `ResizeBuffers` 는 버퍼 참조가 전부 사라져야 하는데 엔진은 놓은 래퍼를 다음 프레젠트에 파괴하므로
+  `DestroyResources(WithDelay)` 로 즉시 파괴하고, 바인딩된 백버퍼는 먼저 뗀다. 스모크 `--resize 16`: 매 단계 검은 픽셀 0.12% 로 스톡과
+  같다(게이트 `resize` 행). 로그에 `ResizeBuffers failed` 가 없어야 한다.
+- 프레젠트 동기 간격은 WPF 가 요구하는 대로 0(`PresentImmediately`)이라 렌더 스레드가 수직 동기에 막히지 않는다.
+
+측정(게이트 `bench` 행, 2026-10-28)은 `docs/ROADMAP.md` Phase 4 참조.
+
+## D30. 투명 창(AllowsTransparency)은 UpdateLayeredWindow 경로를 유지한다 (2026-10-28)
+
+ROADMAP 의 "투명 창을 DirectComposition + 프리멀티플라이드 알파 스왑체인으로 프레젠트" 항목은 **하지 않기로** 했다.
+
+- WPF 의 투명 창은 관리 코드가 `WS_EX_LAYERED` 로 만들고, OS 는 `UpdateLayeredWindow` 로 넘긴 비트맵의 알파로 **픽셀 단위 히트 테스트**를
+  한다(완전히 투명한 픽셀은 클릭이 아래 창으로 간다). DirectComposition 으로 그리면 보이는 것은 바꿀 수 있어도 히트 테스트는 여전히 레이어드
+  비트맵을 보므로, 동작을 지키려면 매 프레임 리드백 + `UpdateLayeredWindow` 가 그대로 필요하다. 그러면 얻는 것이 없다.
+- `WS_EX_NOREDIRECTIONBITMAP` 창은 창을 만드는 관리 코드를 바꿔야 해서 D1 밖이다.
+- 스톡 엔진도 같은 리드백(D3D9 `GetRenderTargetData` → ULW)을 하므로 지금 경로가 스톡과 같은 비용 구조다. 비용은 게이트 `bench ...
+  (transparent window)` 행으로 측정한다.

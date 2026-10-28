@@ -2416,6 +2416,46 @@ CDisplay::CDisplay(
     // m_settings
 }
 
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CDisplaySet::AllDisplaysShareAdapter
+//
+//  Synopsis:
+//      D29: every display has the same, non-zero adapter LUID.
+//
+//------------------------------------------------------------------------------
+
+bool
+CDisplaySet::AllDisplaysShareAdapter() const
+{
+    const UINT cDisplays = GetDisplayCount();
+
+    if (cDisplays == 0)
+    {
+        return false;
+    }
+
+    const LUID luidFirst = m_rgpDisplays[0]->GetLUID();
+
+    if (luidFirst.LowPart == 0 && luidFirst.HighPart == 0)
+    {
+        return false;
+    }
+
+    for (UINT i = 1; i < cDisplays; i++)
+    {
+        const LUID luid = m_rgpDisplays[i]->GetLUID();
+
+        if (luid.LowPart != luidFirst.LowPart || luid.HighPart != luidFirst.HighPart)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 //+------------------------------------------------------------------------
 //
 //  Function:  CDisplay::~CDisplay

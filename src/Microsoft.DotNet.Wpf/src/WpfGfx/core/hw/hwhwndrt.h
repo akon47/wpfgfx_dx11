@@ -52,6 +52,7 @@ protected:
         __in_ecount(1) CDisplay const *pDisplay,
         MilDeviceKind type,
         MilRTInitialization::Flags dwFlags,
+        bool fFlipModel,
         __deref_out_ecount(1) CHwDisplayRenderTarget **ppRenderTarget
         );
 

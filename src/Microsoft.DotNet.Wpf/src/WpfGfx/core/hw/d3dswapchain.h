@@ -78,6 +78,35 @@ public:
         return m_pDXGISwapChain;
     }
 
+    //
+    // D29 flip model. The runtime rotates the buffers on every present while
+    // WPF only redraws what changed, so the frame just presented (buffer 1,
+    // read only) is copied into the new back buffer (buffer 0) afterwards.
+    //
+
+    static const UINT sc_cMaxDirtyRects = 16;
+
+    bool IsFlipModel() const { return m_fFlipModel; }
+
+    HRESULT Resize(
+        UINT uWidth,
+        UINT uHeight
+        );
+
+    void SyncBackBufferAfterPresent(
+        __inout_ecount(1) ID3D11DeviceContext *pContext,
+        __in_ecount_opt(1) CMILSurfaceRect const *prcPresented,
+        __in_ecount_opt(1) RGNDATA const *pDirtyRegion,
+        bool fPresented
+        ) const;
+
+    static UINT CollectDirtyRects(
+        __in_ecount_opt(1) CMILSurfaceRect const *prcPresented,
+        __in_ecount_opt(1) RGNDATA const *pDirtyRegion,
+        __out_ecount_part(cMax, return) RECT *prgRects,
+        UINT cMax
+        );
+
 #if DBG
     UINT DbgGetNumBackBuffers() const
     {
@@ -123,4 +152,14 @@ private:
 protected:
     __field_range(>, 1) UINT const m_cBackBuffers;
     __field_ecount(m_cBackBuffers) CD3DSurface * * const m_rgBackBuffers;
+
+private:
+    HRESULT AcquireBackBuffers();
+    void ReleaseBackBuffers();
+
+    // D29 flip model state.
+    bool m_fFlipModel;
+    ID3D11Texture2D *m_pPreviousBackBuffer;    // buffer 1: frame just presented
+    mutable bool m_fCopyWholeBackBuffer;       // buffer 0 content unknown (new/resized)
+    mutable CMILSurfaceRect m_rcPendingCopy;   // changes a skipped present left behind
 };

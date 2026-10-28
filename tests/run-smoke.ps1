@@ -106,6 +106,14 @@ foreach ($t in $Tfm) {
     if ($jh -match "bodyCentroidMaxDev=([0-9.]+)px") { $devH = [double]$matches[1] }
     Add-Row "spin jitter (body centroid max dev)" $short ("stock {0:F2}px, D3D11 {1:F2}px" -f $devS, $devH) (($devH -lt 1.5) -and ($devS -lt 1.5))
 
+    # ---- resize: the swap chain is resized in place; a recreated flip chain would flash the unpainted redirection surface (D29)
+    $rs = Run-Smoke $t $false @("--resize", "16")
+    $rh = Run-Smoke $t $true @("--resize", "16")
+    $bs = 99.0; $bh = 99.0
+    if ($rs -match "maxBlack=([0-9.]+)%") { $bs = [double]$matches[1] }
+    if ($rh -match "maxBlack=([0-9.]+)%") { $bh = [double]$matches[1] }
+    Add-Row "resize (16 steps, black pixels)" $short ("stock max {0:F2}%, D3D11 max {1:F2}%" -f $bs, $bh) (($bh -le ($bs + 0.5)) -and ($bh -lt 5))
+
     # ---- transparent (layered) window
     [void](Run-Smoke $t $false @("--screenshot", "$out\$short-stock-t.png", "--transparent", "$out\$short-stock-transparent.png"))
     [void](Run-Smoke $t $true @("--screenshot", "$out\$short-hw-t.png", "--transparent", "$out\$short-hw-transparent.png"))
@@ -172,6 +180,14 @@ foreach ($t in $Tfm) {
         $lh = ($bh -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
         Add-Row "bench stock DX9" $short $ls.Trim() $true
         Add-Row "bench D3D11" $short $lh.Trim() $true
+
+        # layered (AllowsTransparency) window: readback + UpdateLayeredWindow on both engines (D30)
+        $ts = Run-Smoke $t $false @("--bench", "$BenchSeconds", "--bench-transparent")
+        $th = Run-Smoke $t $true @("--bench", "$BenchSeconds", "--bench-transparent")
+        $lts = ($ts -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
+        $lth = ($th -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
+        Add-Row "bench stock DX9 (transparent window)" $short $lts.Trim() $true
+        Add-Row "bench D3D11 (transparent window)" $short $lth.Trim() $true
     }
 }
 

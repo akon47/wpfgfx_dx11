@@ -899,8 +899,7 @@ CD3DDeviceManager::FindDeviceMatch(
                 oDevInfo.CreateParams.DeviceType)
             && (   // nothing else matters for SW type since we share a device
                    (pCreateParams->DeviceType == MilDeviceKind_Warp)
-                || (   (pCreateParams->AdapterOrdinal ==
-                        oDevInfo.CreateParams.AdapterOrdinal)
+                || (   DisplaysShareAdapter(pCreateParams->AdapterOrdinal, oDevInfo.CreateParams.AdapterOrdinal)
                     && (pCreateParams->BehaviorFlags == oDevInfo.CreateParams.BehaviorFlags)
                    )
                )
@@ -1544,13 +1543,7 @@ CD3DDeviceManager::CreateNewDevice(
         }
         else
         {
-            for (size_t i = 0; i < m_rgAdapterStatusListeners.GetCount(); i++)
-            {
-                m_rgAdapterStatusListeners[i]->NotifyAdapterStatus(
-                    pD3DCreateParams->AdapterOrdinal,
-                    true        // fIsValid
-                    );
-            }
+            NotifyAdapterStatusForGroup(pD3DCreateParams->AdapterOrdinal, true);
         }
     }
 
@@ -1706,12 +1699,60 @@ CD3DDeviceManager::NotifyDeviceLost(D3DDeviceInformation &info)
     {
         info.fIsDeviceLost = true;
 
-        for (size_t i = 0; i < m_rgAdapterStatusListeners.GetCount(); ++i)
+        NotifyAdapterStatusForGroup(info.CreateParams.AdapterOrdinal, false);
+    }
+}
+
+//+-----------------------------------------------------------------------
+//
+//  D28: one hardware device per adapter. Displays are matched by LUID, and
+//  adapter status reaches every display that shares the adapter.
+//
+//------------------------------------------------------------------------
+
+bool
+CD3DDeviceManager::DisplaysShareAdapter(
+    UINT uDisplayA,
+    UINT uDisplayB
+    ) const
+{
+    if (uDisplayA == uDisplayB)
+    {
+        return true;
+    }
+
+    if (   m_pDisplaySet == NULL
+        || uDisplayA >= m_pDisplaySet->GetDisplayCount()
+        || uDisplayB >= m_pDisplaySet->GetDisplayCount())
+    {
+        return false;
+    }
+
+    const LUID luidA = m_pDisplaySet->Display(uDisplayA)->GetLUID();
+    const LUID luidB = m_pDisplaySet->Display(uDisplayB)->GetLUID();
+
+    // A zero LUID means "no adapter known": never merge those.
+    return (luidA.LowPart != 0 || luidA.HighPart != 0)
+        && luidA.LowPart == luidB.LowPart
+        && luidA.HighPart == luidB.HighPart;
+}
+
+void
+CD3DDeviceManager::NotifyAdapterStatusForGroup(
+    UINT uAdapterOrdinal,
+    bool fIsValid
+    )
+{
+    const UINT cDisplays = m_pDisplaySet ? m_pDisplaySet->GetDisplayCount() : 0;
+
+    for (UINT uDisplay = 0; uDisplay < max(cDisplays, uAdapterOrdinal + 1); uDisplay++)
+    {
+        if (uDisplay == uAdapterOrdinal || DisplaysShareAdapter(uDisplay, uAdapterOrdinal))
         {
-            m_rgAdapterStatusListeners[i]->NotifyAdapterStatus(
-                info.CreateParams.AdapterOrdinal,
-                false       // fIsValid
-                );
+            for (size_t i = 0; i < m_rgAdapterStatusListeners.GetCount(); i++)
+            {
+                m_rgAdapterStatusListeners[i]->NotifyAdapterStatus(uDisplay, fIsValid);
+            }
         }
     }
 }

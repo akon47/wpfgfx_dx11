@@ -14,6 +14,7 @@
 //
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 MtDefine(CD3DSwapChain, MILRender, "CD3DSwapChain");
 MtDefine(D3DResource_SwapChain, MILHwMetrics, "Approximate swap chain size");
@@ -182,6 +183,11 @@ CD3DSwapChain::CD3DSwapChain(
 {
     RtlZeroMemory(m_rgBackBuffers, m_cBackBuffers * sizeof(*m_rgBackBuffers));
     m_pDXGISwapChain->AddRef();
+
+    m_fFlipModel = false;
+    m_pPreviousBackBuffer = NULL;
+    m_fCopyWholeBackBuffer = true;
+    m_rcPendingCopy.SetEmpty();
 }
 
 #pragma warning( pop )
@@ -195,10 +201,7 @@ CD3DSwapChain::CD3DSwapChain(
 //-----------------------------------------------------------------------------
 CD3DSwapChain::~CD3DSwapChain()
 {
-    for (UINT i = 0; i < m_cBackBuffers; i++)
-    {
-        ReleaseInterfaceNoNULL(m_rgBackBuffers[i]);
-    }
+    ReleaseBackBuffers();
 
     ReleaseInterfaceNoNULL(m_pDXGISwapChain);
 }
@@ -225,29 +228,7 @@ CD3DSwapChain::Init(
 
     CD3DResource::Init(pResourceManager, 0);
 
-    //
-    // Store array of back buffers
-    //
-
-    for (UINT i = 0; i < m_cBackBuffers; i++)
-    {
-        ID3D11Texture2D *pD3DBackBuffer = NULL;
-
-        IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetBuffer(
-            i,
-            __uuidof(ID3D11Texture2D),
-            reinterpret_cast<void **>(&pD3DBackBuffer)
-            )));
-
-        MIL_THR(CD3DSurface::Create(pResourceManager, pD3DBackBuffer, 0, &m_rgBackBuffers[i]));
-
-        ReleaseInterfaceNoNULL(pD3DBackBuffer);
-
-        if (FAILED(hr))
-        {
-            goto Cleanup;
-        }
-    }
+    IFC(AcquireBackBuffers());
 
 Cleanup:
     RRETURN(hr);
@@ -303,15 +284,8 @@ CD3DSwapChain::ReleaseD3DResources()
     Assert(!m_fResourceValid || (m_cRef == 0));
     Assert(IsValid() == m_fResourceValid);
 
-    // Release reference to wrapper resources for each of the back buffers
-    // first: DXGI requires all buffer references to be gone before the swap
-    // chain can be destroyed or resized.
-    for (UINT i = 0; i < m_cBackBuffers; i++)
-    {
-        ReleaseInterface(m_rgBackBuffers[i]);
-    }
+    ReleaseBackBuffers();
 
-    // This context is protected so it is safe to release the DXGI resource
     ReleaseInterface((*const_cast<IDXGISwapChain1 **>(&m_pDXGISwapChain)));
 
     return;
@@ -366,4 +340,262 @@ CD3DSwapChain::ReleaseDC(
     RRETURN(m_rgBackBuffers[iBackBuffer]->ReleaseDC(
         hdcBackBuffer
         ));
+}
+
+//+------------------------------------------------------------------------
+//
+//  D29 flip model support.
+//
+//  Buffer 0 is the only writable buffer and the runtime swaps what it refers
+//  to on every present. Buffer 1 is read only and holds the frame that was
+//  just presented. WPF redraws only invalid regions, so after a present the
+//  new back buffer is brought up to date from buffer 1 for everything that
+//  changed since that buffer was last complete.
+//
+//-------------------------------------------------------------------------
+
+HRESULT
+CD3DSwapChain::AcquireBackBuffers()
+{
+    HRESULT hr = S_OK;
+    CD3DResourceManager *pResourceManager = &Manager();
+    DXGI_SWAP_CHAIN_DESC1 desc;
+
+    for (UINT i = 0; i < m_cBackBuffers; i++)
+    {
+        ID3D11Texture2D *pD3DBackBuffer = NULL;
+
+        IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetBuffer(
+            i,
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void **>(&pD3DBackBuffer)
+            )));
+
+        MIL_THR(CD3DSurface::Create(pResourceManager, pD3DBackBuffer, 0, &m_rgBackBuffers[i]));
+        ReleaseInterfaceNoNULL(pD3DBackBuffer);
+
+        if (FAILED(hr))
+        {
+            goto Cleanup;
+        }
+    }
+
+    IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetDesc1(&desc)));
+
+    m_fFlipModel =
+           desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+        || desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+    if (m_fFlipModel && desc.BufferCount > 1)
+    {
+        IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetBuffer(
+            1,
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void **>(&m_pPreviousBackBuffer)
+            )));
+    }
+
+    m_fCopyWholeBackBuffer = true;
+    m_rcPendingCopy.SetEmpty();
+
+    MIL_DX11_LOG("swap chain %p: %s %ux%u buffers=%u",
+                 m_pDXGISwapChain, m_fFlipModel ? "flip" : "bitblt",
+                 desc.Width, desc.Height, desc.BufferCount);
+
+Cleanup:
+    RRETURN(hr);
+}
+
+void
+CD3DSwapChain::ReleaseBackBuffers()
+{
+    for (UINT i = 0; i < m_cBackBuffers; i++)
+    {
+        ReleaseInterface(m_rgBackBuffers[i]);
+    }
+
+    ReleaseInterface(m_pPreviousBackBuffer);
+}
+
+HRESULT
+CD3DSwapChain::Resize(
+    UINT uWidth,
+    UINT uHeight
+    )
+{
+    HRESULT hr = S_OK;
+
+    Assert(IsValid());
+    Assert(m_fFlipModel);
+
+    //
+    // DXGI refuses while anything still references the buffers. Released
+    // wrappers normally wait for the next present to be destroyed.
+    //
+
+    ReleaseBackBuffers();
+    Manager().DestroyResources(CD3DResourceManager::WithDelay);
+
+    IFC(MilTranslateD3D11Error(m_pDXGISwapChain->ResizeBuffers(
+        0,                      // keep the buffer count
+        uWidth,
+        uHeight,
+        DXGI_FORMAT_UNKNOWN,    // keep the format
+        0
+        )));
+
+    IFC(AcquireBackBuffers());
+
+Cleanup:
+    if (FAILED(hr))
+    {
+        MIL_DX11_LOG("ResizeBuffers failed hr=0x%08x %ux%u", hr, uWidth, uHeight);
+        ReleaseBackBuffers();
+    }
+
+    RRETURN(hr);
+}
+
+UINT
+CD3DSwapChain::CollectDirtyRects(
+    __in_ecount_opt(1) CMILSurfaceRect const *prcPresented,
+    __in_ecount_opt(1) RGNDATA const *pDirtyRegion,
+    __out_ecount_part(cMax, return) RECT *prgRects,
+    UINT cMax
+    )
+{
+    UINT cRects = 0;
+
+    if (   pDirtyRegion
+        && pDirtyRegion->rdh.nCount > 0
+        && pDirtyRegion->rdh.nCount <= cMax)
+    {
+        RECT const *prgSource = reinterpret_cast<RECT const *>(pDirtyRegion->Buffer);
+
+        for (UINT i = 0; i < pDirtyRegion->rdh.nCount; i++)
+        {
+            prgRects[cRects++] = prgSource[i];
+        }
+    }
+    else if (prcPresented && cMax > 0)
+    {
+        // Too many rects or no region: the present rect bounds them all.
+        prgRects[0].left = prcPresented->left;
+        prgRects[0].top = prcPresented->top;
+        prgRects[0].right = prcPresented->right;
+        prgRects[0].bottom = prcPresented->bottom;
+        cRects = 1;
+    }
+
+    return cRects;
+}
+
+void
+CD3DSwapChain::SyncBackBufferAfterPresent(
+    __inout_ecount(1) ID3D11DeviceContext *pContext,
+    __in_ecount_opt(1) CMILSurfaceRect const *prcPresented,
+    __in_ecount_opt(1) RGNDATA const *pDirtyRegion,
+    bool fPresented
+    ) const
+{
+    if (!m_fFlipModel || !m_pPreviousBackBuffer || !m_rgBackBuffers[0])
+    {
+        return;
+    }
+
+    D3D11_TEXTURE2D_DESC const &desc = m_rgBackBuffers[0]->Desc();
+    CMILSurfaceRect const rcBuffer(
+        0, 0, static_cast<INT>(desc.Width), static_cast<INT>(desc.Height), LTRB_Parameters);
+
+    RECT rgRects[sc_cMaxDirtyRects + 1];
+    UINT cRects = 0;
+    const bool fUnknownExtent = (prcPresented == NULL && pDirtyRegion == NULL);
+
+    if (!fPresented)
+    {
+        //
+        // Nothing rotated: this buffer stays the newest. Remember what it
+        // changed so the other buffer catches up after the next present.
+        //
+
+        if (fUnknownExtent)
+        {
+            m_fCopyWholeBackBuffer = true;
+        }
+        else
+        {
+            cRects = CollectDirtyRects(prcPresented, pDirtyRegion, rgRects, sc_cMaxDirtyRects);
+
+            for (UINT i = 0; i < cRects; i++)
+            {
+                CMILSurfaceRect rc(
+                    rgRects[i].left, rgRects[i].top, rgRects[i].right, rgRects[i].bottom, LTRB_Parameters);
+
+                if (rc.IsEmpty())
+                {
+                    continue;
+                }
+
+                if (m_rcPendingCopy.IsEmpty())
+                {
+                    m_rcPendingCopy = rc;
+                }
+                else
+                {
+                    m_rcPendingCopy.left = min(m_rcPendingCopy.left, rc.left);
+                    m_rcPendingCopy.top = min(m_rcPendingCopy.top, rc.top);
+                    m_rcPendingCopy.right = max(m_rcPendingCopy.right, rc.right);
+                    m_rcPendingCopy.bottom = max(m_rcPendingCopy.bottom, rc.bottom);
+                }
+            }
+        }
+
+        return;
+    }
+
+    ID3D11Texture2D *pBackBuffer = m_rgBackBuffers[0]->ID3DTexture();
+
+    if (m_fCopyWholeBackBuffer || fUnknownExtent)
+    {
+        pContext->CopyResource(pBackBuffer, m_pPreviousBackBuffer);
+    }
+    else
+    {
+        cRects = CollectDirtyRects(prcPresented, pDirtyRegion, rgRects, sc_cMaxDirtyRects);
+
+        if (!m_rcPendingCopy.IsEmpty())
+        {
+            rgRects[cRects].left = m_rcPendingCopy.left;
+            rgRects[cRects].top = m_rcPendingCopy.top;
+            rgRects[cRects].right = m_rcPendingCopy.right;
+            rgRects[cRects].bottom = m_rcPendingCopy.bottom;
+            cRects++;
+        }
+
+        for (UINT i = 0; i < cRects; i++)
+        {
+            CMILSurfaceRect rc(
+                rgRects[i].left, rgRects[i].top, rgRects[i].right, rgRects[i].bottom, LTRB_Parameters);
+
+            if (!rc.Intersect(rcBuffer))
+            {
+                continue;
+            }
+
+            D3D11_BOX box;
+            box.left = rc.left;
+            box.top = rc.top;
+            box.front = 0;
+            box.right = rc.right;
+            box.bottom = rc.bottom;
+            box.back = 1;
+
+            pContext->CopySubresourceRegion(
+                pBackBuffer, 0, rc.left, rc.top, 0,
+                m_pPreviousBackBuffer, 0, &box);
+        }
+    }
+
+    m_fCopyWholeBackBuffer = false;
+    m_rcPendingCopy.SetEmpty();
 }

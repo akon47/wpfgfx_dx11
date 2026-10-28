@@ -218,6 +218,7 @@ struct MilSwapChainParams
     UINT             BackBufferCount;
     bool             GdiCompatible;      // IDXGISurface1::GetDC 가 필요한 창(투명 창)
     UINT             SyncInterval;       // 0 = 즉시, 1 = 수직 동기.
+    bool             FlipModel;          // D29: FLIP_SEQUENTIAL + 백버퍼 2개. GdiCompatible 과 함께 쓰지 않는다.
 };
 
 // 2D 텍스처 서브리소스 하나를 가리키는 "서피스" 설명. D3DSURFACE_DESC 대체.

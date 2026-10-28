@@ -141,6 +141,18 @@ private:
         __out_xcount_full(pCreateParams->NumberOfAdaptersInGroup) MilDisplayMode *rgDisplayModes
         ) const;
 
+    // D28: displays on the same adapter (LUID) share one hardware device.
+    bool DisplaysShareAdapter(
+        UINT uDisplayA,
+        UINT uDisplayB
+        ) const;
+
+    // Adapter status goes to every display that shares the device's adapter.
+    void NotifyAdapterStatusForGroup(
+        UINT uAdapterOrdinal,
+        bool fIsValid
+        );
+
     HRESULT FindDeviceMatch(
         __inout_ecount(1) D3DDeviceCreationParameters *pCreateParams,
         UINT uStartIndex,
