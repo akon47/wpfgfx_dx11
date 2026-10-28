@@ -79,3 +79,21 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
   관리 코드와 네이티브 엔진 사이의 계약(`wpfgfx.def` export 107개, DUCE 프로토콜 지문 `MIL_SDK_VERSION 0x200184C0`)이
   dotnet/wpf v8.0.31부터 main까지 동일하기 때문이다.
 - 따라서 이 프로젝트의 산출물인 DLL 하나가 .NET 8, 9, 10 WPF 앱에 그대로 쓰일 수 있다.
+
+## 진단 로그 (`WPFGFX_DX11_LOG`)
+
+릴리스 빌드에서도 환경 변수 `WPFGFX_DX11_LOG=<파일 경로>` 를 주고 앱을 실행하면 엔진이 그 파일에 다음을 덧붙인다
+(`include/mildx11log.h`, `core/common/mildx11log.cpp`). 변수가 없으면 아무 비용도 없다.
+
+- 디바이스 생성(Feature Level), 스왑체인 생성/재생성, `Present1` 결과와 사각형, 렌더 스레드 실패 HRESULT, `HandleDIE` 로 들어온 실패.
+- D3D11 디버그 레이어가 설치된 PC(`D3D11_3SDKLayers.dll`)에서는 디바이스를 디버그 레이어로 만들고, 검증 메시지를
+  실패 시점과 매 `Present` 마다 로그로 쏟는다. 시그니처 불일치·잘못된 바인딩 같은 원인이 그대로 나온다.
+- 파이프라인 조립기가 만든 HLSL 전문, 컴파일된 셰이더의 리소스 바인딩(텍스처/샘플러 슬롯)과 `$Globals` 변수 오프셋(리플렉션).
+- 처음 300번의 `SetTexture` 호출(스테이지, 크기, 포맷), 처음 4번의 `Present` 직후 백버퍼를 로그 폴더에 `present1..4.bmp` 로 저장.
+
+```powershell
+$env:WPFGFX_DX11_LOG = "$PWD	ests\out\dx11.log"
+.	ests\SmokeAppin\Release
+et8.0-windows\win-x64\SmokeApp.exe --wpfgfx tests\out\dll --screenshot tests\out
+et8.png --exit
+```
