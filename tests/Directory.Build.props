@@ -1,0 +1,8 @@
+<!-- Stops the dotnet/wpf Arcade build props from applying to the projects under dx11/.
+     These are ordinary apps built with the globally installed .NET SDK. -->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps>
+  </PropertyGroup>
+</Project>

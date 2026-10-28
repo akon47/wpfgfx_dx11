@@ -1,0 +1,12 @@
+# tests/ 아래는 업스트림 dotnet/wpf의 분석기 규칙(루트 .editorconfig)을 물려받지 않는다.
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{xml,csproj,props,targets,json}]
+indent_size = 2

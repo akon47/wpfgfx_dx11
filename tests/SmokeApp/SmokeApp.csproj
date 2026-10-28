@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Exe (not WinExe) so the report prints to the console; the window still shows. -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(SmokeTfm)' != ''">$(SmokeTfm)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.*" />
+  </ItemGroup>
+
+  <!-- Drop-in test: dotnet build -p:WpfGfxOverrideDir=<dir containing wpfgfx_cor3.dll> -->
+  <ItemGroup Condition="'$(WpfGfxOverrideDir)' != ''">
+    <None Include="$(WpfGfxOverrideDir)\*.dll;$(WpfGfxOverrideDir)\*.pdb" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
