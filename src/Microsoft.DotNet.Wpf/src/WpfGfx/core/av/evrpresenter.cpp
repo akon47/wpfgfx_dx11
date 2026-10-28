@@ -1362,7 +1362,7 @@ NewMixerDevice(
 
     if (pIMixerDevice == NULL)
     {
-        // No D3D9 device behind the D3D11 engine device until M11.
+        // No media D3D9Ex device could be created for this engine device (D25).
         IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
     }
 
@@ -1972,6 +1972,21 @@ ProcessOneSample(
     }
     else
     {
+        //
+        // The mixer wrote a new frame into the sample's buffer: let the buffer
+        // drop cached copies and wait for the media device's GPU work, so the
+        // engine device never samples a half-written shared texture (D25).
+        //
+        {
+            CMFMediaBuffer *pMediaBuffer = NULL;
+
+            if (SUCCEEDED(ConvertSampleToMediaBuffer(pISample, &pMediaBuffer)))
+            {
+                IGNORE_HR(pMediaBuffer->NotifyMixerWrote());
+                pMediaBuffer->Release();
+            }
+        }
+
         IFC(pISample->GetSampleTime(&sampleTime));
 
         LogAVDataM(
@@ -3359,6 +3374,18 @@ GetSWDevice(
 
     IFC(pD3DDeviceManager->GetSWDevice(ppD3DDevice));
 
+    //
+    // Even the software fallback mixes on a D3D9Ex device (D25): the EVR
+    // mixer has no system memory mode.
+    //
+    hr = AVEnsureMediaDevice9(*ppD3DDevice);
+
+    if (FAILED(hr))
+    {
+        ReleaseInterface(*ppD3DDevice);
+        IFC(hr);
+    }
+
 Cleanup:
     if (pD3DDeviceManager)
     {
@@ -3431,6 +3458,17 @@ EvrPresenter::AVSurfaceRenderer::GetHWDevice(
             ppD3DDevice,
             NULL,
             NULL));
+
+    //
+    // The mixer runs on a D3D9Ex device of the same adapter (D25).
+    //
+    hr = AVEnsureMediaDevice9(*ppD3DDevice);
+
+    if (FAILED(hr))
+    {
+        ReleaseInterface(*ppD3DDevice);
+        IFC(hr);
+    }
 
 Cleanup:
 

@@ -48,7 +48,10 @@ CHWMFMediaBuffer(
         m_pIMixerTexture(NULL),
         m_fTextureCachedOnBitmap(false),
         m_pBitmap(NULL),
-        m_surfaceLocked(false)
+        m_surfaceLocked(false),
+        m_hSharedMixerTexture(NULL),
+        m_pIMixerTexture11(NULL),
+        m_pIMixerQuery(NULL)
 {
     TRACEF(NULL);
 
@@ -79,6 +82,8 @@ CHWMFMediaBuffer::
     ReleaseInterface(m_pIMixerSurface);
 
     ReleaseInterface(m_pBitmap);
+    ReleaseInterface(m_pIMixerTexture11);
+    ReleaseInterface(m_pIMixerQuery);
 }
 
 //+-----------------------------------------------------------------------------
@@ -199,7 +204,7 @@ Init(
 
     if (pIMixerDevice == NULL)
     {
-        // No D3D9 device behind the D3D11 engine device until M11.
+        // No media D3D9Ex device for this engine device (D25).
         IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
     }
 
@@ -288,7 +293,7 @@ CreateMixerTexture(
 
     if (pIMixerDevice == NULL)
     {
-        // No D3D9 device behind the D3D11 engine device until M11.
+        // No media D3D9Ex device for this engine device (D25).
         IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
     }
 
@@ -300,7 +305,7 @@ CreateMixerTexture(
             ddsd.Format,
             ddsd.Pool,
             &m_pIMixerTexture,
-            NULL));         // No shared handle to the texture.
+            &m_hSharedMixerTexture));    // Opened on the engine's D3D11 device (D25)
 
 Cleanup:
 
@@ -350,9 +355,26 @@ CacheTextureOnBitmap(
         //
         Assert(m_pIMixerTexture);
 
-        // The mixer texture is a D3D9 texture; caching it on the D3D11 engine
-        // bitmap is reworked in M11.
-        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+        //
+        // Open the D3D9Ex shared texture on the engine device once, then cache
+        // it on the bitmap as its color source: no copy per frame (D25).
+        //
+        if (m_pIMixerTexture11 == NULL)
+        {
+            IFC(m_pRenderDevice->GetD3DDeviceNoRef()->OpenSharedResource(
+                m_hSharedMixerTexture,
+                __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void **>(&m_pIMixerTexture11)
+                ));
+        }
+
+        IFC(CacheHwTextureOnBitmap(
+            m_pIMixerTexture11,
+            m_pBitmap,
+            m_pRenderDevice
+            ));
+
+        MIL_DX11_LOG("media: mixer texture %ux%u shared to the engine device (zero copy)", m_uiWidth, m_uiHeight);
 
         m_fTextureCachedOnBitmap = true;
     }
@@ -370,6 +392,41 @@ Cleanup:
 //
 //  Synopsis:
 //      Gets a surface description based on our current height and the pool.
+//
+//------------------------------------------------------------------------------
+HRESULT
+CHWMFMediaBuffer::
+NotifyMixerWrote(
+    void
+    )
+{
+    HRESULT             hr = S_OK;
+    IDirect3DDevice9    *pIMixerDevice = NULL;
+
+    TRACEF(&hr);
+
+    // Cross-adapter displays copy through system memory again.
+    m_systemMemoryValid = false;
+
+    GetUnderlyingDevice(m_pMixerDevice, &pIMixerDevice);
+
+    if (pIMixerDevice != NULL)
+    {
+        IFC(AVWaitForMediaDevice9(pIMixerDevice, &m_pIMixerQuery));
+    }
+
+Cleanup:
+    ReleaseInterface(pIMixerDevice);
+
+    EXPECT_SUCCESS(hr);
+
+    RRETURN(hr);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CHWMFMediaBuffer::GetSurfaceDescription
 //
 //------------------------------------------------------------------------------
 HRESULT
@@ -452,6 +509,12 @@ CopyBitmap(
     //
     if (fetchData)
     {
+        static LONG s_cLogs = 0;
+        if (InterlockedIncrement(&s_cLogs) <= 3)
+        {
+            MIL_DX11_LOG("media: frame copied through system memory (display on another device)");
+        }
+
         IFC(pIMixerDevice->GetRenderTargetData(m_pIMixerSurface, m_pIBitmapSurface));
     }
 

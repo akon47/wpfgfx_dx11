@@ -187,7 +187,7 @@ Init(
 
     if (pIDevice == NULL)
     {
-        // No D3D9 device behind the D3D11 engine device until M11.
+        // No media D3D9Ex device for this engine device (D25).
         IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
     }
 
@@ -206,6 +206,8 @@ Init(
     // this to be lockable.
     //
     IFC(CMFMediaBuffer::Init(m_pIBitmapSurface));
+
+    MIL_DX11_LOG("media: software buffer %ux%u (lockable render target on the media device)", m_uiWidth, m_uiHeight);
 
 Cleanup:
     ReleaseInterface(pIDevice);

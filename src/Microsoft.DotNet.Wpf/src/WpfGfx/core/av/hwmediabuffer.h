@@ -58,6 +58,12 @@ public:
         void
         );
 
+    __override
+    HRESULT
+    NotifyMixerWrote(
+        void
+        );
+
 protected:
 
     __override
@@ -118,5 +124,11 @@ private:
     IDirect3DSurface9       *m_pIBitmapSurface;
     bool                    m_fTextureCachedOnBitmap;
     bool                    m_surfaceLocked;
+
+    // D25: the mixer texture is shared from the media D3D9Ex device; the
+    // engine (D3D11) device opens it through the handle and samples it as is.
+    HANDLE                  m_hSharedMixerTexture;
+    ID3D11Texture2D         *m_pIMixerTexture11;
+    IDirect3DQuery9         *m_pIMixerQuery;
 };
 
