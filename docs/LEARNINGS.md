@@ -146,3 +146,12 @@ x86 에서는 두 번째 핸들이 NULL 로 읽혀 `E_INVALIDARG` 가 났다(HAN
 Map 할 수 없어 `CD3DSurface::LockRect` 가 `WGXERR_INVALIDCALL` 을 내고, 관리 쪽에는 `UCEERR_RENDERTHREADFAILURE` 로 올라가
 앱이 죽는다(dotnet/wpf-test DrtBasic3D 로 발견). 렌더타깃과 같은 크기의 스테이징 텍스처를 짝으로 두고, 3D 전에는 스테이징에 쓴
 뒤 `CopySubresourceRegion` 으로 올리고, 3D 뒤에는 `GetRenderTargetData` 로 내려받아 읽는다. 게이트의 `software mode` 행이 이 경로를 지킨다.
+
+## L20. 2버퍼 플립 체인은 프로세스의 모든 GPU 동기를 수직 동기에 묶는다 (2026-10-28)
+
+투명 창 부분 갱신 벤치가 스톡 98 fps 인데 D3D11 은 정확히 60 fps 에 CPU 13 ms/프레임이었다. 로그의 타이밍 프로브로 보니
+`UpdateLayeredWindowIndirect` 는 0.1 ms, 리드백의 `Map(READ)` 가 평균 8 ms 였다. 원인은 레이어드 창이 아니라 **같은 프로세스의
+불투명 창**이다. 2버퍼 플립 체인은 프레젠트 뒤 DWM 이 수직 동기 때 버퍼를 놓아줄 때까지 다음 프레임을 그릴 수 없고, 즉시 컨텍스트는
+순서대로 실행되므로 그 뒤에 줄 선 레이어드 창의 복사·`Map` 이 같이 기다린다(드라이버는 그동안 스핀해 CPU 로 잡힌다). 스톡의 비트블트
+프레젠트는 리디렉션 서피스로 복사만 하므로 이런 정체가 없다. 백버퍼를 3개로 하면 사라진다(D29 수정). 교훈: 플립 모델에서 동기
+간격 0 으로 프레젠트하면 버퍼는 최소 3개.

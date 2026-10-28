@@ -126,6 +126,8 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 `--bench <초>`(스모크 앱 옵션)는 사각형 1200개·텍스트 300개·방사형 타원 120개·블러 패널 60개를 매 프레임 움직이는 장면을 그려
 초당 프레임, 프레임당 프로세스 CPU 시간, 프라이빗 메모리를 보고한다. WPF 는 컴포지터의 프레젠트 알림으로 다음 UI 프레임을
 잡으므로 두 스레드 중 느린 쪽의 속도가 나온다.
+`--bench-transparent` 는 벤치 창을 레이어드(`AllowsTransparency`) 창으로, `--bench-partial` 은 움직이는 요소를 24개(왼쪽 위 200×200)로
+줄여 부분 갱신 상황으로 돌린다(D30·D31). 게이트 `-Bench` 는 네 조합(일반·투명·투명+부분)을 스톡과 D3D11 로 각각 기록한다.
 
 ## 확인된 사실 (Phase 0)
 
@@ -147,6 +149,8 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 - 처음 300번의 `SetTexture` 호출(스테이지, 크기, 포맷), 처음 4번의 `Present` 직후 백버퍼를 로그 폴더에 `present1..4.bmp` 로 저장.
 - GDI 프레젠트(투명 창)의 처음 2번은 `UpdateLayeredWindow`에 넘기는 백버퍼를 `gdipresent1..2.bmp`(32비트, 알파 포함)로 저장.
 - `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>`(로그와 별개): n번째 `Present`를 디바이스 손실로 처리해 복구 경로를 시험한다(D24).
+- 로그의 `timing <이름>: avg=.. max=.. over 300` 줄: 레이어드 창 리드백(`gdi readback`), `UpdateLayeredWindowIndirect`(`ulw`),
+  컴포지션의 프레젠트 대기(`wait to present`), 수직 동기 대기(`vblank wait`)를 300회 단위로 평균·최대 ms 로 찍는다(D31).
 
 ```powershell
 $env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"

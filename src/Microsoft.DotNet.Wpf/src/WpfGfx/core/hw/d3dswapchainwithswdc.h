@@ -60,8 +60,14 @@ protected:
         __inout_ecount(1) CD3DResourceManager *pResourceManager
         );
 
+    override void ReleaseD3DResources();
+
 private:
     HDC m_hdcCopiedBackBuffer;
+
+    // D31: full-size staging texture the back buffer is read back through,
+    // only the dirty rectangle per present. Created once with the DIB.
+    ID3D11Texture2D *m_pStagingTexture;
     HBITMAP m_hbmpCopiedBackBuffer;
     __field_bcount(m_cbBuffer) void *m_pBuffer;
     UINT m_cbBuffer;

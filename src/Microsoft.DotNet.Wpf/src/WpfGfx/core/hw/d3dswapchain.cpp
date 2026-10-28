@@ -185,9 +185,11 @@ CD3DSwapChain::CD3DSwapChain(
     m_pDXGISwapChain->AddRef();
 
     m_fFlipModel = false;
+    m_cDXGIBuffers = 1;
     m_pPreviousBackBuffer = NULL;
-    m_fCopyWholeBackBuffer = true;
+    m_cWholeCopiesPending = 0;
     m_rcPendingCopy.SetEmpty();
+    m_rcPreviousFrame.SetEmpty();
 }
 
 #pragma warning( pop )
@@ -395,8 +397,11 @@ CD3DSwapChain::AcquireBackBuffers()
             )));
     }
 
-    m_fCopyWholeBackBuffer = true;
+    // Every buffer but the one being rendered starts out undefined.
+    m_cDXGIBuffers = desc.BufferCount;
+    m_cWholeCopiesPending = (desc.BufferCount > 1) ? desc.BufferCount - 1 : 0;
     m_rcPendingCopy.SetEmpty();
+    m_rcPreviousFrame.SetEmpty();
 
     MIL_DX11_LOG("swap chain %p: %s %ux%u buffers=%u",
                  m_pDXGISwapChain, m_fFlipModel ? "flip" : "bitblt",
@@ -507,7 +512,7 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
     CMILSurfaceRect const rcBuffer(
         0, 0, static_cast<INT>(desc.Width), static_cast<INT>(desc.Height), LTRB_Parameters);
 
-    RECT rgRects[sc_cMaxDirtyRects + 1];
+    RECT rgRects[sc_cMaxDirtyRects + 2];
     UINT cRects = 0;
     const bool fUnknownExtent = (prcPresented == NULL && pDirtyRegion == NULL);
 
@@ -515,12 +520,12 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
     {
         //
         // Nothing rotated: this buffer stays the newest. Remember what it
-        // changed so the other buffer catches up after the next present.
+        // changed so the other buffers catch up after the next present.
         //
 
         if (fUnknownExtent)
         {
-            m_fCopyWholeBackBuffer = true;
+            m_cWholeCopiesPending = max(m_cWholeCopiesPending, 1u);
         }
         else
         {
@@ -528,25 +533,7 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
 
             for (UINT i = 0; i < cRects; i++)
             {
-                CMILSurfaceRect rc(
-                    rgRects[i].left, rgRects[i].top, rgRects[i].right, rgRects[i].bottom, LTRB_Parameters);
-
-                if (rc.IsEmpty())
-                {
-                    continue;
-                }
-
-                if (m_rcPendingCopy.IsEmpty())
-                {
-                    m_rcPendingCopy = rc;
-                }
-                else
-                {
-                    m_rcPendingCopy.left = min(m_rcPendingCopy.left, rc.left);
-                    m_rcPendingCopy.top = min(m_rcPendingCopy.top, rc.top);
-                    m_rcPendingCopy.right = max(m_rcPendingCopy.right, rc.right);
-                    m_rcPendingCopy.bottom = max(m_rcPendingCopy.bottom, rc.bottom);
-                }
+                UnionInto(m_rcPendingCopy, rgRects[i]);
             }
         }
 
@@ -555,13 +542,35 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
 
     ID3D11Texture2D *pBackBuffer = m_rgBackBuffers[0]->ID3DTexture();
 
-    if (m_fCopyWholeBackBuffer || fUnknownExtent)
+    if (m_cWholeCopiesPending > 0 || fUnknownExtent)
     {
         pContext->CopyResource(pBackBuffer, m_pPreviousBackBuffer);
+
+        if (m_cWholeCopiesPending > 0)
+        {
+            m_cWholeCopiesPending--;
+        }
+
+        m_rcPreviousFrame = rcBuffer;
     }
     else
     {
+        //
+        // Buffer 1 holds the frame just presented. The new buffer 0 was last
+        // complete m_cDXGIBuffers - 1 presents ago, so it misses this frame,
+        // whatever skipped presents left behind, and (with three buffers)
+        // the frame before this one.
+        //
+
         cRects = CollectDirtyRects(prcPresented, pDirtyRegion, rgRects, sc_cMaxDirtyRects);
+
+        CMILSurfaceRect rcThisFrame;
+        rcThisFrame.SetEmpty();
+
+        for (UINT i = 0; i < cRects; i++)
+        {
+            UnionInto(rcThisFrame, rgRects[i]);
+        }
 
         if (!m_rcPendingCopy.IsEmpty())
         {
@@ -569,6 +578,16 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
             rgRects[cRects].top = m_rcPendingCopy.top;
             rgRects[cRects].right = m_rcPendingCopy.right;
             rgRects[cRects].bottom = m_rcPendingCopy.bottom;
+            cRects++;
+            UnionInto(rcThisFrame, rgRects[cRects - 1]);
+        }
+
+        if (m_cDXGIBuffers > 2 && !m_rcPreviousFrame.IsEmpty())
+        {
+            rgRects[cRects].left = m_rcPreviousFrame.left;
+            rgRects[cRects].top = m_rcPreviousFrame.top;
+            rgRects[cRects].right = m_rcPreviousFrame.right;
+            rgRects[cRects].bottom = m_rcPreviousFrame.bottom;
             cRects++;
         }
 
@@ -594,8 +613,36 @@ CD3DSwapChain::SyncBackBufferAfterPresent(
                 pBackBuffer, 0, rc.left, rc.top, 0,
                 m_pPreviousBackBuffer, 0, &box);
         }
+
+        m_rcPreviousFrame = rcThisFrame;
     }
 
-    m_fCopyWholeBackBuffer = false;
     m_rcPendingCopy.SetEmpty();
+}
+
+void
+CD3DSwapChain::UnionInto(
+    __inout_ecount(1) CMILSurfaceRect &rcInto,
+    __in_ecount(1) RECT const &rc
+    )
+{
+    if (rc.right <= rc.left || rc.bottom <= rc.top)
+    {
+        return;
+    }
+
+    if (rcInto.IsEmpty())
+    {
+        rcInto.left = rc.left;
+        rcInto.top = rc.top;
+        rcInto.right = rc.right;
+        rcInto.bottom = rc.bottom;
+    }
+    else
+    {
+        rcInto.left = min(rcInto.left, rc.left);
+        rcInto.top = min(rcInto.top, rc.top);
+        rcInto.right = max(rcInto.right, rc.right);
+        rcInto.bottom = max(rcInto.bottom, rc.bottom);
+    }
 }

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -44,6 +44,7 @@ public partial class MainWindow : Window
         string? mediaShot = null;
         int benchSeconds = 0;
         bool benchTransparent = false;
+        bool benchPartial = false;
         string? rtbShot = null;
         bool rtbHardware = false;
         string? fqShot = null;
@@ -63,6 +64,7 @@ public partial class MainWindow : Window
             else if (args[i] == "--media-shot" && i + 1 < args.Length) mediaShot = args[++i];
             else if (args[i] == "--bench" && i + 1 < args.Length) benchSeconds = ParseInt(args[++i]);
             else if (args[i] == "--bench-transparent") benchTransparent = true;
+            else if (args[i] == "--bench-partial") benchPartial = true;
             else if (args[i] == "--rtb" && i + 1 < args.Length) rtbShot = args[++i];
             else if (args[i] == "--rtb-hw") rtbHardware = true;
             else if (args[i] == "--fq" && i + 1 < args.Length) { fqShot = args[++i]; if (fqQueues == 0) fqQueues = 8; }
@@ -170,7 +172,7 @@ public partial class MainWindow : Window
         }
         if (benchSeconds > 0)
         {
-            var bench = new BenchWindow(benchSeconds, benchTransparent) { Owner = this, Left = Left + 20, Top = Top + 60 };
+            var bench = new BenchWindow(benchSeconds, benchTransparent, benchPartial) { Owner = this, Left = Left + 20, Top = Top + 60 };
             bench.Show();
             string result = await bench.Completion;
             bench.Close();
@@ -190,24 +192,27 @@ public partial class MainWindow : Window
     {
         var shadow = new List<(double x, double y)>();
         var body = new List<(double x, double y)>();
+        double maxBlack = 0;   // share of near-zero pixels in the spin cell: stale/undefined buffer content shows up as black
         for (int f = 0; f < frames; f++)
         {
             using (var bmp = ScreenCapture.CaptureBitmap(this))
             {
                 int x0 = bmp.Width * 3 / 4, x1 = bmp.Width, y0 = 0, y1 = bmp.Height / 4;
-                double sx = 0, sy = 0, bx = 0, by = 0; int sn = 0, bn = 0;
+                double sx = 0, sy = 0, bx = 0, by = 0; int sn = 0, bn = 0, black = 0;
                 for (int y = y0; y < y1; y++)
                 {
                     for (int x = x0; x < x1; x++)
                     {
                         var c = bmp.GetPixel(x, y);
                         int sum = c.R + c.G + c.B;
+                        if (sum < 15) black++;
                         if (sum < 80) { sx += x; sy += y; sn++; }                    // shadow (darker than the 32,36,40 background)
                         else if (c.B > 150 && c.R < 110) { bx += x; by += y; bn++; } // blue body
                     }
                 }
                 if (sn > 0) shadow.Add((sx / sn, sy / sn));
                 if (bn > 0) body.Add((bx / bn, by / bn));
+                maxBlack = Math.Max(maxBlack, black / (double)((x1 - x0) * (y1 - y0)));
             }
             await Task.Delay(25);
         }
@@ -218,7 +223,7 @@ public partial class MainWindow : Window
             return pts.Max(p => Math.Sqrt((p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my)));
         }
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "frames={0} shadowCentroidMaxDev={1:F2}px bodyCentroidMaxDev={2:F2}px", frames, Deviation(shadow), Deviation(body));
+            "frames={0} shadowCentroidMaxDev={1:F2}px bodyCentroidMaxDev={2:F2}px blackMax={3:F2}%", frames, Deviation(shadow), Deviation(body), maxBlack * 100);
     }
 
     /// <summary>

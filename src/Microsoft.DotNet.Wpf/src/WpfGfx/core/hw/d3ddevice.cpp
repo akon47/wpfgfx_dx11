@@ -1568,7 +1568,10 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
             && !pParams->GdiCompatible
             && pParams->SampleDesc.Count <= 1;
 
-        desc.BufferCount = fFlipModel ? 2 : max(1u, pParams->BackBufferCount);
+        // Three buffers: with two, the GPU cannot start the next frame until DWM
+        // releases the previous one at vblank, and every GPU sync in the process
+        // (layered window readback, CopyPixels) waits behind that stall.
+        desc.BufferCount = fFlipModel ? 3 : max(1u, pParams->BackBufferCount);
         desc.Scaling = DXGI_SCALING_STRETCH;
         desc.SwapEffect = fFlipModel ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_SEQUENTIAL;
 
@@ -1579,7 +1582,18 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
             m_resourceManager.DestroyResources(CD3DResourceManager::WithDelay);
         }
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        desc.Flags = pParams->GdiCompatible ? DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE : 0;
+        //
+        // D31: a BGRA back buffer presented through GDI is read back by
+        // CD3DSwapChainWithSwDC's own staging texture, so the surface itself
+        // never needs GDI access. Only other formats keep the flag.
+        //
+        const bool fSwDC =
+               pMILDC != NULL
+            && !pMILDC->PresentWithHAL()
+            && (   pParams->BackBufferFormat == DXGI_FORMAT_B8G8R8A8_UNORM
+                || pParams->BackBufferFormat == DXGI_FORMAT_B8G8R8X8_UNORM);
+
+        desc.Flags = (pParams->GdiCompatible && !fSwDC) ? DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE : 0;
 
         AssertRenderFormatIsTestedSuccessfully(desc.Format);
 
@@ -3308,7 +3322,7 @@ CD3DDeviceLevel1::PresentWithGDI(
         SIZE sz = { static_cast<LONG>(uBufferWidth), static_cast<LONG>(uBufferHeight) };
         POINT ptSrc = { 0, 0 };
         HWND hWnd = pMILDC->GetHWND();
-
+        double const msUlwStart = MilDx11QpcMs();
         hr = UpdateLayeredWindowEx(
             hWnd,
             NULL, // front buffer
@@ -3321,6 +3335,7 @@ CD3DDeviceLevel1::PresentWithGDI(
             pMILDC->GetULWFlags(), // flags
             prcSource
             );
+        MilDx11TimingAdd(MilDx11Timing_Ulw, MilDx11QpcMs() - msUlwStart);
         if (hr == HRESULT_FROM_WIN32(ERROR_GEN_FAILURE))
         {
             hr = S_OK;
@@ -5160,7 +5175,9 @@ CD3DDeviceLevel1::WaitForVBlank(UINT uSwapChainIndex)
 
     if (m_pDXGIOutput && IsHALDevice())
     {
+        double const msWaitStart = MilDx11QpcMs();
         MIL_THR(MilTranslateD3D11Error(m_pDXGIOutput->WaitForVBlank()));
+        MilDx11TimingAdd(MilDx11Timing_VBlankWait, MilDx11QpcMs() - msWaitStart);
 
         if (FAILED(hr))
         {

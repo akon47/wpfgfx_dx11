@@ -13,6 +13,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 MtDefine(CRenderTargetManager, MILRender, "CRenderTargetManager");
 
@@ -606,11 +607,15 @@ CRenderTargetManager::Present(
         IFC(WaitForGPU());
     }
 
-    IFC(WaitToPresent(
-        puiRefreshRate, 
-        pePresentationResults, 
-        pqpcPresentationTime
-        ));
+    {
+        double const msWaitStart = MilDx11QpcMs();
+        IFC(WaitToPresent(
+            puiRefreshRate,
+            pePresentationResults,
+            pqpcPresentationTime
+            ));
+        MilDx11TimingAdd(MilDx11Timing_WaitToPresent, MilDx11QpcMs() - msWaitStart);
+    }
 
     //
     // Future Consideration:  Pass the correct refresh to WaitForGPU
