@@ -348,28 +348,38 @@ CHwRenderStateManager::SetRenderTargetView(
 
             for (UINT i = 0; i < MIL_TEXTURE_STAGE_COUNT; i++)
             {
-                bool fConflict = false;
+                bool fBoundConflict = false;
+                bool fShadowConflict = false;
 
-                for (UINT j = 0; j < 2 && !fConflict; j++)
+                if (rgBound[i] != NULL)
                 {
-                    ID3D11ShaderResourceView *pSRV = (j == 0) ? rgBound[i] : m_rgpTextures[i];
-
-                    if (pSRV != NULL)
-                    {
-                        ID3D11Resource *pResource = NULL;
-                        pSRV->GetResource(&pResource);
-                        fConflict = (pResource == pRTResource);
-                        ReleaseInterface(pResource);
-                    }
+                    ID3D11Resource *pResource = NULL;
+                    rgBound[i]->GetResource(&pResource);
+                    fBoundConflict = (pResource == pRTResource);
+                    ReleaseInterface(pResource);
                 }
 
-                if (fConflict)
+                if (m_rgpTextures[i] != NULL)
                 {
-                    // Unbind just this slot now; the next draw re-applies
-                    // whatever the caller sets after the target switch.
+                    ID3D11Resource *pResource = NULL;
+                    m_rgpTextures[i]->GetResource(&pResource);
+                    fShadowConflict = (pResource == pRTResource);
+                    ReleaseInterface(pResource);
+                }
+
+                if (fBoundConflict)
+                {
+                    // Unbind this slot in the context now. A pending (shadow)
+                    // texture for the slot is kept and applied at the next draw.
                     ID3D11ShaderResourceView *pNull = NULL;
                     m_pD3DContext->PSSetShaderResources(i, 1, &pNull);
+                    m_rgfTextureKnown[i] = false;
+                    m_fTexturesDirty = true;
+                }
 
+                if (fShadowConflict)
+                {
+                    // The caller must set a new texture before drawing.
                     m_rgpTextures[i] = NULL;
                     m_rgfTextureKnown[i] = false;
                     m_fTexturesDirty = true;
