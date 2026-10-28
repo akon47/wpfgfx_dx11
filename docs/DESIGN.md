@@ -60,7 +60,7 @@ CD3DTexture   = ID3D11Texture2D* + SRV + 레벨별 CD3DSurface
 CD3DLockableTexture = DYNAMIC(쓰기 전용) 또는 STAGING+DEFAULT 쌍(읽기)
 CD3DSwapChain = IDXGISwapChain1* + 백버퍼 CD3DSurface  (CD3DSwapChainWithSwDC는 GDI 호환 플래그 + IDXGISurface1::GetDC)
 CHwD3DVertexBuffer / IndexBuffer = D3D11_USAGE_DYNAMIC 버퍼, Map(WRITE_DISCARD/NO_OVERWRITE)
-CD3DDeviceManager = 어댑터(LUID)별 디바이스, "SW 디바이스"는 D3D_DRIVER_TYPE_WARP
+CD3DDeviceManager = 디스플레이별 디바이스(스톡과 같음, D23), "SW 디바이스"는 D3D_DRIVER_TYPE_WARP
 CDisplaySet/CDisplay = IDXGIFactory1 → EnumAdapters1 → EnumOutputs, DXGI_OUTPUT_DESC.Monitor
 ```
 
