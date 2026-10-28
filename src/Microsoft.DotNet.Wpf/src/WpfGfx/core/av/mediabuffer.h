@@ -106,6 +106,20 @@ public:
         void
         ) = 0;
 
+    //
+    // The mixer wrote a new frame into this buffer (ProcessOutput succeeded).
+    // Hardware buffers invalidate cached copies and wait for the media
+    // device's GPU work (D25); the software buffer re-locks on next use.
+    //
+    virtual
+    HRESULT
+    NotifyMixerWrote(
+        void
+        )
+    {
+        return S_OK;
+    }
+
     HRESULT
     GetDevice(
         __out   CD3DDeviceLevel1        **ppD3DDevice

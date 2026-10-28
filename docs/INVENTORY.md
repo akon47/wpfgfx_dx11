@@ -45,7 +45,7 @@
 |---|---|---|---|
 | `core/hw` | 82 | 하드웨어 렌더링 전부 | **치환 대상.** §7 체크리스트 |
 | `core/common` | `d3dloader.cpp`, `display.cpp`, `Display.h`, `d3dutils.cpp`, `Tier.cpp` | d3d9.dll 로드, 어댑터·디스플레이 열거, caps→Tier, 포맷 변환 | DXGI 팩터리·어댑터·출력으로 치환. Tier 계산은 Feature Level 기반으로 (§6) |
-| `core/av` | 19 | MediaElement: EVR 프레젠터, DXVA2 디바이스 매니저, 하드웨어/소프트웨어 미디어 버퍼 | `IMFDXGIDeviceManager` + D3D11 비디오 텍스처로 치환. Phase 3 마지막 |
+| `core/av` | 19 | MediaElement: EVR 프레젠터, DXVA2 디바이스 매니저, 하드웨어/소프트웨어 미디어 버퍼 | AV 전용 D3D9Ex 디바이스에서 믹싱하고 공유 서피스로 D3D11에 연결(D25, M11 완료) |
 | `core/resources` | `BlurEffect.cpp`, `DropShadowEffect.cpp`, `ShaderEffect.cpp`, `Effect.cpp`, `PixelShader.cpp` | 내장 효과와 ShaderEffect. 래퍼의 `SetTexture`/`SetSamplerState`/`SetPixelShaderConstantF`/`CreatePixelShader` 호출 | 래퍼 시그니처를 유지하면 거의 그대로. `CreatePixelShader`에 들어오는 ps_2_0/ps_3_0 바이트코드만 D6 변환 |
 | `core/fxjit/PixelShader` | `pstrans.cpp` 등 | 소프트웨어 경로용 DX9 바이트코드→x86 JIT. `d3d9types.h`/`d3d9caps.h` 사설 복사본 포함 | **유지.** 바이트코드 파서는 D6 변환기의 앞단으로 재활용 |
 | `common/DirectXLayer` | `XMath/*`, `D3DX9/*` | 수학 라이브러리 추상화. 빌드는 `DIRECTXMATH`(DirectXMath) 변종을 쓴다(`Graphics.props`). `shader_compiler_xm.hpp`가 `D3DCompile` 호출 | `D3DX9/`는 컴파일되지 않으므로 삭제. 셰이더 컴파일러는 프로필 문자열만 SM4로 |
@@ -80,7 +80,7 @@
 | 글리프 캐시 | `d3dglyphbank.cpp`: 텍스처 아틀라스에 `LockRect`/`UpdateSurface`로 글리프 비트맵 업로드, `GetSurfaceLevel` | `UpdateSubresource` 또는 스테이징 복사 | 텍스트 셰이더는 §5 |
 | 중간 렌더타깃·비트맵 캐시 | `hwtexturert.cpp`, `hwdestinationtexture.cpp`, `HwBitmapCache.cpp`: `D3DUSAGE_RENDERTARGET` 텍스처 | `BIND_RENDER_TARGET \| BIND_SHADER_RESOURCE` 텍스처 + RTV/SRV | 동일 리소스를 RT와 SRV로 번갈아 쓰므로 바인딩 해제 순서 주의 |
 | D3DImage interop | `InteropDeviceBitmap.cpp`: 앱 `IDirect3DSurface9` → 같은 어댑터면 `StretchRect`, 아니면 `GetRenderTargetData`→시스템 메모리; `D3DCAPS2_CANSHARERESOURCE` | 앱 서피스가 D3D9Ex 공유 가능이면 공유 핸들→`OpenSharedResource`; 아니면 interop용 D3D9Ex 디바이스에서 복사. `ID3D11Texture2D`를 `QueryInterface`로 먼저 판별 | D7, D8 |
-| 미디어 | `IDirect3DDeviceManager9`(DXVA2), EVR 프레젠터가 D3D9 서피스에 비디오 프레임, `hwmediabuffer.cpp`가 WPF 텍스처로 복사 | `MFCreateDXGIDeviceManager`, `IMFDXGIDeviceManager::ResetDevice(ID3D11Device)`, 비디오 프로세서 또는 공유 텍스처 | Phase 3 마지막 단계 |
+| 미디어 | `IDirect3DDeviceManager9`(DXVA2), EVR 프레젠터가 D3D9 서피스에 비디오 프레임, `hwmediabuffer.cpp`가 WPF 텍스처로 복사 | D3D9 그대로(AV 전용 D3D9Ex 디바이스), 믹서 텍스처를 공유 핸들로 `OpenSharedResource` 해 엔진 비트맵에 캐시 | M11 완료(D25) |
 | 소프트웨어 폴백 | `swfallback.cpp`, `hwsw3dfallback.cpp`: `D3DPOOL_SYSTEMMEM` 서피스에 소프트웨어 렌더 후 `UpdateSurface` | STAGING/DYNAMIC 텍스처에 쓰고 `CopySubresourceRegion` | 유지 |
 | caps | `D3DCAPS9` 23곳: `MaxTextureWidth/Height`, `PixelShaderVersion`, `VertexShaderVersion`, `TextureCaps(POW2, NONPOW2CONDITIONAL)`, `Caps2(CANAUTOGENMIPMAP, CANSHARERESOURCE)`, `DevCaps2(CAN_STRETCHRECT_FROM_TEXTURES)`, `RasterCaps(SCISSORTEST)`, `TextureAddressCaps(BORDER)`, `StretchRectFilterCaps`, `MaxStreams`, `MaxTextureBlendStages`, `MaxSimultaneousTextures` | Feature Level에서 상수로 도출: FL10 이상이면 텍스처 8192(FL11: 16384), 비2의 거듭제곱 무조건, 보더 지원, 시저 지원, 자동 밉 지원, 공유 지원 | `CheckDeviceFormat`/`CheckDeviceMultiSampleType` → `CheckFormatSupport`/`CheckMultisampleQualityLevels` |
 

@@ -263,6 +263,7 @@ CD3DDeviceLevel1::CD3DDeviceLevel1(
 
     m_fDeviceLostProcessed = false;
     m_fTestDeviceLost = false;
+    m_pMediaDevice9 = NULL;
     m_hrDisplayInvalid = S_OK;
 
     m_dwGPUMarkerFlags = 0;
@@ -663,6 +664,8 @@ CD3DDeviceLevel1::~CD3DDeviceLevel1()
     Enter();
 
     ResetMarkers();
+
+    ReleaseInterface(m_pMediaDevice9);
 
     ReleaseInterface(m_pEffectPipelineVertexShader);
     ReleaseInterface(m_pEffectPipelineVertexBuffer);
@@ -5354,6 +5357,24 @@ CD3DDeviceLevel1::InitializeIMediaDeviceConsumer(
     )
 {
     UNREFERENCED_PARAMETER(pIMediaDeviceConsumer);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DDeviceLevel1::SetMediaDevice9
+//
+//  Synopsis:
+//      Keeps the media D3D9Ex device alive as long as this device (D25).
+//
+//------------------------------------------------------------------------------
+
+void
+CD3DDeviceLevel1::SetMediaDevice9(
+    __in_opt IUnknown *pMediaDevice9
+    )
+{
+    ReplaceInterface(m_pMediaDevice9, pMediaDevice9);
 }
 
 #if DBG

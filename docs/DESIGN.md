@@ -162,8 +162,10 @@ WPF는 매 프레임 더티 사각형만 다시 그리고 나머지는 **백버�
 
 ## 10. 미디어 (`core/av`)
 
-EVR 프레젠터는 DXVA2/D3D9에 묶여 있다. Phase 3의 마지막 단계에서 `IMFDXGIDeviceManager` + `ID3D11VideoProcessor`로 다시 쓴다.
-그 전까지는 하드웨어 비디오 경로를 비활성화하고 소프트웨어 미디어 버퍼(`swmediabuffer.cpp`: 시스템 메모리 프레임 → 텍스처 업로드)만 쓴다.
+EVR 프레젠터는 DXVA2/D3D9에 묶여 있고 표준 EVR 믹서는 D3D9 디바이스만 받는다(D25). 그래서 미디어는 엔진 디바이스마다 같은
+어댑터에 만든 AV 전용 D3D9Ex 디바이스(`core/av/avd3d9.cpp`)에서 디코드·믹싱하고, 믹서 출력 텍스처를 공유 핸들로 엔진의 D3D11
+디바이스에서 열어 비트맵 색 소스로 캐시한다(무복사). 프레임마다 D3D9 이벤트 쿼리로 GPU 완료를 기다린 뒤 컴포지션에 넘긴다.
+`d3d9.dll`은 첫 재생 때만 지연 로드된다. 원래 계획이던 `IMFDXGIDeviceManager` + `ID3D11VideoProcessor`는 믹서까지 바꿔야 해서 접었다.
 
 ## 11. 빌드
 

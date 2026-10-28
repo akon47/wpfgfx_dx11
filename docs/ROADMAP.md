@@ -34,7 +34,7 @@
 - 셰이더(조립기 SM4, 텍스트, 효과, 고정 기능 제거): D11, D15, DESIGN §6 ✅
 - ShaderEffect(D6 세부): DESIGN §7 ✅
 - D3DImage(D7 세부): D14, DESIGN §9 ✅
-- 미디어: D16, DESIGN §10 ✅
+- 미디어: D16→D25, DESIGN §10 ✅
 - 작업 방식: D12(브랜치), D13(첫 마일스톤) ✅
 
 ## Phase 3 — 마일스톤 구현 🔄
@@ -53,7 +53,7 @@
 | M8 | ShaderEffect 변환기 | ✅ 2026-10-28. 스모크 13·14번 셀(ps_2_0, ps_3_0 loop/branch)이 스톡과 일치 |
 | M9 | D3DImage, 새 export, WpfGfx.Dx11 | ✅ 2026-10-28. 스모크 15번(D3D9Ex 서피스)이 스톡과 픽셀 일치, 16번(D3D11 텍스처)은 `WpfGfx.Dx11` 로 표시 |
 | M10 | 투명 창, 멀티 어댑터, 디바이스 제거 복구 | ✅ 2026-10-28. 투명 창 스톡과 픽셀 일치, 두 모니터에 걸친 창 정상, 모의 디바이스 손실 후 복구 |
-| M11 | 미디어 | ⏳ |
+| M11 | 미디어 | ✅ 2026-10-28. MediaElement(H.264 MP4) 재생, 프레임이 스톡과 일치 |
 
 M2~M7 합격 근거(2026-10-28): 스모크 12셀이 모두 하드웨어 경로로 그려지고(Tier 2, .NET 8/10), 스톡 DX9 스크린샷과의 픽셀 차이는
 차이>8 인 픽셀 0.18%, 차이>64 인 픽셀 0.02%(안티앨리어싱 가장자리와 회전 애니메이션 위상). 넓은 커버리지 검증은 Phase 4.
@@ -72,6 +72,11 @@ M10 합격 근거(2026-10-28, GPU 1개·모니터 2개 환경):
   이후 스크린샷이 정상 실행과 회전 위상 외 차이 0. `D3DImage.IsFrontBufferAvailable`이 false→true 로 바뀌고 앱이 백버퍼를 다시 설정하면 15·16번 셀도 복구(.NET 8/10).
   실제 GPU 제거·TDR 은 미검증(D24).
 
+M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.264, 160×120 정지 패턴)가 .NET 8/10에서 `MediaOpened`
+160×120·`HasVideo`, 캡처 프레임이 스톡과 차이>8 픽셀 0.43%(.NET 8/10 모두, 막대 경계 431픽셀). 로그에 D3D9Ex 미디어 디바이스 생성과
+"mixer texture shared to the engine device (zero copy)"가 남고 디버그 레이어 메시지 0. 미검증: 다른 어댑터 디스플레이의 시스템 메모리
+복사 경로, WARP 렌더 디바이스에서의 소프트웨어 버퍼, 인터레이스·DXVA 디코드 포맷 다양성.
+
 ## Phase 4 — 검증과 정리 ⏳
 
 - 스모크 앱 확장(각 단계 전용 케이스), 스톡 대비 스크린샷 자동 비교.
@@ -79,9 +84,10 @@ M10 합격 근거(2026-10-28, GPU 1개·모니터 2개 환경):
   기대: 기본 2D는 비슷(병목은 CPU 쪽 WPF 자체), D3D9On12 환경(인텔 Arc·ARM)과 메모리는 개선. 큰 이득은 아래 두 항목.
 - 투명 창을 DirectComposition + 프리멀티플라이드 알파 스왑체인으로 프레젠트한다(현재는 GPU→CPU 리드백 후 `UpdateLayeredWindow`).
 - 플립 모델 스왑체인 전환(D10의 성능 후속 작업).
+- 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).
 - dotnet/wpf-test의 DRT 중 렌더링 관련 테스트를 교체 DLL로 실행.
 - x86·arm64 빌드.
-- D3D9 흔적 제거 확인(프로세스에 `d3d9.dll`이 D3DImage interop 외에는 로드되지 않음).
+- D3D9 흔적 제거 확인(`d3d9.dll`은 미디어 재생(D25) 외에는 로드되지 않음. 이 PC에서는 보안 소프트웨어가 먼저 로드해 확인이 어렵다, L7).
 - `RenderTargetBitmap`의 하드웨어 경로(D8 옵트인). 지금은 `CMILFactory::CreateBitmapRenderTarget`이 항상 소프트웨어
   `CSwRenderTargetBitmap`을 만들고, `CMilPixelShaderDuce::GetSwPixelShader`의 fxjit은 ps_2_0만 처리해 ps_3_0 `ShaderEffect`는
   통과 셰이더로 대체된다(dotnet/wpf#7856). D3D11 텍스처 RT + 스테이징 리드백으로 효과를 적용한 비트맵을 만든다. M4 이후.

@@ -171,11 +171,22 @@ GetUnderlyingDevice(
     __deref_out IDirect3DDevice9    **ppIDirect3DDevice9
     )
 {
-    MediaDeviceConsumer mdc;
+    //
+    // The media D3D9Ex device that AVEnsureMediaDevice9 created for this
+    // engine device (D25). NULL until a presenter asked for it, or when D3D9
+    // is unavailable; callers treat that as "no video acceleration".
+    //
+    *ppIDirect3DDevice9 = NULL;
 
-    pCD3DDeviceLevel1->InitializeIMediaDeviceConsumer(&mdc);
+    IUnknown *pMediaDevice = pCD3DDeviceLevel1->GetMediaDevice9NoRef();
 
-    mdc.GetIDirect3DDevice9(ppIDirect3DDevice9);
+    if (pMediaDevice != NULL)
+    {
+        IGNORE_HR(pMediaDevice->QueryInterface(
+            __uuidof(IDirect3DDevice9),
+            reinterpret_cast<void **>(ppIDirect3DDevice9)
+            ));
+    }
 }
 
 HRESULT

@@ -39,6 +39,7 @@
 
 #include "internal.h"
 #include "util.h"
+#include "avd3d9.h"
 #include "milav.h"
 #include "eventproxy.h"
 

@@ -73,6 +73,9 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - `--left <x> --top <y>`: 창 위치. 두 모니터에 걸치게 놓으면 디스플레이별 스왑체인 경로를 탄다.
 - `--transparent <png>`: `AllowsTransparency` 창을 주 창 위에 띄우고 `PrintWindow`로 캡처한다(레이어드 윈도우 프레젠트 경로).
   다른 창에 가려지지 않았으면 화면 복사본(`*-screen.png`)도 남긴다.
+- `--media <file> --media-shot <png>`: `MediaElement` 창을 띄워 재생하고 캡처한다(`core/av` EVR 프레젠터 경로, D25).
+  `tests/assets/smptebars.mp4`는 정지 SMPTE 막대(H.264 160×120, 4초)라 캡처 시점에 무관하다.
+  재생성: `ffmpeg -f lavfi -i smptebars=size=160x120:rate=10 -t 4 -pix_fmt yuv420p -c:v libx264 -profile:v baseline -g 10 smptebars.mp4`.
 
 보고서는 stdout과 exe 옆 `smoke-report.txt`에 남는다. 첫 줄 예:
 `Tier=2 RenderMode=Default ps2=True ps3=True maxTex=16384,16384`.

@@ -171,6 +171,15 @@ public:
         __in_ecount(1) IMediaDeviceConsumer *pIMediaDeviceConsumer
         );
 
+    // Media (core/av, D25): the Direct3D 9Ex device on this adapter that the
+    // EVR mixer and DXVA2 use. Created on demand by the AV layer and released
+    // with this device.
+    void SetMediaDevice9(
+        __in_opt IUnknown *pMediaDevice9
+        );
+
+    __out_opt IUnknown *GetMediaDevice9NoRef() const { return m_pMediaDevice9; }
+
     HRESULT CheckRenderTargetFormat(
         DXGI_FORMAT fmtRenderTarget,
         __deref_opt_out_ecount(1) HRESULT const ** const pphrTestGetDC = NULL
@@ -875,6 +884,8 @@ private:
     // chance to destroy resources and notify its manager.
     bool m_fDeviceLostProcessed;
     bool m_fTestDeviceLost;             // WPFGFX_DX11_TEST_DEVICE_LOSS hook fired on this device
+
+    IUnknown *m_pMediaDevice9;          // see SetMediaDevice9
 
     // HRESULT indicating whether the display is invalid
     HRESULT m_hrDisplayInvalid;
