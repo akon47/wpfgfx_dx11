@@ -65,7 +65,7 @@ protected:
     CHwSurfaceRenderTarget(
         __inout_ecount(1) CD3DDeviceLevel1 *pD3DDevice,
         MilPixelFormat::Enum fmtTarget,
-        D3DFORMAT d3dfmtTarget,
+        DXGI_FORMAT d3dfmtTarget,
         DisplayId associatedDisplay
         );
 
@@ -220,7 +220,7 @@ public:
     HRESULT Begin3DInternal(
         FLOAT rZ,
         bool fUseZBuffer,
-        __inout_ecount(1) D3DMULTISAMPLE_TYPE &MultisampleType
+        __inout_ecount(1) DXGI_SAMPLE_DESC &MultisampleType
         );
 
     HRESULT EnsureState(
@@ -240,7 +240,7 @@ public:
         __out_ecount(1) UINT *puHeight
         ) const;
 
-    D3DFORMAT GetD3DTextureFormat() const
+    DXGI_FORMAT GetD3DTextureFormat() const
     {
         return m_d3dfmtTargetSurface;
     }
@@ -256,7 +256,7 @@ public:
     HRESULT PopulateDestinationTexture(
         __in_ecount(1) const CMILSurfaceRect *prcSource,
         __in_ecount(1) const CMILSurfaceRect *prcDest,
-        __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+        __inout_ecount(1) CD3DTexture *pD3DTexture
         );
 
 protected:
@@ -276,7 +276,7 @@ protected:
         );
 
     void Ensure3DRenderTarget(
-        D3DMULTISAMPLE_TYPE MultisampleType
+        __in_ecount(1) const DXGI_SAMPLE_DESC &MultisampleType
         );
 
     HRESULT EnsureDepthState(
@@ -386,7 +386,7 @@ private:
     HRESULT Setup3DRenderTargetAndDepthState(
         FLOAT rZ,
         bool fUseZBuffer,
-        __inout_ecount(1) D3DMULTISAMPLE_TYPE &MultisampleType
+        __inout_ecount(1) DXGI_SAMPLE_DESC &MultisampleType
         );
 
 protected:
@@ -415,7 +415,7 @@ protected:
     // Local copies of the surface information.
     //
 
-    D3DFORMAT const m_d3dfmtTargetSurface;
+    DXGI_FORMAT const m_d3dfmtTargetSurface;
 
 #if DBG
 private:

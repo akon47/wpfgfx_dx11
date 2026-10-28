@@ -30,8 +30,8 @@ CHwBoxColorSource::CHwBoxColorSource(
 {
     SetFilterAndWrapModes(
         MilBitmapInterpolationMode::NearestNeighbor,
-        D3DTADDRESS_CLAMP,
-        D3DTADDRESS_CLAMP
+        D3D11_TEXTURE_ADDRESS_CLAMP,
+        D3D11_TEXTURE_ADDRESS_CLAMP
         );
     
     m_alphaScale = 1.0f;
@@ -158,7 +158,7 @@ CHwBoxColorSource::Realize()
         {
             m_vidMemManager.SetRealizationParameters(
                 m_pDevice,
-                D3DFMT_A8R8G8B8,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
                 4,
                 4,
                 TMML_One
@@ -228,7 +228,7 @@ HRESULT
 CHwBoxColorSource::FillTexture()
 {
     HRESULT hr = S_OK;
-    D3DLOCKED_RECT d3dRect;
+    MilLockedRect d3dRect;
     bool fLockedTexture = false;
 
     IFC(m_vidMemManager.ReCreateAndLockSysMemSurface(

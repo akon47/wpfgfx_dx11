@@ -42,7 +42,7 @@ CHwDisplayRenderTarget::Create(
     __in_ecount_opt(1) HWND hwnd,
     MilWindowLayerType::Enum eWindowLayerType,
     __in_ecount(1) CDisplay const *pDisplay,
-    D3DDEVTYPE type,
+    MilDeviceKind type,
     MilRTInitialization::Flags dwFlags,
     __deref_out_ecount(1) CHwDisplayRenderTarget **ppRenderTarget
     )
@@ -55,7 +55,7 @@ CHwDisplayRenderTarget::Create(
 
     CD3DDeviceLevel1 *pD3DDevice = NULL;
 
-    D3DPRESENT_PARAMETERS D3DPresentParams;
+    MilSwapChainParams D3DPresentParams;
     UINT AdapterOrdinalInGroup;
 
     //
@@ -64,7 +64,7 @@ CHwDisplayRenderTarget::Create(
     //
 
     CD3DDeviceManager *pD3DDeviceManager = CD3DDeviceManager::Get();
-    Assert(pDisplay->D3DObject()); // we should not get here with null pID3D
+    Assert(pDisplay->DXGIFactory()); // we should not get here without DXGI
 
     IFC(pD3DDeviceManager->GetD3DDeviceAndPresentParams(
         hwnd,
@@ -153,7 +153,7 @@ HRESULT
 CHwDisplayRenderTarget::Init(
     __in_ecount_opt(1) HWND hwnd,
     __in_ecount(1) CDisplay const *pDisplay,
-    D3DDEVTYPE type,
+    MilDeviceKind type,
     MilRTInitialization::Flags dwFlags
     )
 {
@@ -183,7 +183,7 @@ CHwDisplayRenderTarget::Init(
 //-------------------------------------------------------------------------
 CHwDisplayRenderTarget::CHwDisplayRenderTarget(
     __inout_ecount(1) CD3DDeviceLevel1 *pD3DDevice,
-    __in_ecount(1) D3DPRESENT_PARAMETERS const &D3DPresentParams,
+    __in_ecount(1) MilSwapChainParams const &D3DPresentParams,
     UINT AdapterOrdinalInGroup,
     DisplayId associatedDisplay
     ) :
@@ -424,20 +424,10 @@ CHwDisplayRenderTarget::Present(
 
     // Note that WGXERR_DISPLAYSTATEINVALID is bubbled up here so the caller is
     // responsible for recreating this object
-    if (m_D3DPresentParams.SwapEffect == D3DSWAPEFFECT_COPY)
-    {
-        AssertConstMsgW(   (  m_MILDC.GetRTInitializationFlags()
-                            & MilRTInitialization::PresentRetainContents
-                              )
-                        || IsTagEnabled(tagMILStepRendering),
-                        L"SwapEffect is copy, but flag don't request this.\n"
-                        L" !!! Ignore this if changing tagMILStepRendering.");
-    }
-    else
-    {
-        // Can't use the dirty region for any other SwapEffect
-        pDirtyRegion = NULL;
-    }
+    //
+    // The DXGI bitblt-model swap chain (D10) always retains the back buffer
+    // contents, so dirty rectangles can always be used.
+    //
 
     // Source and destination are always the same for us.
     IFC(PresentInternal(
@@ -445,11 +435,6 @@ CHwDisplayRenderTarget::Present(
         &presentRect,
         pDirtyRegion
         ));
-
-    if (m_D3DPresentParams.SwapEffect == D3DSWAPEFFECT_DISCARD)
-    {
-        DbgSetInvalidContents();
-    }
 
 #if DBG_STEP_RENDERING
     //
@@ -544,32 +529,14 @@ CHwDisplayRenderTarget::PresentInternal(
 
     Assert(m_D3DPresentParams.hDeviceWindow == m_MILDC.GetHWND());
 
-    if (m_D3DPresentParams.SwapEffect == D3DSWAPEFFECT_COPY)
-    {
-        IFC(m_pD3DDevice->Present(
-            m_pD3DSwapChain,
-            prcSource,
-            prcDest,
-            &m_MILDC,
-            pDirtyRegion,
-            m_dwPresentFlags
-            ));
-    }
-    else
-    {
-        //
-        // When we're flipping we may not specify source/dest rectangles and
-        // dirty regions.
-        //
-        IFC(m_pD3DDevice->Present(
-            m_pD3DSwapChain,
-            NULL,
-            NULL,
-            &m_MILDC,
-            NULL,
-            m_dwPresentFlags
-            ));
-    }
+    IFC(m_pD3DDevice->Present(
+        m_pD3DSwapChain,
+        prcSource,
+        prcDest,
+        &m_MILDC,
+        pDirtyRegion,
+        m_dwPresentFlags
+        ));
 
 Cleanup:
     RRETURN1(hr, S_PRESENT_OCCLUDED);
@@ -644,7 +611,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
 
     rcPresentSource = rcPresentDest;
 
-    IDirect3DSurface9 *pID3DLockableSurface = NULL;
+    ID3D11Texture2D *pStagingTexture = NULL;
     CD3DSurface *pD3DSurface = NULL;
     RECT rcCopySrc;
     bool fShrink = false;
@@ -686,7 +653,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
     // Check if we need to show the contents of a surface other
     // than the presentable one (this HWND RT's backbuffer)
     //
-    D3DSURFACE_DESC const &d3dsd = pD3DSurface->Desc();
+    D3D11_TEXTURE2D_DESC const &d3dsd = pD3DSurface->Desc();
 
     if (pD3DSurface != m_pD3DTargetSurface)
     {
@@ -754,12 +721,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
     // to save/restore the entire presentation surface.
     //
 
-    if (m_D3DPresentParams.SwapEffect != D3DSWAPEFFECT_COPY)
-    {
-        fSaveRestore = true;
-        rcSave.Width = m_uWidth;
-        rcSave.Height = m_uHeight;
-    }
+    // (The bitblt-model swap chain retains contents; no save/restore needed.)
 
     if (fSaveRestore)
     {
@@ -794,7 +756,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
             m_pD3DTargetSurface,
             &rcPresentDest,
             ((fShrink && m_pD3DDevice->DbgCanShrinkRectLinear()) ?
-             D3DTEXF_LINEAR : D3DTEXF_NONE)
+             MilStretchFilter_Linear : MilStretchFilter_None)
             ));
 
         if (FAILED(hr))
@@ -845,73 +807,33 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
         )
     {
         HRESULT hrLocking;
-        RECT rcLock = {
-            0, 0,
-            static_cast<LONG>(d3dsd.Width), static_cast<LONG>(d3dsd.Height)
-        };
-        D3DLOCKED_RECT d3dlr = { 0, NULL };
+        D3D11_MAPPED_SUBRESOURCE mapped = { NULL, 0, 0 };
 
-        // Check if target is lockable
-        if ((d3dsd.Pool == m_pD3DDevice->GetManagedPool()) ||
-            (d3dsd.Pool == D3DPOOL_SYSTEMMEM))
+        //
+        // Copy into a staging texture and map it for read
+        //
+
+        MIL_THRX(hrLocking, m_pD3DDevice->CreateSysMemUpdateSurface(
+            d3dsd.Width,
+            d3dsd.Height,
+            d3dsd.Format,
+            NULL,
+            &pStagingTexture
+            ));
+
+        if (SUCCEEDED(hrLocking))
         {
-            pID3DLockableSurface = pD3DSurface->ID3DSurface();
-            pID3DLockableSurface->AddRef();
-            hrLocking = S_OK;
-        }
-        else
-        {
-            //
-            // Create a lockable copy
-            //
-
-            IDirect3DDevice9 *pID3DDevice = NULL;
-
-            MIL_THRX(hrLocking, pD3DSurface->ID3DSurface()->GetDevice(&pID3DDevice));
-
-            if (SUCCEEDED(hrLocking))
-            {
-                // Not going to guard the allocation with the BEGIN/END
-                // macros because this is DBG code only
-
-                MIL_THRX(hrLocking, pID3DDevice->CreateRenderTarget(
-                    d3dsd.Width,
-                    d3dsd.Height,
-                    d3dsd.Format,
-                    d3dsd.MultiSampleType,
-                    d3dsd.MultiSampleQuality,
-                    TRUE,
-                    &pID3DLockableSurface,
-                    NULL
-                    ));
-
-                if (SUCCEEDED(hrLocking))
-                {
-                    MIL_THRX(hrLocking, pID3DDevice->StretchRect(
-                        pD3DSurface->ID3DSurface(),
-                        &rcLock,
-                        pID3DLockableSurface,
-                        &rcLock,
-                        D3DTEXF_NONE
-                        ));
-
-                    if (FAILED(hrLocking))
-                    {
-                        pID3DLockableSurface->Release();
-                        pID3DLockableSurface = NULL;
-                    }
-                }
-
-                pID3DDevice->Release();
-            }
+            MIL_THRX(hrLocking, m_pD3DDevice->GetRenderTargetData(
+                pD3DSurface->ID3DTexture(),
+                pD3DSurface->Subresource(),
+                pStagingTexture
+                ));
         }
 
         if (SUCCEEDED(hrLocking))
         {
-            hrLocking = THR(pID3DLockableSurface->LockRect(
-                                                        &d3dlr,
-                                                        &rcLock,
-                                                        D3DLOCK_READONLY));
+            MIL_THRX(hrLocking, MilTranslateD3D11Error(m_pD3DDevice->GetD3DContextNoRef()->Map(
+                pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped)));
         }
 
         if (SUCCEEDED(hrLocking))
@@ -920,7 +842,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
                 g_uDPFltrID,
                 DPFLTR_ERROR_LEVEL,
                 "Target surface (0x%x x 0x%x) contents at 0x%p, Pitch=0x%x\n",
-                d3dsd.Width, d3dsd.Height, d3dlr.pBits, d3dlr.Pitch);
+                d3dsd.Width, d3dsd.Height, mapped.pData, mapped.RowPitch);
             fBreak = true;
             fUnlock = true;
         }
@@ -929,9 +851,7 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
             DbgPrintEx(
                 g_uDPFltrID,
                 DPFLTR_ERROR_LEVEL,
-                ((!pID3DLockableSurface) ?
-                 "No surface available to lock for read.\n" :
-                 "Failed to lock surface for read.\n"));
+                "Failed to copy surface for read.\n");
         }
     }
 
@@ -949,14 +869,14 @@ CHwDisplayRenderTarget::ShowSteppedRendering(
 
 Cleanup:
 
-    if (pID3DLockableSurface)
+    if (pStagingTexture)
     {
         if (fUnlock)
         {
-            IGNORE_HR(pID3DLockableSurface->UnlockRect());
+            m_pD3DDevice->GetD3DContextNoRef()->Unmap(pStagingTexture, 0);
         }
 
-        pID3DLockableSurface->Release();
+        pStagingTexture->Release();
     }
 
     if (fSaveRestore)
@@ -1003,7 +923,7 @@ CHwDisplayRenderTarget::DbgStepCreateD3DSurfaceFromBitmapSource(
 
     CHwVidMemTextureManager hwVidMemManager;
     MilPixelFormat::Enum fmtBitmap;
-    D3DLOCKED_RECT d3dLockedRect;
+    MilLockedRect d3dLockedRect;
     WICRect rcCopy;
     UINT uBitmapWidth;
     UINT uBitmapHeight;
@@ -1022,7 +942,7 @@ CHwDisplayRenderTarget::DbgStepCreateD3DSurfaceFromBitmapSource(
 
     hwVidMemManager.SetRealizationParameters(
         m_pD3DDevice,
-        D3DFMT_A8R8G8B8,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
         uBitmapWidth,
         uBitmapHeight,
         TMML_One

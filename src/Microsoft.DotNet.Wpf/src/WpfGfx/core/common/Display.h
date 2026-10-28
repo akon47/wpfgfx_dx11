@@ -251,14 +251,16 @@ public:
     bool DangerousHasDisplayStateChanged() const;
     bool IsNonLocalDisplayPresent() const { return m_fNonLocalDevicePresent; }
 
-    HRESULT GetD3DObjectNoRef(
-        __deref_out_ecount(1) IDirect3D9 **pID3D
+    HRESULT GetDXGIFactoryNoRef(
+        __deref_out_ecount(1) IDXGIFactory1 **ppDXGIFactory
         ) const;
 
-    __out_ecount(1) IDirect3D9* D3DObject() const {return m_pID3D;}
-    __out_ecount(1) IDirect3D9Ex* D3DExObject() const {return m_pID3DEx;}
+    __out_ecount_opt(1) IDXGIFactory1* DXGIFactory() const {return m_pDXGIFactory;}
 
-    // Get HRESULT to detect why D3DObject() returned NULL.
+    // true when DXGI is available, i.e. hardware devices may be created.
+    bool IsD3DAvailable() const { return m_pDXGIFactory != NULL; }
+
+    // Get HRESULT to detect why DXGIFactory() returned NULL.
     HRESULT GetD3DInitializationError() const {return m_hrD3DInitialization;}
 
     UINT GetNumD3DRecognizedAdapters() const { return m_uD3DAdapterCount; }
@@ -312,8 +314,6 @@ public:
                                      ) const;
 
 public:
-    HRESULT EnsureSwRastIsRegistered() const;
-
     static MilGraphicsAccelerationCaps GetNoHardwareAccelerationCaps();
 
 private:
@@ -324,11 +324,9 @@ private:
 
     mutable volatile LONG m_cRef;
 
-    IDirect3D9* m_pID3D;
-    IDirect3D9Ex *m_pID3DEx;
+    IDXGIFactory1* m_pDXGIFactory;
 
     HRESULT m_hrD3DInitialization;
-    mutable HRESULT m_hrSwRastRegistered;
 
     UINT m_uD3DAdapterCount;
 
@@ -369,6 +367,36 @@ private:
     DpiAwarenessContextValue m_defaultDpiAwarenessContextValue;
 };
 
+//+------------------------------------------------------------------------
+//
+// Struct:      MilDisplayMode
+//
+// Synopsis:    Current mode of a display. Replaces D3DDISPLAYMODEEX.
+//              Width == 0 means the mode has not been read.
+//
+//-------------------------------------------------------------------------
+struct MilDisplayMode
+{
+    UINT               Width;
+    UINT               Height;
+    UINT               RefreshRate;     // Hz, 0 when unknown
+    DXGI_FORMAT        Format;          // desktop format closest to GDI bit depth
+    DXGI_MODE_ROTATION Rotation;        // DXGI_MODE_ROTATION_UNSPECIFIED when unknown
+};
+
+//+------------------------------------------------------------------------
+//
+// Function:    MilProbeAdapterFeatureLevel
+//
+// Synopsis:    Highest D3D11 feature level the adapter supports, without
+//              creating a device.
+//
+//-------------------------------------------------------------------------
+HRESULT MilProbeAdapterFeatureLevel(
+    __in_ecount(1) IDXGIAdapter1 *pAdapter,
+    __out_ecount(1) D3D_FEATURE_LEVEL *pFeatureLevel
+    );
+
 MtExtern(CDisplay);
 
 //+------------------------------------------------------------------------
@@ -396,21 +424,16 @@ private:
         __in UINT uDisplayIndex,
         __in_ecount(1) const DISPLAY_DEVICE *pdd
         );
-    //~CDisplay(); not required
+    ~CDisplay();
 
     HRESULT SetMonitorInfo(
         __in HMONITOR hMonitor,
         __in_ecount(1) LPCRECT prcMonitor
         );
 
-    HRESULT ReadMode(
-        __in_ecount_opt(1) IDirect3D9 *pID3D,
-        __in_ecount_opt(1) IDirect3D9Ex *pID3DEx
-        );
+    HRESULT ReadMode();
 
-    void ReadGraphicsAccelerationCaps(
-        __in_ecount(1) IDirect3D9 *pID3D
-        );
+    void ReadGraphicsAccelerationCaps();
 
     bool IsEquivalentTo(
         __in_ecount(1) CDisplay const * pDisplay
@@ -448,24 +471,25 @@ public:
     TierType GetTier() const { return m_Caps.TierValue; }
     UINT GetMemorySize() const { return m_uMemorySize; }
     HRESULT GetMode(
-        __out_xcount_part(sizeof(*pDisplayMode), pDisplayMode->Size) D3DDISPLAYMODEEX *pDisplayMode,
-        __out_ecount_opt(1) D3DDISPLAYROTATION *pDisplayRotation
+        __out_ecount(1) MilDisplayMode *pDisplayMode
         ) const;
-    D3DFORMAT GetFormat() const {return m_DisplayMode.Format;}
+    DXGI_FORMAT GetFormat() const {return m_DisplayMode.Format;}
     UINT GetBitsPerPixel() const {return m_Caps.BitsPerPixel;}
     UINT GetRefreshRate() const {return m_DisplayMode.RefreshRate;}
     __outro_ecount(1) CMILSurfaceRect const &GetDisplayRect() const;
     __outro_ecount(1) DisplaySettings const * GetDisplaySettings() const {return &m_settings;}
-    
-    __out_ecount(1) IDirect3D9* D3DObject() const
+
+    __out_ecount_opt(1) IDXGIFactory1* DXGIFactory() const
     {
-        return m_pDisplaySet->D3DObject();
+        return m_pDisplaySet->DXGIFactory();
     }
 
-    __out_ecount_opt(1) IDirect3D9Ex* D3DExObject() const
-    {
-        return m_pDisplaySet->D3DExObject();
-    }
+    // DXGI adapter (GPU) and output (monitor) this display is attached to.
+    // NULL when DXGI does not know this display (remote or mirror devices).
+    __out_ecount_opt(1) IDXGIAdapter1* DXGIAdapter() const { return m_pDXGIAdapter; }
+    __out_ecount_opt(1) IDXGIOutput* DXGIOutput() const { return m_pDXGIOutput; }
+    UINT GetAdapterIndex() const { return m_uAdapterIndex; }
+    bool HasDXGIAdapter() const { return m_pDXGIAdapter != NULL; }
 
     LUID GetLUID() const { return m_luidD3DAdapter;}
     __out HMONITOR GetHMONITOR() const { return m_hMonitor; }
@@ -497,8 +521,11 @@ private:
     DWORD               m_uGraphicsCardVendorId;
     DWORD               m_uGraphicsCardDeviceId;
 
-    D3DDISPLAYMODEEX    m_DisplayMode;
-    D3DDISPLAYROTATION  m_DisplayRotation;
+    MilDisplayMode      m_DisplayMode;
+
+    IDXGIAdapter1      *m_pDXGIAdapter;
+    IDXGIOutput        *m_pDXGIOutput;
+    UINT                m_uAdapterIndex;    // index in IDXGIFactory1::EnumAdapters1, UINT_MAX if none
 
     MilGraphicsAccelerationCaps m_Caps;
 

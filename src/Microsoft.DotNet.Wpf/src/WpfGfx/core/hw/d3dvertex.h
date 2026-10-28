@@ -5,10 +5,8 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics_d3d
 //      $Keywords:
 //
@@ -19,25 +17,10 @@
 //
 //------------------------------------------------------------------------------
 
-//  Note: no classes derived from CD3DVertexXYZW should be used directly in primitive
-//        rendering code.
-//        The reason is the cost of IDirect3DDevice9::SetFVF() method.
-//        To improve performance, we need to avoid switching FVF whevener it is
-//        reasonable. This means that often we'll use the vertex class that
-//        contains the members that are not really needed for particular case.
-//        This technique will reduce the cost of SetFVF; however it will increase
-//        the cost of rendering itself. Hence there is no best solution,
-//        everything depends on the sequence of primitives in the scene.
-//
-//        In order to provide easy adjustment, another set of classes is declared,
-//        prefixed with "CUVertex" (Unified Vertex). Actually every CUVertex*
-//        is nothing but one of the CD3DVertexXYZW*. Since we don't yet know
-//        better solution, it is important to keep the correspondence
-//        between CD3DVertexXYZW* and CUVertex* classes in single place.
-//
-//        (7/24/2 mikhaill)
-//
-//
+//  Note: WpfGfx uses only four vertex formats (see the history below). Each
+//        maps to one ID3D11InputLayout; MilVertexFormatId is the key used by
+//        the render state manager to pick the layout and the fixed function
+//        emulation vertex shader.
 //
 //  9/10/2002 chrisra Removed the following classes:
 //
@@ -50,13 +33,6 @@
 //      CD3DVertexXYZWUV2
 //      CD3DVertexXYZWUV3
 //      CD3DVertexXYZWUV4
-//
-//      CUVertexD
-//      CUVertexUV
-//      CUVertexDUV
-//      CUVertexUV2
-//      CUVertexUV3
-//      CUVertexUV4
 //
 //      We're moving over to non-transformed vertices so everything with a W component
 //      was removed.  In addition we've found major performance wins by using 1 vertex
@@ -86,6 +62,23 @@
 //
 //------------------------------------------------------------------------
 
+
+//
+// Vertex format identifiers. Replaces the D3D9 FVF code. The value is also the
+// index into the input layout cache.
+//
+enum MilVertexFormatId
+{
+    MilVertexFormat_XYZDUV2    = 0,     // position, diffuse, 2 texture coordinates (32 bytes)
+    MilVertexFormat_XYZDUV6    = 1,     // position, diffuse, 6 texture coordinates (64 bytes)
+    MilVertexFormat_XYZDUV8    = 2,     // position, diffuse, 8 texture coordinates (80 bytes)
+    MilVertexFormat_XYZNDSUV4  = 3,     // position, normal, diffuse, specular, 4 texture coordinates (64 bytes)
+    MilVertexFormat_XYZDUV1    = 4,     // position, diffuse, 1 texture coordinate (24 bytes, 3D meshes)
+    MilVertexFormat_XYZNUV1    = 5,     // position, normal, 1 texture coordinate (32 bytes, 3D meshes)
+
+    MilVertexFormat_Count      = 6,
+    MilVertexFormat_Unknown    = 0xFFFFFFFF
+};
 
 //
 // NUM_OF_VERTEX_TEXTURE_COORDS - expands to number of texture coordinate sets
@@ -120,7 +113,7 @@ public:
         MilPoint2F ptTx[2];
     };
 
-    enum {Format = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX2};
+    enum {Format = MilVertexFormat_XYZDUV2};
 
     __outro_ecount(1) const MilPoint2F &UV0() const { return ptTx[0]; }
     __outro_ecount(1) const MilPoint2F &UV1() const { return ptTx[1]; }
@@ -192,8 +185,8 @@ public:
         };
         MilPoint2F ptTx[4];
     };
-    
-    enum {Format = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX4};
+
+    enum {Format = MilVertexFormat_XYZNDSUV4};
 
     MIL_FORCEINLINE __outro_ecount(1) const D3DVECTOR &GetNormal() const { return Normal; }
     MIL_FORCEINLINE void SetNormal(__in_ecount(1) const D3DVECTOR &_Normal) { Normal = _Normal; }
@@ -239,7 +232,7 @@ public:
         MilPoint2F ptTx[6];
     };
 
-    enum {Format = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX6};
+    enum {Format = MilVertexFormat_XYZDUV6};
 
     __outro_ecount(1) const MilPoint2F &UV0() const { return ptTx[0]; }
     __outro_ecount(1) const MilPoint2F &UV1() const { return ptTx[1]; }
@@ -276,12 +269,12 @@ public:
 //
 // class CD3DVertexXYZDUV8
 //
-// Large vertex format used in high quality blur.  Stores vertices position, 
+// Large vertex format used in high quality blur.  Stores vertices position,
 // Diffuse, and 8 textures stages.
 //
 struct CD3DVertexXYZDUV8
 {
-    enum {Format = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX8};
+    enum {Format = MilVertexFormat_XYZDUV8};
 
     union {
         struct {
@@ -301,7 +294,7 @@ struct CD3DVertexXYZDUV8
             float U4, V4;
             float U5, V5;
             float U6, V6;
-            float U7, V7;            
+            float U7, V7;
         };
         MilPoint2F ptTx[8];
     };
@@ -325,4 +318,73 @@ struct CD3DVertexXYZDUV8
     void UV7(__in_ecount(1) const MilPoint2F &ptUV) { ptTx[7] = ptUV; }
 };
 
+//+-----------------------------------------------------------------------------
+//
+//  Function:  MilVertexFormatStride
+//
+//  Synopsis:  Vertex size in bytes for a vertex format id.
+//
+//------------------------------------------------------------------------------
+MIL_FORCEINLINE UINT
+MilVertexFormatStride(MilVertexFormatId format)
+{
+    switch (format)
+    {
+    case MilVertexFormat_XYZDUV2:   return sizeof(CD3DVertexXYZDUV2);
+    case MilVertexFormat_XYZDUV6:   return sizeof(CD3DVertexXYZDUV6);
+    case MilVertexFormat_XYZDUV8:   return sizeof(CD3DVertexXYZDUV8);
+    case MilVertexFormat_XYZNDSUV4: return sizeof(CD3DVertexXYZNDSUV4);
+    case MilVertexFormat_XYZDUV1:   return 12 + 4 + 8;
+    case MilVertexFormat_XYZNUV1:   return 12 + 12 + 8;
+    default:
+        Assert(false);
+        return 0;
+    }
+}
 
+//+-----------------------------------------------------------------------------
+//
+//  Function:  MilVertexFormatTexCoordCount
+//
+//  Synopsis:  Number of texture coordinate sets in a vertex format.
+//
+//------------------------------------------------------------------------------
+MIL_FORCEINLINE UINT
+MilVertexFormatTexCoordCount(MilVertexFormatId format)
+{
+    switch (format)
+    {
+    case MilVertexFormat_XYZDUV2:   return 2;
+    case MilVertexFormat_XYZDUV6:   return 6;
+    case MilVertexFormat_XYZDUV8:   return 8;
+    case MilVertexFormat_XYZNDSUV4: return 4;
+    case MilVertexFormat_XYZDUV1:   return 1;
+    case MilVertexFormat_XYZNUV1:   return 1;
+    default:
+        Assert(false);
+        return 0;
+    }
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Function:  MilVertexFormatHasNormal / MilVertexFormatHasDiffuse / HasSpecular
+//
+//------------------------------------------------------------------------------
+MIL_FORCEINLINE bool
+MilVertexFormatHasNormal(MilVertexFormatId format)
+{
+    return format == MilVertexFormat_XYZNDSUV4 || format == MilVertexFormat_XYZNUV1;
+}
+
+MIL_FORCEINLINE bool
+MilVertexFormatHasDiffuse(MilVertexFormatId format)
+{
+    return format != MilVertexFormat_XYZNUV1;
+}
+
+MIL_FORCEINLINE bool
+MilVertexFormatHasSpecular(MilVertexFormatId format)
+{
+    return format == MilVertexFormat_XYZNDSUV4;
+}

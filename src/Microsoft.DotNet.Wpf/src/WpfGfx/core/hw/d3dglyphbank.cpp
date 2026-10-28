@@ -321,20 +321,26 @@ HRESULT CD3DGlyphBank::RectFillAlpha(
     )
 {
     HRESULT hr = S_OK;
-    D3DLOCKED_RECT lockedRect;
+    MilLockedRect lockedRect = { 0, NULL };
+    ID3D11DeviceContext *pContext = m_pDevice->GetD3DContextNoRef();
 
     UINT uWidth = srcRect.right - srcRect.left;
     UINT uHeight = srcRect.bottom - srcRect.top;
 
     RECT rcTemp = {0, 0, uWidth, uHeight};
-    IDirect3DSurface9* pTankSurface = pTank->GetSurfaceNoAddref();
-    IDirect3DSurface9* pTempSurface = NULL;
+    ID3D11Texture2D* pTankSurface = pTank->GetSurfaceNoAddref();
+    ID3D11Texture2D* pTempSurface = NULL;
 
     IFC( EnsureTempSurface(uWidth, uHeight, &pTempSurface) );
 
     int srcPitch = fullDataRect.right - fullDataRect.left;
 
-    IFC(pTempSurface->LockRect(&lockedRect, &rcTemp, 0 ) );
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        IFC(MilTranslateD3D11Error(pContext->Map(pTempSurface, 0, D3D11_MAP_WRITE, 0, &mapped)));
+        lockedRect.Pitch = static_cast<INT>(mapped.RowPitch);
+        lockedRect.pBits = mapped.pData;
+    }
 
     if (!WpfGfxSwitches::IsWpfGfxBoundsCheckProtectionDisabled())
     {
@@ -353,7 +359,7 @@ HRESULT CD3DGlyphBank::RectFillAlpha(
             srcRect.bottom < srcRect.top  ||
             lastByteEnd > surfaceSize)
         {
-            IFC( pTempSurface->UnlockRect() );
+            pContext->Unmap(pTempSurface, 0);
             hr = E_FAIL;
             goto Cleanup;
         }
@@ -478,15 +484,17 @@ HRESULT CD3DGlyphBank::RectFillAlpha(
         memset(pDstRow + srcRect.left, 0, srcRect.right - srcRect.left);
     }
 
-    IFC( pTempSurface->UnlockRect() );
+    pContext->Unmap(pTempSurface, 0);
 
     Assert(pTankSurface);
 
-    // Transfer data from system memory to video memory.
+    // Transfer data from the staging texture to video memory.
     IFC( m_pDevice->UpdateSurface(
         pTempSurface,
+        0,
         &rcTemp,
         pTankSurface,
+        0,
         &dstPoint
         ));
 
@@ -507,14 +515,13 @@ Cleanup:
 HRESULT CD3DGlyphBank::EnsureTempSurface(
     UINT uWidth,
     UINT uHeight,
-    __deref_out_ecount(1) IDirect3DSurface9 **ppTempSurface
+    __deref_out_ecount(1) ID3D11Texture2D **ppTempSurface
     )
 {
     Assert(ppTempSurface);
 
     HRESULT hr = S_OK;
-    IDirect3DTexture9 *pTexture = NULL;
-    IDirect3DSurface9 *pSurface = NULL;
+    ID3D11Texture2D *pTexture = NULL;
 
     if (m_pTempSurface == NULL
         || !m_pTempSurface->IsValid()
@@ -522,8 +529,6 @@ HRESULT CD3DGlyphBank::EnsureTempSurface(
         || m_pTempSurface->GetHeight() < uHeight
         )
     {
-        D3DSURFACE_DESC sd;
-
         if (m_pTempSurface)
         {
             m_pTempSurface->DestroyAndRelease();
@@ -533,21 +538,16 @@ HRESULT CD3DGlyphBank::EnsureTempSurface(
         uWidth  = RoundToPow2(uWidth);
         uHeight = RoundToPow2(uHeight);
 
-        sd.Format = m_pDevice->GetAlphaTextureFormat();
-        sd.Type = D3DRTYPE_TEXTURE;
-        sd.Usage = 0;
-        sd.Pool = D3DPOOL_SYSTEMMEM;
-        sd.MultiSampleType = D3DMULTISAMPLE_NONE;
-        sd.MultiSampleQuality = 0;
-        sd.Width = uWidth;
-        sd.Height = uHeight;
-
-        IFC( m_pDevice->CreateTexture(&sd, 1, &pTexture) );
-
-        IFC( pTexture->GetSurfaceLevel(0, &pSurface) );
+        IFC( m_pDevice->CreateSysMemUpdateSurface(
+            uWidth,
+            uHeight,
+            m_pDevice->GetAlphaTextureFormat(),
+            NULL,
+            &pTexture
+            ));
 
         m_pTempSurface = new CD3DGlyphBankTemporarySurface(
-            pSurface,
+            pTexture,
             uWidth,
             uHeight,
             m_pResourceManager
@@ -562,7 +562,6 @@ HRESULT CD3DGlyphBank::EnsureTempSurface(
 
 Cleanup:
     ReleaseInterfaceNoNULL(pTexture);
-    ReleaseInterfaceNoNULL(pSurface);
     return hr;
 }
 
@@ -583,27 +582,29 @@ CD3DGlyphBank::CreateTank(UINT uHeight, BOOL fPersistent)
     Assert(uHeight <= m_uMaxTankHeight);
     AssertMsg(!(uHeight & (uHeight-1)), "CreateTank: height is not a power of two");
 
-    IDirect3DSurface9 *pSurface = NULL;
-    IDirect3DTexture9 *pTexture = NULL;
+    ID3D11ShaderResourceView *pSRV = NULL;
+    ID3D11Texture2D *pTexture = NULL;
     CD3DGlyphTank* pTank = 0;
 
-    D3DSURFACE_DESC sd;
+    D3D11_TEXTURE2D_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
     sd.Format = m_pDevice->GetAlphaTextureFormat();
-    sd.Type = D3DRTYPE_TEXTURE;
-    sd.Usage = 0;
-    sd.Pool = D3DPOOL_DEFAULT;
-    sd.MultiSampleType = D3DMULTISAMPLE_NONE;
-    sd.MultiSampleQuality = 0;
     sd.Width = m_uMaxTankWidth;
     sd.Height = uHeight;
+    sd.MipLevels = 1;
+    sd.ArraySize = 1;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Usage = D3D11_USAGE_DEFAULT;
+    sd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-    IFC( m_pDevice->CreateTexture(&sd, 1, &pTexture) );
+    IFC( m_pDevice->CreateTexture(&sd, NULL, &pTexture) );
 
-    IFC( pTexture->GetSurfaceLevel(0, &pSurface) );
+    IFC( MilTranslateD3D11Error(m_pDevice->GetD3DDeviceNoRef()->CreateShaderResourceView(pTexture, NULL, &pSRV)) );
 
     pTank = new CD3DGlyphTank(
         pTexture,
-        pSurface,
+        pSRV,
         m_uMaxTankWidth,
         uHeight,
         m_pResourceManager
@@ -633,7 +634,7 @@ CD3DGlyphBank::CreateTank(UINT uHeight, BOOL fPersistent)
 
 Cleanup:
     ReleaseInterfaceNoNULL(pTank);
-    ReleaseInterfaceNoNULL(pSurface);
+    ReleaseInterfaceNoNULL(pSRV);
     ReleaseInterfaceNoNULL(pTexture);
     RRETURN(hr);
 }
@@ -730,20 +731,20 @@ CD3DGlyphBank::ReleaseLazyTanks()
 //
 //------------------------------------------------------------------------------
 CD3DGlyphTank::CD3DGlyphTank(
-    __in_ecount(1) IDirect3DTexture9* pTexture,
-    __in_ecount(1) IDirect3DSurface9* pSurface,
+    __in_ecount(1) ID3D11Texture2D* pTexture,
+    __in_ecount(1) ID3D11ShaderResourceView* pSRV,
     UINT widTank,
     UINT heiTank,
     __in_ecount(1) IMILPoolManager *pManager
     )
-    : m_pTexture(pTexture), m_pSurface(pSurface)
+    : m_pTexture(pTexture), m_pSRV(pSRV)
 {
     Assert(pTexture);
-    Assert(pSurface);
+    Assert(pSRV);
     Assert(pManager);
 
     m_pTexture->AddRef();
-    m_pSurface->AddRef();
+    m_pSRV->AddRef();
     m_uWidth = widTank;
     m_uHeight = heiTank;
     m_rWidthReciprocal = 1.f/float(widTank);
@@ -780,7 +781,7 @@ CD3DGlyphTank::StubifyForReuseAndRelease()
     if (IsValid())
     {
         Assert(m_pManager);
-        pNewTank = new CD3DGlyphTank(m_pTexture, m_pSurface,
+        pNewTank = new CD3DGlyphTank(m_pTexture, m_pSRV,
                                      m_uWidth, m_uHeight,
                                      m_pManager);
     }
@@ -927,9 +928,8 @@ CD3DGlyphTank::InitResource(
     )
 {
     //
-    // Possible texture formats are D3DFMT_A8, D3DFMT_L8 and D3DFMT_P8
-    // (see CD3DRenderState::InitAlphaTextures()); all of them spend
-    // 1 byte per pixel so we need not multiply by pixel size.
+    // The texture format is DXGI_FORMAT_A8_UNORM: 1 byte per pixel so we
+    // need not multiply by pixel size.
     //
     UINT uResourceSize = m_uWidth * m_uHeight;
 
@@ -963,8 +963,8 @@ void CD3DGlyphTank::ReleaseD3DResources()
     Assert(IsValid() == m_fResourceValid);
 
     // This context is protected so it is safe to release the D3D resources
-    ReleaseInterface((*const_cast<IDirect3DSurface9 **>(&m_pSurface)));
-    ReleaseInterface((*const_cast<IDirect3DTexture9 **>(&m_pTexture)));
+    ReleaseInterface((*const_cast<ID3D11ShaderResourceView **>(&m_pSRV)));
+    ReleaseInterface((*const_cast<ID3D11Texture2D **>(&m_pTexture)));
 
     return;
 }
@@ -980,7 +980,7 @@ void CD3DGlyphTank::ReleaseD3DResources()
 //
 //------------------------------------------------------------------------------
 CD3DGlyphBankTemporarySurface::CD3DGlyphBankTemporarySurface(
-    __in_ecount(1) IDirect3DSurface9* pSurface,
+    __in_ecount(1) ID3D11Texture2D* pSurface,
     UINT uWidth,
     UINT uHeight,
     __in_ecount(1) IMILPoolManager *pManager
@@ -1020,7 +1020,7 @@ CD3DGlyphBankTemporarySurface::~CD3DGlyphBankTemporarySurface()
 //------------------------------------------------------------------------------
 void CD3DGlyphBankTemporarySurface::ReleaseD3DResources()
 {
-    ReleaseInterface((*const_cast<IDirect3DSurface9 **>(&m_pSurface)));
+    ReleaseInterface((*const_cast<ID3D11Texture2D **>(&m_pSurface)));
 }
 
 

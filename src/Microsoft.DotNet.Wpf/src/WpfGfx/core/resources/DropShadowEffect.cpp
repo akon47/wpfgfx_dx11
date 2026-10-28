@@ -578,7 +578,7 @@ CMilDropShadowEffectDuce::ApplyEffect(
         pDevice, 
         static_cast<UINT>(uIntermediateWidth), 
         static_cast<UINT>(uIntermediateHeight), 
-        D3DFMT_A8R8G8B8,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
         &pTexture_B));
 
     Assert(pTexture_B != NULL);

@@ -56,7 +56,7 @@
 #include <wmpids.h>
 #include <control.h> // for IVideoWindow
 #include <uuids.h>
-#include <D3d9.h>
+#include "d3d9interop.h"
 #include <Vmr9.h>
 #include <time.h>
 #include <attributesbase.h>

@@ -13,12 +13,11 @@
 //      $Keywords:
 //
 //  $Description:
-//      Implements CD3DDeviceManager which maintains a list of existing D3D
+//      Implements CD3DDeviceManager which maintains a list of existing D3D11
 //      devices via the CD3DDeviceLevel1 wrappers and creates new
 //      CD3DDeviceLevel1's as they are needed.
 //
-//      Also keeps a shared NullRef Device for creation of our Device
-//      Independent objects.
+//      Also keeps a shared WARP device for software 3D rendering.
 //
 //  $ENDTAG
 //
@@ -26,11 +25,9 @@
 
 #include "precomp.hpp"
 
-#define ENABLE_NON_LDDM_DWM 1
-
 ExternTag(tagD3DStats);
-DeclareTag(tagDisablePureDevice, "MIL-HW", "Disable pure device");
 DeclareTag(tagDisableHWGroupAdapterSupport, "MIL-HW", "Disable HW group adapter support");
+DeclareTag(tagD3DDebugLayer, "MIL-HW", "Create D3D11 devices with the debug layer");
 
 MtExtern(D3DDevice);
 
@@ -45,7 +42,7 @@ CD3DDeviceManager g_D3DDeviceManager;
 //      Initialize global D3D device manager
 //
 //------------------------------------------------------------------------------
-__checkReturn HRESULT 
+__checkReturn HRESULT
 CD3DDeviceManager::Create()
 {
     HRESULT hr = S_OK;
@@ -62,7 +59,7 @@ CD3DDeviceManager::Create()
 Cleanup:
     RRETURN(hr);
 }
-    
+
 //+-----------------------------------------------------------------------------
 //
 //  Member:
@@ -72,18 +69,18 @@ Cleanup:
 //      Uninitialize global D3D device manager
 //
 //------------------------------------------------------------------------------
-void 
+void
 CD3DDeviceManager::Delete()
 {
     if (g_D3DDeviceManager.m_fD3DLoaded)
     {
-        ReleaseInterface(g_D3DDeviceManager.m_pID3D);
+        ReleaseInterface(g_D3DDeviceManager.m_pDXGIFactory);
         ReleaseInterface(g_D3DDeviceManager.m_pDisplaySet);
         g_D3DDeviceManager.m_fD3DLoaded = false;
     }
     else
     {
-        Assert(!g_D3DDeviceManager.m_pID3D);
+        Assert(!g_D3DDeviceManager.m_pDXGIFactory);
         Assert(!g_D3DDeviceManager.m_pDisplaySet);
     }
 
@@ -127,8 +124,6 @@ void CD3DDeviceManager::Release()
 //  Member:
 //      CD3DDeviceManager::NotifyDisplayChange
 //
-//  Synopsis:
-//
 //------------------------------------------------------------------------------
 void CD3DDeviceManager::NotifyDisplayChange(
     __in_ecount(1) CDisplaySet const * pOldDisplaySet,
@@ -137,8 +132,6 @@ void CD3DDeviceManager::NotifyDisplayChange(
 {
     g_D3DDeviceManager.HandleDisplayChange(pOldDisplaySet, pNewDisplaySet);
 }
-
-
 
 //+-----------------------------------------------------------------------------
 //
@@ -152,12 +145,11 @@ void CD3DDeviceManager::NotifyDisplayChange(
 CD3DDeviceManager::CD3DDeviceManager()
 {
     m_cCallers = 0;
-    m_pID3D = NULL;
+    m_pDXGIFactory = NULL;
     m_fD3DLoaded = false;
     m_pDisplaySet = NULL;
     m_pNextDisplaySet = NULL;
     m_iFirstUnusable = 0;
-    m_pNullRefDevice = NULL;
     m_pSWDevice = NULL;
 #if DBG
     m_fDbgCreatingNewDevice = false;
@@ -196,9 +188,8 @@ CD3DDeviceManager::~CD3DDeviceManager()
 
     if (m_fD3DLoaded)
     {
-        ReleaseInterfaceNoNULL(m_pNullRefDevice);
         ReleaseInterfaceNoNULL(m_pSWDevice);
-        ReleaseInterfaceNoNULL(m_pID3D);
+        ReleaseInterfaceNoNULL(m_pDXGIFactory);
     }
 
     ReleaseInterfaceNoNULL(m_pDisplaySet);
@@ -240,6 +231,154 @@ Cleanup:
     RRETURN(hr);
 }
 
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DDeviceManager::CreateD3D11Device
+//
+//  Synopsis:
+//      D3D11CreateDevice 래퍼. feature level 11.1 부터 10.0 까지 내려가며 시도한다.
+//      11.1 을 모르는 런타임은 E_INVALIDARG 를 돌려주므로 그 경우 11.0 부터 다시
+//      시도한다. (D5)
+//
+//------------------------------------------------------------------------------
+HRESULT
+CD3DDeviceManager::CreateD3D11Device(
+    __in_ecount_opt(1) IDXGIAdapter1 *pAdapter,
+    MilDeviceKind type,
+    DWORD dwBehaviorFlags,
+    __deref_out_ecount(1) ID3D11Device **ppDevice,
+    __deref_out_ecount(1) ID3D11DeviceContext **ppContext,
+    __out_ecount(1) D3D_FEATURE_LEVEL *pFeatureLevel
+    )
+{
+    HRESULT hr = S_OK;
+
+    static const D3D_FEATURE_LEVEL rgLevels[] =
+    {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+    };
+
+    *ppDevice = NULL;
+    *ppContext = NULL;
+    *pFeatureLevel = D3D_FEATURE_LEVEL_9_1;
+
+    UINT uFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+
+    if (!(dwBehaviorFlags & MIL_DEVICE_BEHAVIOR_MULTITHREADED))
+    {
+        uFlags |= D3D11_CREATE_DEVICE_SINGLETHREADED;
+    }
+
+#if DBG
+    if (IsTagEnabled(tagD3DDebugLayer))
+    {
+        uFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    }
+#endif
+
+    D3D_DRIVER_TYPE driverType;
+
+    switch (type)
+    {
+    case MilDeviceKind_Hardware:
+        // An explicit adapter requires D3D_DRIVER_TYPE_UNKNOWN
+        driverType = pAdapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+        break;
+
+    case MilDeviceKind_Warp:
+    case MilDeviceKind_Software:
+        driverType = D3D_DRIVER_TYPE_WARP;
+        pAdapter = NULL;
+        break;
+
+    case MilDeviceKind_Reference:
+        driverType = D3D_DRIVER_TYPE_REFERENCE;
+        pAdapter = NULL;
+        break;
+
+    default:
+        IFC(E_INVALIDARG);
+    }
+
+    {
+        FPUStateSandbox oGuard;
+
+        MIL_THR(D3D11CreateDevice(
+            pAdapter,
+            driverType,
+            NULL,
+            uFlags,
+            rgLevels,
+            ARRAYSIZE(rgLevels),
+            D3D11_SDK_VERSION,
+            ppDevice,
+            pFeatureLevel,
+            ppContext
+            ));
+
+        if (hr == E_INVALIDARG)
+        {
+            // Runtime without 11.1 support: retry from 11.0
+            MIL_THR(D3D11CreateDevice(
+                pAdapter,
+                driverType,
+                NULL,
+                uFlags,
+                rgLevels + 1,
+                ARRAYSIZE(rgLevels) - 1,
+                D3D11_SDK_VERSION,
+                ppDevice,
+                pFeatureLevel,
+                ppContext
+                ));
+        }
+
+#if DBG
+        if (FAILED(hr) && (uFlags & D3D11_CREATE_DEVICE_DEBUG))
+        {
+            // Debug layer not installed: retry without it
+            uFlags &= ~D3D11_CREATE_DEVICE_DEBUG;
+
+            MIL_THR(D3D11CreateDevice(
+                pAdapter,
+                driverType,
+                NULL,
+                uFlags,
+                rgLevels + 1,
+                ARRAYSIZE(rgLevels) - 1,
+                D3D11_SDK_VERSION,
+                ppDevice,
+                pFeatureLevel,
+                ppContext
+                ));
+        }
+#endif
+    }
+
+    if (FAILED(hr))
+    {
+        hr = MilTranslateD3D11Error(hr);
+        goto Cleanup;
+    }
+
+    if (*pFeatureLevel < D3D_FEATURE_LEVEL_10_0)
+    {
+        IFC(WGXERR_INSUFFICIENT_GPU_CAPS);
+    }
+
+Cleanup:
+    if (FAILED(hr))
+    {
+        ReleaseInterface(*ppContext);
+        ReleaseInterface(*ppDevice);
+    }
+
+    RRETURN(hr);
+}
 
 //+-----------------------------------------------------------------------------
 //
@@ -247,7 +386,7 @@ Cleanup:
 //      CD3DDeviceManager::GetSWDevice
 //
 //  Synopsis:
-//      Creates and holds onto a single D3DDEVTYPE_SW device.
+//      Creates and holds onto a single WARP device (replaces D3DDEVTYPE_SW).
 //
 //  Return Value:
 //      S_OK if it was successfully able to use an existing or create a new
@@ -261,15 +400,16 @@ HRESULT CD3DDeviceManager::GetSWDevice(
     HRESULT hr = S_OK;
 
     *ppDevice = NULL;
-    
+
     // Start a critical section to make sure we only create one device.
 
     CGuard<CCriticalSection> oGuard(m_csManagement);
 
-    IDirect3DDevice9 *pIDirect3DDevice = NULL;
+    ID3D11Device *pID3DDevice = NULL;
+    ID3D11DeviceContext *pID3DContext = NULL;
     CD3DDeviceLevel1 *pDeviceLevel1 = NULL;
-    
-    if (m_pID3D == NULL)
+
+    if (m_pDXGIFactory == NULL)
     {
         //
         // Initialize d3d references
@@ -278,56 +418,35 @@ HRESULT CD3DDeviceManager::GetSWDevice(
         IFC(InitializeD3DReferences(NULL));
     }
 
-    Assert(m_pID3D);
+    Assert(m_pDXGIFactory);
     Assert(m_pDisplaySet);
-    Assert(m_pDisplaySet->D3DObject() == m_pID3D);
-    IFC(m_pDisplaySet->EnsureSwRastIsRegistered());
+    Assert(m_pDisplaySet->DXGIFactory() == m_pDXGIFactory);
 
     //
-    // Return our existing NULL ref device or create one
+    // Return our existing WARP device or create one
     //
 
     if (m_pSWDevice == NULL)
     {
-        D3DPRESENT_PARAMETERS presentParams;
+        D3D_FEATURE_LEVEL featureLevel;
 
-        ZeroMemory(&presentParams, sizeof(D3DPRESENT_PARAMETERS));
-        presentParams.BackBufferWidth = 1;
-        presentParams.BackBufferHeight = 1;
-        presentParams.BackBufferFormat = D3DFMT_X8R8G8B8;
-        presentParams.BackBufferCount = 1;
-        presentParams.SwapEffect = D3DSWAPEFFECT_DISCARD;
-        presentParams.hDeviceWindow = NULL;
-        presentParams.Windowed = TRUE;
-        presentParams.EnableAutoDepthStencil = FALSE;
-        presentParams.AutoDepthStencilFormat = D3DFMT_UNKNOWN;
+        DWORD dwBehaviorFlags = MIL_DEVICE_BEHAVIOR_MULTITHREADED;
 
-        DWORD dwBehaviorFlags =
-            D3DCREATE_SOFTWARE_VERTEXPROCESSING |
-            D3DCREATE_MULTITHREADED |
-            D3DCREATE_FPU_PRESERVE |
-            D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX;
-
-        //
-        // D3D9.0c requires a valid window for CreateDevice.
-        // For windowed targets we are happy to pass any random window
-        // to get things to work.  Since creating our own dummy window
-        // in a library has significant issues behind it including
-        // performance and app compat, we just grab the desktop window.
-        //
-        
-        IFC(m_pID3D->CreateDevice(
-            D3DADAPTER_DEFAULT,
-            D3DDEVTYPE_SW,
-            GetDesktopWindow(),
+        IFC(CreateD3D11Device(
+            NULL,
+            MilDeviceKind_Warp,
             dwBehaviorFlags,
-            &presentParams,
-            &pIDirect3DDevice
+            &pID3DDevice,
+            &pID3DContext,
+            &featureLevel
             ));
 
         IFC(CD3DDeviceLevel1::Create(
-            pIDirect3DDevice,
-            m_pDisplaySet->Display(D3DADAPTER_DEFAULT),
+            pID3DDevice,
+            pID3DContext,
+            featureLevel,
+            MilDeviceKind_Warp,
+            m_pDisplaySet->Display(0),
             this,
             dwBehaviorFlags,
             &pDeviceLevel1
@@ -349,10 +468,11 @@ Cleanup:
     {
         hr = WGXERR_DISPLAYSTATEINVALID;
     }
-    
-    ReleaseInterfaceNoNULL(pIDirect3DDevice);
+
+    ReleaseInterfaceNoNULL(pID3DContext);
+    ReleaseInterfaceNoNULL(pID3DDevice);
     ReleaseInterfaceNoNULL(pDeviceLevel1);
-    
+
     RRETURN(hr);
 }
 
@@ -360,9 +480,6 @@ Cleanup:
 //
 //  Member:
 //      CD3DDeviceManager::IncCallers
-//
-//  Synopsis:
-//      Increments possible callers to Get and non-static methods
 //
 //------------------------------------------------------------------------------
 void CD3DDeviceManager::IncCallers()
@@ -376,9 +493,6 @@ void CD3DDeviceManager::IncCallers()
 //
 //  Member:
 //      CD3DDeviceManager::DecCallers
-//
-//  Synopsis:
-//      Decrements possible callers to Get and non-static methods
 //
 //------------------------------------------------------------------------------
 void CD3DDeviceManager::DecCallers()
@@ -398,20 +512,19 @@ void CD3DDeviceManager::DecCallers()
 
         if (m_fD3DLoaded)
         {
-            if (m_pID3D)
+            if (m_pDXGIFactory)
             {
-                ReleaseInterface(m_pNullRefDevice);
                 CD3DRegistryDatabase::Cleanup();
-                m_pID3D->Release();
-                m_pID3D = NULL;
+                m_pDXGIFactory->Release();
+                m_pDXGIFactory = NULL;
             }
             ReleaseInterface(m_pDisplaySet);
             m_fD3DLoaded = false;
         }
 
         ReleaseInterface(m_pNextDisplaySet);
-        
-        Assert(!m_pID3D);
+
+        Assert(!m_pDXGIFactory);
         Assert(!m_pDisplaySet);
     }
 }
@@ -434,7 +547,7 @@ CD3DDeviceManager::InitializeD3DReferences(
     HRESULT hr = S_OK;
 
     CDisplaySet const *pDisplaySet = NULL;
-    IDirect3D9 *pID3DNoRef = NULL;
+    IDXGIFactory1 *pDXGIFactoryNoRef = NULL;
 
     IFC(g_DisplayManager.DangerousGetLatestDisplaySet(&pDisplaySet));
 
@@ -449,52 +562,52 @@ CD3DDeviceManager::InitializeD3DReferences(
         // cause mismatches with the caller that relies upon pGivenDisplaySet
         // and expects us to use it.
         // Just fail.
-        // 
+        //
 
         IFC(WGXERR_DISPLAYSTATEINVALID);
     }
 
     //
-    // Make sure ID3D is available
+    // Make sure the DXGI factory is available
     //
 
-    IFC(pDisplaySet->GetD3DObjectNoRef(&pID3DNoRef));
+    IFC(pDisplaySet->GetDXGIFactoryNoRef(&pDXGIFactoryNoRef));
 
-    Assert(pID3DNoRef);
+    Assert(pDXGIFactoryNoRef);
 
     Assert(m_cCallers > 0);
 
     Assert(m_fD3DLoaded || (m_rgDeviceList.GetCount() == 0));
 
     //
-    // Check if there is a new D3D that we should be using
+    // Check if there is a new factory that we should be using
     //
 
-    if (m_pID3D != pID3DNoRef)
+    if (m_pDXGIFactory != pDXGIFactoryNoRef)
     {
         //
-        // If there was a prior D3D (and the new one is different) then there
-        // must have been a mode change or other event to invalidate the old
-        // D3D.  All old devices would now be unusable.
-        // Every mode changeis accompanied with HandleDisplayChange() call
-        // that should release m_pID3D and m_pDisplaySet.
+        // If there was a prior factory (and the new one is different) then
+        // there must have been a mode change or other event to invalidate the
+        // old one.  All old devices would now be unusable.
+        // Every mode change is accompanied with HandleDisplayChange() call
+        // that should release m_pDXGIFactory and m_pDisplaySet.
         //
 
-        Assert(!m_pID3D);
+        Assert(!m_pDXGIFactory);
         Assert(!m_pDisplaySet);
 
         //
         // Initialize registry
         //
 
-        IFC(CD3DRegistryDatabase::InitializeFromRegistry(pID3DNoRef));
+        IFC(CD3DRegistryDatabase::InitializeFromRegistry(pDisplaySet->GetDisplayCount()));
 
         //
-        // Save D3D reference
+        // Save factory reference
         //
 
-        m_pID3D = pID3DNoRef;
-        m_pID3D->AddRef();
+        m_pDXGIFactory = pDXGIFactoryNoRef;
+        m_pDXGIFactory->AddRef();
         m_fD3DLoaded = true;
 
         //
@@ -558,7 +671,7 @@ CD3DDeviceManager::HandleDisplayChange(
             ENTER_DEVICE_FOR_SCOPE(*pDevice);
             pDevice->MarkUnusable(false /* This call is entry protected by above Enter */);
 #if DBG
-            // We're depending upon MarkUnusable decrementing this number to avoid 
+            // We're depending upon MarkUnusable decrementing this number to avoid
             // an infinite loop.
             Assert(m_iFirstUnusable == dbgOldFirstUnusable - 1);
 #endif
@@ -573,11 +686,11 @@ CD3DDeviceManager::HandleDisplayChange(
         {
             Assert(m_cCallers > 0);
 
-            if (m_pID3D)
+            if (m_pDXGIFactory)
             {
                 CD3DRegistryDatabase::Cleanup();
-                m_pID3D->Release();
-                m_pID3D = NULL;
+                m_pDXGIFactory->Release();
+                m_pDXGIFactory = NULL;
             }
 
             //
@@ -589,7 +702,7 @@ CD3DDeviceManager::HandleDisplayChange(
         }
         else
         {
-            Assert(!m_pID3D);
+            Assert(!m_pDXGIFactory);
         }
 
         ReleaseInterface(m_pDisplaySet);
@@ -614,54 +727,17 @@ CD3DDeviceManager::HandleDisplayChange(
 void
 ChooseTargetFormat(
     MilRTInitialization::Flags dwFlags,  // Presentation options
-    __out_ecount(1) D3DFORMAT *pFmt      // The format of the target
+    __out_ecount(1) DXGI_FORMAT *pFmt    // The format of the target
     )
 {
     if (dwFlags & MilRTInitialization::NeedDestinationAlpha)
     {
-        *pFmt = D3DFMT_A8R8G8B8;
+        *pFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
     }
     else
     {
-        *pFmt = D3DFMT_X8R8G8B8;
+        *pFmt = DXGI_FORMAT_B8G8R8X8_UNORM;
     }
-}
-
-
-//+-----------------------------------------------------------------------------
-//
-//  Function:
-//      CheckDisplayFormat
-//
-//  Synopsis:
-//      Determine target format and confirm device support with given mode.
-//
-
-HRESULT
-CheckDisplayFormat(
-    __in_ecount(1) IDirect3D9 *pID3D,
-    UINT Adapter,
-    D3DDEVTYPE DeviceType,
-    D3DFORMAT DisplayFormat,
-    MilRTInitialization::Flags RTInitFlags
-    )
-{
-    HRESULT hr = S_OK;
-
-    D3DFORMAT TargetFormat;
-
-    ChooseTargetFormat(RTInitFlags, OUT &TargetFormat);
-
-    IFC(pID3D->CheckDeviceType(
-        Adapter,
-        DeviceType,
-        DisplayFormat,
-        TargetFormat,
-        true // windowed
-        ));
-
-Cleanup:
-    RRETURN(hr);
 }
 
 //+-----------------------------------------------------------------------------
@@ -677,23 +753,23 @@ Cleanup:
 HRESULT
 CD3DDeviceManager::GetDisplayMode(
     __inout_ecount(1) D3DDeviceCreationParameters *pCreateParams,
-    __out_xcount_full(pCreateParams->NumberOfAdaptersInGroup) D3DDISPLAYMODEEX *rgDisplayModes
+    __out_xcount_full(pCreateParams->NumberOfAdaptersInGroup) MilDisplayMode *rgDisplayModes
     ) const
 {
     HRESULT hr = S_OK;
 
     // Since we do not support fullscreen, we cannot create adapter groups.
-    Assert(!(pCreateParams->BehaviorFlags & D3DCREATE_ADAPTERGROUP_DEVICE));
     Assert(pCreateParams->NumberOfAdaptersInGroup == 1);
-    IFC(m_pDisplaySet->Display(pCreateParams->AdapterOrdinal)->GetMode(rgDisplayModes, NULL));
 
-    IFC(CheckDisplayFormat(
-        m_pID3D,
-        pCreateParams->AdapterOrdinal,
-        pCreateParams->DeviceType,
-        rgDisplayModes[0].Format,
-        pCreateParams->RTInitFlags
-        ));
+    if (pCreateParams->AdapterOrdinal >= m_pDisplaySet->GetDisplayCount())
+    {
+        IFC(WGXERR_NO_HARDWARE_DEVICE);
+    }
+
+    IFC(m_pDisplaySet->Display(pCreateParams->AdapterOrdinal)->GetMode(rgDisplayModes));
+
+    // Every feature level 10 device supports the B8G8R8A8/X8 target formats;
+    // there is nothing to check against the display mode here.
 
 Cleanup:
     RRETURN(hr);
@@ -705,7 +781,7 @@ Cleanup:
 //      CD3DDeviceManager::DoesWindowedHwDeviceExist
 //
 //  Synopsis:
-//      Returns 'true' if a non-fullscreen, hardware device exists on the given 
+//      Returns 'true' if a non-fullscreen, hardware device exists on the given
 //      context and adapter id.
 //
 //------------------------------------------------------------------------------
@@ -727,10 +803,10 @@ CD3DDeviceManager::DoesWindowedHwDeviceExist(
         GetDesktopWindow(),           // hwnd doesn't matter for non-fullscreen
         MilRTInitialization::Default,
         uAdapter,
-        D3DDEVTYPE_HAL,
+        MilDeviceKind_Hardware,
         &oCreateParams
         ));
-    
+
     IFC(FindDeviceMatch(
         &oCreateParams,
         0,                  // uStartIndex
@@ -774,22 +850,13 @@ CD3DDeviceManager::FindDeviceMatch(
 
         Assert(oDevInfo.pDeviceLevel1);
 
-        //   Should hFocusWindow be compared?
-        //  hFocusWindow does not need to be the same hwnd for a new
-        //  swapchain as it was for the original hwnd when the device
-        //  was created, but all impacts from using a different hwnd
-        //  for new swapchains needs to be investigated.  There may
-        //  be a perf impact for which window is in focus.
-
         if (   (pCreateParams->DeviceType ==
                 oDevInfo.CreateParams.DeviceType)
             && (   // nothing else matters for SW type since we share a device
-                   (pCreateParams->DeviceType == D3DDEVTYPE_SW)
+                   (pCreateParams->DeviceType == MilDeviceKind_Warp)
                 || (   (pCreateParams->AdapterOrdinal ==
                         oDevInfo.CreateParams.AdapterOrdinal)
-                       // behavior flag are the same excluding D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX
-                    && ( ( (pCreateParams->BehaviorFlags ^ oDevInfo.CreateParams.BehaviorFlags)
-                           & ~D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX) == 0)
+                    && (pCreateParams->BehaviorFlags == oDevInfo.CreateParams.BehaviorFlags)
                    )
                )
            )
@@ -826,10 +893,6 @@ CD3DDeviceManager::FindDeviceMatch(
 //  Synopsis:
 //      Finds an available CD3DDeviceLevel1 object that satisfies the settings
 //      given.
-//
-//  Notes:
-//      pCreateParams->BehaviorFlags may have state of
-//      D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX bit changed upon success.
 //
 //------------------------------------------------------------------------------
 HRESULT
@@ -893,12 +956,12 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
     __in_ecount_opt(1) CDisplay const *pDisplay,                // Targeted display -
                                                                 // can be NULL for SW
 
-    D3DDEVTYPE type,                                            // D3D device type
+    MilDeviceKind type,                                         // device kind
 
     __deref_out_ecount(1) CD3DDeviceLevel1 **ppDeviceLevel1,    // recieves the located
                                                                 // D3D device
 
-    __out_ecount_opt(1) D3DPRESENT_PARAMETERS *pPresentParams,  // receives
+    __out_ecount_opt(1) MilSwapChainParams *pPresentParams,     // receives
                                                                 // presentation
                                                                 // parameters that
                                                                 // should be used to
@@ -929,7 +992,7 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
     }
     else
     {
-        if (type != D3DDEVTYPE_SW)
+        if (type != MilDeviceKind_Warp)
         {
             IFC(WGXERR_INVALIDPARAMETER);
         }
@@ -939,13 +1002,19 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
 
     IFC(InitializeD3DReferences(pDisplay ? pDisplay->DisplaySet() : NULL));
 
-    // Check our registry database to see if we are allowed to create the a 
+    // Check our registry database to see if we are allowed to create the a
     // d3d device on this adapter
 
-    if (type == D3DDEVTYPE_HAL)
+    if (type == MilDeviceKind_Hardware)
     {
-        if (uAdapter >= m_pID3D->GetAdapterCount())
+        if (uAdapter >= m_pDisplaySet->GetDisplayCount())
         {
+            IFC(WGXERR_NO_HARDWARE_DEVICE);
+        }
+
+        if (!m_pDisplaySet->Display(uAdapter)->HasDXGIAdapter())
+        {
+            TRACE_DEVICECREATE_FAILURE(uAdapter, "No DXGI adapter for this display", WGXERR_NO_HARDWARE_DEVICE);
             IFC(WGXERR_NO_HARDWARE_DEVICE);
         }
 
@@ -960,26 +1029,13 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
         if (!fEnabled)
         {
             TRACE_DEVICECREATE_FAILURE(
-                    uAdapter, 
-                    "Registry settings disabled hw acceleration " 
+                    uAdapter,
+                    "Registry settings disabled hw acceleration "
                     "(see HKEY_CURRENT_USER\\Software\\Microsoft\\Avalon.Graphics)", hr
                     );
             IFC(WGXERR_NO_HARDWARE_DEVICE);
         }
     }
-
-    if (type == D3DDEVTYPE_SW)
-    {
-        //
-        // Make sure Sw rasterizer is registered with current ID3D
-        //
-
-        Assert(m_pID3D);
-        Assert(m_pDisplaySet);
-        Assert(m_pDisplaySet->D3DObject() == m_pID3D);
-        IFC(m_pDisplaySet->EnsureSwRastIsRegistered());
-    }
-
 
     IFC(ComposeCreateParameters(
         hwnd,
@@ -994,13 +1050,7 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
         // Get display mode(s) and finalize group support
         //
 
-        DynArrayIA<D3DDISPLAYMODEEX, 4> drgDisplayModes;
-        D3DDISPLAYMODEEX *rgDisplayModes;
-
-        IFC(drgDisplayModes.AddMultiple(
-            CreateParams.NumberOfAdaptersInGroup,
-            &rgDisplayModes
-            ));
+        MilDisplayMode rgDisplayModes[1];
 
         IFC(GetDisplayMode(
             &CreateParams,
@@ -1019,16 +1069,8 @@ CD3DDeviceManager::GetD3DDeviceAndPresentParams(
         //
         // Write present parameters, for specified adapter
         //
-        // Note: For fullscreen case when an existing device is found,
-        //       technically the present parameters should be read from
-        //       appropriate swap chain.  For code simplicity we just assume
-        //       caller is passing the same RTInitFlags for each adapter and
-        //       that ComposePresentParameters can be relied upon to generate
-        //       consistent values.  If caller uses different RTInitFlags then
-        //       the attempt to create a second fullscreen device should fail.
-        //
 
-        D3DPRESENT_PARAMETERS oPresentParameters;
+        MilSwapChainParams oPresentParameters;
 
         if (!pPresentParams)
         {
@@ -1120,16 +1162,6 @@ CD3DDeviceManager::UnusedNotification(
                     //
                     // Make sure this object hasn't since been handed
                     //  back out since its last Release.
-                    //
-                    // Note that if it was handed back out, but was
-                    //  again Released so that the current Ref count is
-                    //  zero, then we will remove the entry now and the
-                    //  pending call to this function will not be able
-                    //  to locate the entry.  This is the primary reason
-                    //  we never return success - the object may have
-                    //  been maanged by this manager, but we won't be
-                    //  able to find it in the list.  In fact that object
-                    //  should be deleted at that point in time.
                     //
 
                     if (pDeviceLevel1->GetRefCount() != 0)
@@ -1226,7 +1258,7 @@ CD3DDeviceManager::UnusableNotification(
         if (m_rgDeviceList[i].pDeviceLevel1 == pDeviceLevel1)
         {
             NotifyDeviceLost(m_rgDeviceList[i]);
-            
+
             m_iFirstUnusable--;
             if (i != m_iFirstUnusable)
             {
@@ -1283,132 +1315,39 @@ CD3DDeviceManager::UnusableNotification(
 //
 //  Synopsis:
 //      Takes MILRender's Initialize/Presentation parameters and translates them
-//      into D3D CreateDevice parameters.
-//
-//  Return Value:
-//      S_OK - successful translation to D3D create parameters
-//
+//      into device creation parameters.
 //
 //------------------------------------------------------------------------------
 HRESULT
 CD3DDeviceManager::ComposeCreateParameters(
     __in_opt HWND hwnd,                             // destination window
     MilRTInitialization::Flags dwFlags,             // RT/device options
-    UINT uAdapter,                                  // D3D adapter ordinal
-    D3DDEVTYPE type,                                // D3D device type
+    UINT uAdapter,                                  // display index
+    MilDeviceKind type,                             // device kind
     __out_ecount(1) D3DDeviceCreationParameters *pD3DCreateParams
     ) const
 {
     HRESULT hr = S_OK;
 
     Assert(m_fD3DLoaded);
-    Assert(m_pID3D);
+    Assert(m_pDXGIFactory);
 
-    // Note: D3D9.0c requires a valid window for CreateDevice.
-
-    // Make sure the window is valid if this is not full screen
-    // or the hwnd is not NULL
+    // Make sure the window is valid if the hwnd is not NULL
     if (hwnd && !IsWindow(hwnd))
     {
         IFC(__HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE));
     }
 
-    D3DCAPS9 caps;
-
-    //
-    // Get adapter capabilites
-    //
-
-    IFC(m_pID3D->GetDeviceCaps(
-        uAdapter, 
-        type, 
-        &caps
-        ));
-
     // Set Creation Parameters
     pD3DCreateParams->AdapterOrdinal = uAdapter;
     pD3DCreateParams->DeviceType = type;
     pD3DCreateParams->hFocusWindow = hwnd;
-
-    //  We need to create with Disable Driver Management EX
-    // flag because if we don't when there's not enough video memory to move a managed
-    // texture to video memory, d3d will disable the texture stage and move on without
-    // reporting any error to us.  With this flag they will return an out of video
-    // memory error.
-
-    pD3DCreateParams->BehaviorFlags = D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX;
-
-    // 
-    // Check if we are an LDDM device.
-    //
-    // The flag D3DCAPS2_CANSHARERESOURCE in caps.Caps2 stands not only for
-    // resources sharing, but also for DX9.L features. 
-    //
-    if ((caps.Caps2 & D3DCAPS2_CANSHARERESOURCE))
-    {
-        // (WinOSBug 1415987)
-        // DWM (fullscreen and no HWND) must avoid D3D's automatic disabling of
-        // screensavers after N calls to Present.  Use of ScreenSaver create flag
-        // accomplishes this.  It is safe to use all the time - windowed or not.
-        // Let fullscreen windowed applications also avoid disabling screensaver's
-        // automatically since we don't really know the nature of the application.
-    
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_SCREENSAVER;
-
-        //
-        //
-        // *** TEMPORARY *** work around AV/corruption issues from us deleting
-        // system memory before we delete the system memory shared surface
-        //
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_DISABLE_PSGP_THREADING; 
-    }
-
-    // Ensure that DX maintains our existing FPU state instead of clobbering it.
-    // Note that this will cause DX to run in our FPU state, i.e., they will not set
-    // to something else and restore.
-
-    pD3DCreateParams->BehaviorFlags |= D3DCREATE_FPU_PRESERVE;
+    pD3DCreateParams->BehaviorFlags = 0;
 
     // We are multithreaded unless MilRTInitialization::SingleThreadedUsage is specified
     if ((dwFlags & MilRTInitialization::SingleThreadedUsage) == 0)
     {
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_MULTITHREADED;
-    }
-    
-#if DBG
-    // We need to disable driver management to get the perf stats from dx
-
-    if (IsTagEnabled(tagD3DStats))
-    {
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_DISABLE_DRIVER_MANAGEMENT;
-    }
-
-#endif
-
-    // Note: 3/04/2003 chrisra - Adding the check for 8 lights here.
-    //  This is the minimum that we currently need, and the requirement
-    //  shouldn't limit the cards we support.
-    // Update: 3/15/2006 jordanpa - we no longer use HW lighting so
-    //  we don't need the 8 restriction
-    if ((caps.DevCaps & D3DDEVCAPS_HWTRANSFORMANDLIGHT) != 0 &&
-        type != D3DDEVTYPE_SW // software device needs software processing
-        )
-    {
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_HARDWARE_VERTEXPROCESSING;
-
-        // Use the pure device if it is available.  Using the pure device is a 
-        // substantial working set improvement and theoretical execution speed
-        // improvement.
-
-        if (((caps.DevCaps & D3DDEVCAPS_PUREDEVICE) != 0)
-            && !IsTagEnabled(tagDisablePureDevice))
-        {
-            pD3DCreateParams->BehaviorFlags |= D3DCREATE_PUREDEVICE;
-        }
-    }
-    else
-    {
-        pD3DCreateParams->BehaviorFlags |= D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+        pD3DCreateParams->BehaviorFlags |= MIL_DEVICE_BEHAVIOR_MULTITHREADED;
     }
 
     pD3DCreateParams->MasterAdapterOrdinal = uAdapter;
@@ -1428,71 +1367,49 @@ Cleanup:
 //
 //  Synopsis:
 //      Takes MILCore's Initialize/Presentation parameters and translates them
-//      into D3D present parameters.
+//      into swap chain parameters.
 //
 //------------------------------------------------------------------------------
 void
 CD3DDeviceManager::ComposePresentParameters(
-    __in_ecount(1) D3DDISPLAYMODEEX const &displayMode,
+    __in_ecount(1) MilDisplayMode const &displayMode,
     __in_ecount(1) D3DDeviceCreationParameters const &CreateParams,
-    __out_ecount(1) D3DPRESENT_PARAMETERS *pD3DPresentParams
+    __out_ecount(1) MilSwapChainParams *pPresentParams
     )
 {
-    // Set Presentation Parameters
-    pD3DPresentParams->BackBufferWidth = 1;
-    pD3DPresentParams->BackBufferHeight = 1;
-    
+    UNREFERENCED_PARAMETER(displayMode);
+
+    ZeroMemory(pPresentParams, sizeof(*pPresentParams));
+
+    // The caller sets the real size before creating a swap chain.
+    pPresentParams->BackBufferWidth = 1;
+    pPresentParams->BackBufferHeight = 1;
+
     ChooseTargetFormat(
         CreateParams.RTInitFlags,
-        OUT &(pD3DPresentParams->BackBufferFormat)
+        OUT &(pPresentParams->BackBufferFormat)
         );
 
-    pD3DPresentParams->Windowed = TRUE;
-    pD3DPresentParams->FullScreen_RefreshRateInHz = 0;
-        
-    pD3DPresentParams->MultiSampleType = D3DMULTISAMPLE_NONE;
-    pD3DPresentParams->MultiSampleQuality = 0;
+    pPresentParams->SampleDesc.Count = 1;
+    pPresentParams->SampleDesc.Quality = 0;
 
-    if ((CreateParams.RTInitFlags & MilRTInitialization::PresentRetainContents) ||
-        IsTagEnabled(tagMILStepRendering))
-    {
-        pD3DPresentParams->SwapEffect = D3DSWAPEFFECT_COPY;
-    }
-    else
-    {
-        pD3DPresentParams->SwapEffect = D3DSWAPEFFECT_DISCARD;
-    }
+    pPresentParams->BackBufferCount = 1;
+    pPresentParams->hDeviceWindow = CreateParams.hFocusWindow;
 
-    pD3DPresentParams->BackBufferCount = 1;
-    pD3DPresentParams->hDeviceWindow = CreateParams.hFocusWindow;
-    pD3DPresentParams->EnableAutoDepthStencil = FALSE;
-    pD3DPresentParams->AutoDepthStencilFormat = D3DFMT_UNKNOWN;
-    // 
-    // Ensure that D3D never presents from one display adapter to the other.
     //
-    pD3DPresentParams->Flags = 0;
-    
-    if ((CreateParams.RTInitFlags & MilRTInitialization::DisableDisplayClipping) == 0)
-    {
-        pD3DPresentParams->Flags |= D3DPRESENTFLAG_DEVICECLIP;
-    }
+    // GDI presentation (layered windows, right-to-left) needs a GDI compatible
+    // back buffer so that IDXGISurface1::GetDC works.
+    //
+    pPresentParams->GdiCompatible =
+        ((CreateParams.RTInitFlags & MilRTInitialization::PresentUsingMask) != MilRTInitialization::PresentUsingHal);
 
     if (CreateParams.RTInitFlags & MilRTInitialization::PresentImmediately)
     {
-        pD3DPresentParams->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+        pPresentParams->SyncInterval = 0;
     }
     else
     {
-        pD3DPresentParams->PresentationInterval = D3DPRESENT_INTERVAL_ONE;
-    }
-    
-    if ((CreateParams.RTInitFlags & MilRTInitialization::PresentUsingMask)  != MilRTInitialization::PresentUsingHal)
-    {
-        //
-        // If we're presenting with GDI we need to have a lockable
-        // backbuffer.
-        //
-        pD3DPresentParams->Flags |= D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+        pPresentParams->SyncInterval = 1;
     }
 
     return;
@@ -1507,9 +1424,6 @@ CD3DDeviceManager::ComposePresentParameters(
 //      CreateNewDevice creates a new D3D device and a new CD3DDeviceLevel1 to
 //      use the D3D device, then adds the device wrapper to the tracking list.
 //
-//  Return Value:
-//      S_OK - New D3D device and wrapper were successfully created
-//
 //------------------------------------------------------------------------------
 HRESULT
 CD3DDeviceManager::CreateNewDevice(
@@ -1517,45 +1431,33 @@ CD3DDeviceManager::CreateNewDevice(
     D3DDeviceCreationParameters *pD3DCreateParams,  // D3D Device creation
                                                     // parameters
     __inout_ecount(1)
-    D3DPRESENT_PARAMETERS *pBasePresentParams,      // Base D3D Presentation
+    MilSwapChainParams *pBasePresentParams,         // Base presentation
                                                     // parameters
     __in_xcount(pD3DCreateParams->NumberOfAdaptersInGroup)
-    D3DDISPLAYMODEEX *rgDisplayModes,               // Array of display modes
+    MilDisplayMode *rgDisplayModes,                 // Array of display modes
 
     __deref_out_ecount(1) CD3DDeviceLevel1 **ppDeviceLevel1
     )
 {
     HRESULT hr = S_OK;
 
+    UNREFERENCED_PARAMETER(rgDisplayModes);
+
     Assert(m_fD3DLoaded);
-    Assert(m_pID3D);
+    Assert(m_pDXGIFactory);
     Assert(m_pDisplaySet);
 
     *ppDeviceLevel1 = NULL;
 
-    D3DPRESENT_PARAMETERS *rgPresentParams;
+    ID3D11Device *pID3DDevice = NULL;
+    ID3D11DeviceContext *pID3DContext = NULL;
+    D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_9_1;
 
-    IDirect3DDevice9 *pID3DDevice = NULL;
-    IDirect3DDevice9Ex *pID3DDeviceEx = NULL;
-
-    IDirect3D9Ex* pID3DEx = NULL;
-    IGNORE_HR(m_pID3D->QueryInterface(IID_IDirect3D9Ex, (void**)&pID3DEx));
-
-    DynArrayIA<D3DPRESENT_PARAMETERS, 4> drgPresentParams;
-
-    rgPresentParams = pBasePresentParams;
-
-    Assert(pBasePresentParams->Windowed);
     Assert(pD3DCreateParams->NumberOfAdaptersInGroup == 1);
-    // When creating the implicit swap chain we
-    //  always use a dummy of 1x1.
-    Assert(rgPresentParams[0].BackBufferWidth == 1);
-    Assert(rgPresentParams[0].BackBufferHeight == 1);
 
     //
-    // Before trying to create a device (especially a fullscreen one which can
-    // itself set the display modes) make sure it hasn't changed since we
-    // acquired mode information.
+    // Before trying to create a device make sure the display state hasn't
+    // changed since we acquired mode information.
     //
 
     if (m_pDisplaySet->DangerousHasDisplayStateChanged())
@@ -1566,117 +1468,22 @@ CD3DDeviceManager::CreateNewDevice(
     {
         MtSetDefault(Mt(D3DDevice));
 
-        {
-            // In a sleep/resume transition, DX may leak D3D resources 
-            // when calling CreateDeviceEx. The amount of memory leaked is between 2MB and 
-            // 7MB per resume/sleep cycle. To work-around this issue we call GetAdapterDisplayMode 
-            // just before trying to create the device. GetAdapterDisplayMode will also fail 
-            // in that particular situation, but will not leak large amounts of memory.  Obviously, 
-            // there is still a potential for this failure to not be discovered by 
-            // GetAdapaterDisplayMode if the internal power state change happens between the
-            // GetAdapterDisplayMode and CreateDeviceEx below. The only fix that will address 
-            // that particular issue is in DX.
-            
-            D3DDISPLAYMODE displayMode;
-            ZeroMemory(&displayMode, sizeof(displayMode));
-            MIL_THR(m_pID3D->GetAdapterDisplayMode(
-                pD3DCreateParams->AdapterOrdinal,
-                &displayMode
-                ));
+        CDisplay const *pDisplay = m_pDisplaySet->Display(pD3DCreateParams->AdapterOrdinal);
 
-            if (FAILED(hr))
-            {
-                if (!IsOOM(hr))
-                {
-                    // We should really check for specific HRESULTs here, but we cannot trust the DX documentation
-                    // and therefore consider all failures besides E_OUTOFMEMORY as invalid display state.                
-                    TraceTag((tagError, "D3D not in a good state before trying to create device. hr = %x. Returning WGXERR_DISPLAYSTATEINVALID", hr));
-                    IFC(WGXERR_DISPLAYSTATEINVALID);
-                }
-                else
-                {
-                    IFC(hr);
-                }
-            }
-        }
-        
-
-        if (pID3DEx)
-        {            
-            MIL_THR(pID3DEx->CreateDeviceEx(
-                pD3DCreateParams->AdapterOrdinal,
-                pD3DCreateParams->DeviceType,
-                pD3DCreateParams->hFocusWindow,
-                pD3DCreateParams->BehaviorFlags,
-                rgPresentParams,
-                NULL, // fullscreen display mode
-                &pID3DDeviceEx
-                ));
-            if (SUCCEEDED(hr))
-            {
-                hr = pID3DDeviceEx->QueryInterface(IID_IDirect3DDevice9, (void**)&pID3DDevice);
-                ReleaseInterface(pID3DDeviceEx);
-            }
-        }
-        else
-        {
-            MIL_THR(m_pID3D->CreateDevice(
-                pD3DCreateParams->AdapterOrdinal,
-                pD3DCreateParams->DeviceType,
-                pD3DCreateParams->hFocusWindow,
-                pD3DCreateParams->BehaviorFlags,
-                rgPresentParams,
-                &pID3DDevice
-                ));
-        }
-
-        //
-        // We now use D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX which isn't available 
-        // on most peoples builds, so we fail to create the dx device.  So, for now,
-        // we fallback on older machines.
-        //
-        //
-
-        if (hr == D3DERR_INVALIDCALL
-            && (pD3DCreateParams->BehaviorFlags & D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX))
-        {
-            pD3DCreateParams->BehaviorFlags &= ~D3DCREATE_DISABLE_DRIVER_MANAGEMENT_EX;
-
-            if (pID3DEx)
-            {
-                MIL_THR(pID3DEx->CreateDeviceEx(
-                    pD3DCreateParams->AdapterOrdinal,
-                    pD3DCreateParams->DeviceType,
-                    pD3DCreateParams->hFocusWindow,
-                    pD3DCreateParams->BehaviorFlags,
-                    rgPresentParams,
-                    NULL, // fullscreen display mode
-                    &pID3DDeviceEx
-                    ));
-                if (SUCCEEDED(hr))
-                {
-                    hr = pID3DDeviceEx->QueryInterface(IID_IDirect3DDevice9, (void**)&pID3DDevice);
-                    ReleaseInterface(pID3DDeviceEx);
-                }
-            }
-            else
-            {
-                MIL_THR(m_pID3D->CreateDevice(
-                    pD3DCreateParams->AdapterOrdinal,
-                    pD3DCreateParams->DeviceType,
-                    pD3DCreateParams->hFocusWindow,
-                    pD3DCreateParams->BehaviorFlags,
-                    rgPresentParams,
-                    &pID3DDevice
-                    ));
-            }
-        }
+        MIL_THR(CreateD3D11Device(
+            (pD3DCreateParams->DeviceType == MilDeviceKind_Hardware) ? pDisplay->DXGIAdapter() : NULL,
+            pD3DCreateParams->DeviceType,
+            pD3DCreateParams->BehaviorFlags,
+            &pID3DDevice,
+            &pID3DContext,
+            &featureLevel
+            ));
 
         if (FAILED(hr))
         {
             TRACE_DEVICECREATE_FAILURE(
                 pD3DCreateParams->AdapterOrdinal,
-                "Failed to create d3d device",  
+                "Failed to create d3d11 device",
                 hr
                 );
 
@@ -1690,7 +1497,7 @@ CD3DDeviceManager::CreateNewDevice(
             for (size_t i = 0; i < m_rgAdapterStatusListeners.GetCount(); i++)
             {
                 m_rgAdapterStatusListeners[i]->NotifyAdapterStatus(
-                    pD3DCreateParams->AdapterOrdinal, 
+                    pD3DCreateParams->AdapterOrdinal,
                     true        // fIsValid
                     );
             }
@@ -1699,12 +1506,10 @@ CD3DDeviceManager::CreateNewDevice(
 
 Cleanup:
 
-    ReleaseInterface(pID3DEx);
-
 #if DBG
     // Note that device creation is in process incase the device becomes
     // unusable during initialization; so that UnusableNotification won't
-    // assert that this new device is not yet in its tracking list. 
+    // assert that this new device is not yet in its tracking list.
     m_fDbgCreatingNewDevice = true;
 #endif
 
@@ -1714,6 +1519,9 @@ Cleanup:
     {
         MIL_THR(CD3DDeviceLevel1::Create(
             pID3DDevice,
+            pID3DContext,
+            featureLevel,
+            pD3DCreateParams->DeviceType,
             m_pDisplaySet->Display(pD3DCreateParams->AdapterOrdinal),
             this,
             pD3DCreateParams->BehaviorFlags,
@@ -1723,10 +1531,7 @@ Cleanup:
 
     if (SUCCEEDED(hr))
     {
-        for (UINT i = 0; SUCCEEDED(hr) && i < pD3DCreateParams->NumberOfAdaptersInGroup; i++)
-        {
-            MIL_THR(pDeviceLevel1->CheckRenderTargetFormat(rgPresentParams[i].BackBufferFormat));
-        }
+        MIL_THR(pDeviceLevel1->CheckRenderTargetFormat(pBasePresentParams->BackBufferFormat));
     }
 
     if (SUCCEEDED(hr))
@@ -1757,9 +1562,8 @@ Cleanup:
         m_rgDeviceList[m_iFirstUnusable].CreateParams  = *pD3DCreateParams;
         m_rgDeviceList[m_iFirstUnusable].fIsDeviceLost = false;
         #if DBG
-            // Hang on to the master (or only) present parameter for dbg info.
-            // It may only be used for asserts.
-            m_rgDeviceList[m_iFirstUnusable].DbgPresentParams = rgPresentParams[0];
+            // Hang on to the present parameters for dbg info.
+            m_rgDeviceList[m_iFirstUnusable].DbgPresentParams = *pBasePresentParams;
         #endif
 
         m_iFirstUnusable++;
@@ -1796,6 +1600,7 @@ Cleanup:
     m_fDbgCreatingNewDevice = false;
 #endif
 
+    ReleaseInterfaceNoNULL(pID3DContext);
     ReleaseInterfaceNoNULL(pID3DDevice);
 
     RRETURN(hr);
@@ -1807,16 +1612,13 @@ Cleanup:
 //  Member:
 //      CD3DDeviceManager::AddAdapterStatusListener
 //
-//  Synopsis:
-//      Adds listener to the list. 
-//
 //------------------------------------------------------------------------------
 
-HRESULT 
+HRESULT
 CD3DDeviceManager::AddAdapterStatusListener(__in IAdapterStatusListener *pListener)
 {
     CGuard<CCriticalSection> oGuard(m_csManagement);
-    
+
     RRETURN(m_rgAdapterStatusListeners.Add(pListener));
 }
 
@@ -1825,16 +1627,13 @@ CD3DDeviceManager::AddAdapterStatusListener(__in IAdapterStatusListener *pListen
 //  Member:
 //      CD3DDeviceManager::RemoveAdapterStatusListener
 //
-//  Synopsis:
-//      Removes listener to the list. 
-//
 //------------------------------------------------------------------------------
 
-void 
+void
 CD3DDeviceManager::RemoveAdapterStatusListener(__in IAdapterStatusListener *pListener)
 {
     CGuard<CCriticalSection> oGuard(m_csManagement);
-        
+
     m_rgAdapterStatusListeners.Remove(pListener);
 }
 
@@ -1846,11 +1645,7 @@ CD3DDeviceManager::RemoveAdapterStatusListener(__in IAdapterStatusListener *pLis
 //  Synopsis:
 //      Notifies all listeners that the device in "info" has been lost. This should be called
 //      whenever a device is being destroyed. fIsDeviceLost protects us from incorrectly
-//      overnotifying in the multi-window case. For example, if one window isn't presenting
-//      when device lost happens then it won't know that its device is lost until it presents and
-//      in the mean time the same device may have already been lost and recreated
-//      by another presenting window. We don't want to send another lost message since 
-//      rendering for that adapter has been restored.
+//      overnotifying in the multi-window case.
 //
 //------------------------------------------------------------------------------
 
@@ -1864,16 +1659,9 @@ CD3DDeviceManager::NotifyDeviceLost(D3DDeviceInformation &info)
         for (size_t i = 0; i < m_rgAdapterStatusListeners.GetCount(); ++i)
         {
             m_rgAdapterStatusListeners[i]->NotifyAdapterStatus(
-                info.CreateParams.AdapterOrdinal, 
+                info.CreateParams.AdapterOrdinal,
                 false       // fIsValid
                 );
         }
     }
 }
-
-
-
-
-
-
-

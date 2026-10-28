@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -30,15 +30,62 @@ template<typename TDpiAwarenessScopeSource> using DpiAwarenessScope = wpf::util:
 #define ALWAYS_READ_DISPLAY_ORIENTATION 0
 
 
-// Defined in Hw\D3DDeviceManager.cpp
-extern HRESULT
-CheckDisplayFormat(
-    __in_ecount(1) IDirect3D9 *pID3D,
-    UINT Adapter,
-    D3DDEVTYPE DeviceType,
-    D3DFORMAT DisplayFormat,
-    MilRTInitialization::Flags RTInitFlags
-    );
+//+------------------------------------------------------------------------
+//
+//  Function:   MilProbeAdapterFeatureLevel
+//
+//  Synopsis:
+//      Highest D3D11 feature level the adapter supports. Passing NULL for
+//      the device and context makes D3D11CreateDevice only report the level
+//      without creating anything.
+//
+//------------------------------------------------------------------------
+HRESULT
+MilProbeAdapterFeatureLevel(
+    __in_ecount(1) IDXGIAdapter1 *pAdapter,
+    __out_ecount(1) D3D_FEATURE_LEVEL *pFeatureLevel
+    )
+{
+    static const D3D_FEATURE_LEVEL rgLevels[] =
+    {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+    };
+
+    HRESULT hr = D3D11CreateDevice(
+        pAdapter,
+        D3D_DRIVER_TYPE_UNKNOWN,
+        NULL,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        rgLevels,
+        ARRAYSIZE(rgLevels),
+        D3D11_SDK_VERSION,
+        NULL,
+        pFeatureLevel,
+        NULL
+        );
+
+    // 11.1 런타임이 없으면 11_1 항목이 E_INVALIDARG를 내므로 11_0부터 다시 시도한다.
+    if (hr == E_INVALIDARG)
+    {
+        hr = D3D11CreateDevice(
+            pAdapter,
+            D3D_DRIVER_TYPE_UNKNOWN,
+            NULL,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            rgLevels + 1,
+            ARRAYSIZE(rgLevels) - 1,
+            D3D11_SDK_VERSION,
+            NULL,
+            pFeatureLevel,
+            NULL
+            );
+    }
+
+    RRETURN(hr);
+}
 
 MtDefine(CDisplaySet, Mem, "CDisplaySet");
 MtDefine(CDisplay, CDisplaySet, "CDisplay");
@@ -508,7 +555,7 @@ CDisplayManager::DangerousGetLatestDisplaySet(
                 // changes happened.
                 //
 
-                if (m_pCurrentDisplaySet->m_pID3DEx != NULL &&
+                if (m_pCurrentDisplaySet->m_pDXGIFactory != NULL &&
                     m_pCurrentDisplaySet->IsEquivalentTo(pDisplaySet))
                 {
                     m_pCurrentDisplaySet->UpdateUniqueness(pDisplaySet);
@@ -856,10 +903,8 @@ CDisplaySet::CDisplaySet(
     ULONG ulExternalUpdateCount
     )
     : m_cRef(1)
-    , m_pID3D(NULL)
-    , m_pID3DEx(NULL)
+    , m_pDXGIFactory(NULL)
     , m_hrD3DInitialization(WGXERR_NOTINITIALIZED)
-    , m_hrSwRastRegistered(WGXERR_NOTINITIALIZED)
     , m_uD3DAdapterCount(0)
     , m_ulDisplayUniquenessLoader(ulDisplayUniquenessLoader)
     , m_ulDisplayUniquenessEx(ulExternalUpdateCount)
@@ -926,15 +971,10 @@ CDisplaySet::~CDisplaySet()
         delete m_rgpDisplays[j];
     }
 
-    if (m_pID3D != NULL)
+    if (m_pDXGIFactory != NULL)
     {
-        ReleaseInterfaceNoNULL(m_pID3D);
-        ReleaseInterfaceNoNULL(m_pID3DEx);
+        ReleaseInterfaceNoNULL(m_pDXGIFactory);
         CD3DModuleLoader::ReleaseD3DLoadRef();
-    }
-    else
-    {
-        Assert(m_pID3DEx == NULL);
     }
 
     ReleaseInterface(m_pIDWriteFactory);
@@ -986,12 +1026,12 @@ CDisplaySet::Init()
     HRESULT hr = S_OK;
 
     //
-    // Get IDirect3D9 and IDirect3D9Ex objects and keep HRESULT.
+    // Get the DXGI factory and keep HRESULT.
     // Failure here is not fatal.
     //
-    m_hrD3DInitialization = CD3DModuleLoader::CreateD3DObjects(&m_pID3D, &m_pID3DEx);
+    m_hrD3DInitialization = CD3DModuleLoader::CreateD3DObjects(&m_pDXGIFactory);
 
-    Assert(FAILED(m_hrD3DInitialization) == (m_pID3D == NULL));
+    Assert(FAILED(m_hrD3DInitialization) == (m_pDXGIFactory == NULL));
 
     ReadRequiredVideoDriverDate();
 
@@ -999,7 +1039,7 @@ CDisplaySet::Init()
 
     IFC( EnumerateMonitors() );
 
-    if (m_pID3D)
+    if (m_pDXGIFactory)
     {
         IFC( ArrangeDXAdapters() );
     }
@@ -1098,20 +1138,20 @@ CDisplaySet::IsUpToDate() const
 //+----------------------------------------------------------------------------
 //
 //  Member:
-//      CDisplaySet::GetD3DObjectNoRef
+//      CDisplaySet::GetDXGIFactoryNoRef
 //
 //  Synopsis:
-//      Return top level Direct3D interface if successfully acquired.
+//      Return top level DXGI factory if successfully acquired.
 //
 //-----------------------------------------------------------------------------
 
 HRESULT
-CDisplaySet::GetD3DObjectNoRef(
-    __deref_out_ecount(1) IDirect3D9 **pID3D
+CDisplaySet::GetDXGIFactoryNoRef(
+    __deref_out_ecount(1) IDXGIFactory1 **ppDXGIFactory
     ) const
 {
-    Assert(m_pID3D || FAILED(m_hrD3DInitialization));
-    *pID3D = m_pID3D;
+    Assert(m_pDXGIFactory || FAILED(m_hrD3DInitialization));
+    *ppDXGIFactory = m_pDXGIFactory;
     return m_hrD3DInitialization;
 }
 
@@ -1612,92 +1652,130 @@ Cleanup:
 HRESULT
 CDisplaySet::ArrangeDXAdapters()
 {
-    Assert(m_pID3D);
+    Assert(m_pDXGIFactory);
     HRESULT hr = S_OK;
 
-    m_uD3DAdapterCount = m_pID3D->GetAdapterCount();
+    IDXGIAdapter1 *pAdapter = NULL;
+    IDXGIOutput *pOutput = NULL;
+    UINT uRecognized = 0;
 
-    // DevDiv Servicing :
-    // If this app has asked to disable the multi-adapter code, then always
-    // pretend like there is a single adapter, to match the single display
-    // created in EnumerateDevices().
-    if (!IsMultiAdapterCodeEnabled() && m_uD3DAdapterCount > 1)
+    //
+    // DXGI 어댑터(GPU)와 출력(모니터)을 열거하며 HMONITOR가 같은 CDisplay에 연결한다.
+    // D3D9처럼 D3D가 아는 디스플레이가 앞에 오도록(인덱스 [0, m_uD3DAdapterCount))
+    // 어댑터 순서대로 재배열한다. 나머지는 GDI만 아는 디스플레이(원격 등)다.
+    //
+
+    for (UINT uAdapter = 0;
+         m_pDXGIFactory->EnumAdapters1(uAdapter, &pAdapter) != DXGI_ERROR_NOT_FOUND;
+         uAdapter++)
     {
-        m_uD3DAdapterCount = 1;
-    }
+        DXGI_ADAPTER_DESC1 adapterDesc;
 
-    // If DX reported adapters that we don't have, assume it's due to mode change.
-    if (m_uD3DAdapterCount > m_rgpDisplays.GetCount())
-    {
-        IFC(WGXERR_DISPLAYSTATEINVALID);
-    }
-
-    for (UINT i = 0; i < m_uD3DAdapterCount; i++)
-    {
-        HMONITOR hMonitor = m_pID3D->GetAdapterMonitor(i);
-
-        // DevDiv Servicing :
-        // If this app has asked to disable the multi-adapter code, then always
-        // use the monitor for the one and only display we should have created.
-        if (!IsMultiAdapterCodeEnabled() && m_rgpDisplays.GetCount() > 0)
+        if (   FAILED(pAdapter->GetDesc1(&adapterDesc))
+            || (adapterDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
         {
-            hMonitor = m_rgpDisplays[0]->m_hMonitor;
+            // WARP 같은 소프트웨어 어댑터는 디스플레이에 연결하지 않는다.
+            ReleaseInterface(pAdapter);
+            continue;
         }
 
-        if (hMonitor)
+        for (UINT uOutput = 0;
+             pAdapter->EnumOutputs(uOutput, &pOutput) != DXGI_ERROR_NOT_FOUND;
+             uOutput++)
         {
-            int j = FindDisplayByHMonitor(hMonitor);
-            if (j < 0)
+            DXGI_OUTPUT_DESC outputDesc;
+
+            if (SUCCEEDED(pOutput->GetDesc(&outputDesc)) && outputDesc.AttachedToDesktop)
             {
-                // DX has an adapter that we have not.
-                // Assume this happened due to mode change.
-                IFC(WGXERR_DISPLAYSTATEINVALID);
+                HMONITOR hMonitor = outputDesc.Monitor;
+
+                // DevDiv Servicing :
+                // If this app has asked to disable the multi-adapter code, then
+                // only the first output is used and it is tied to the one and
+                // only display created in EnumerateDevices().
+                if (!IsMultiAdapterCodeEnabled())
+                {
+                    if (uRecognized > 0)
+                    {
+                        ReleaseInterface(pOutput);
+                        break;
+                    }
+
+                    if (m_rgpDisplays.GetCount() > 0)
+                    {
+                        hMonitor = m_rgpDisplays[0]->m_hMonitor;
+                    }
+                }
+
+                if (hMonitor)
+                {
+                    int j = FindDisplayByHMonitor(hMonitor);
+                    if (j < 0)
+                    {
+                        // DXGI has an output that we have not.
+                        // Assume this happened due to mode change.
+                        IFC(WGXERR_DISPLAYSTATEINVALID);
+                    }
+
+                    if (m_rgpDisplays[j]->m_pDXGIOutput == NULL)
+                    {
+                        // Move recognized displays to the front, in DXGI order.
+                        if (uRecognized != static_cast<UINT>(j))
+                        {
+                            Assert(uRecognized < static_cast<UINT>(j));
+
+                            CDisplay *pDisplay_i = m_rgpDisplays[uRecognized];
+                            CDisplay *pDisplay_j = m_rgpDisplays[j];
+                            Assert(pDisplay_i && pDisplay_j);
+
+                            m_rgpDisplays[uRecognized] = pDisplay_j;
+                            m_rgpDisplays[j] = pDisplay_i;
+
+                            m_rgpDisplays[uRecognized]->m_uDisplayIndex = uRecognized;
+                            m_rgpDisplays[j]->m_uDisplayIndex = j;
+                        }
+
+                        CDisplay *pDisplay = m_rgpDisplays[uRecognized];
+
+                        SetInterface(pDisplay->m_pDXGIAdapter, pAdapter);
+                        SetInterface(pDisplay->m_pDXGIOutput, pOutput);
+                        pDisplay->m_uAdapterIndex = uAdapter;
+                        pDisplay->m_luidD3DAdapter = adapterDesc.AdapterLuid;
+                        pDisplay->m_uGraphicsCardVendorId = adapterDesc.VendorId;
+                        pDisplay->m_uGraphicsCardDeviceId = adapterDesc.DeviceId;
+
+                        //
+                        // Registry may not report memory for WDDM drivers; take
+                        // DXGI's number in that case (dedicated, else shared).
+                        //
+                        if (pDisplay->m_uMemorySize == 0)
+                        {
+                            SIZE_T cbMemory = adapterDesc.DedicatedVideoMemory;
+                            if (cbMemory == 0)
+                            {
+                                cbMemory = adapterDesc.SharedSystemMemory;
+                            }
+                            pDisplay->m_uMemorySize =
+                                (cbMemory > UINT_MAX) ? UINT_MAX : static_cast<UINT>(cbMemory);
+                        }
+
+                        uRecognized++;
+                    }
+                }
             }
 
-            // We need same enumenation order as DX use.
-            // Rearrange array if it is not so.
-            if (i != static_cast<UINT>(j))
-            {
-                Assert (i < static_cast<UINT>(j));
-
-                CDisplay *pDisplay_i = m_rgpDisplays[i];
-                CDisplay *pDisplay_j = m_rgpDisplays[j];
-                Assert(pDisplay_i && pDisplay_j);
-
-                m_rgpDisplays[i] = pDisplay_j;
-                m_rgpDisplays[j] = pDisplay_i;
-
-                m_rgpDisplays[i]->m_uDisplayIndex = i;
-                m_rgpDisplays[j]->m_uDisplayIndex = j;
-            }
-
-            if (m_pID3DEx)
-            {
-                IGNORE_HR(m_pID3DEx->GetAdapterLUID(
-                    i,
-                    &m_rgpDisplays[i]->m_luidD3DAdapter
-                    ));
-            }
-            else
-            {
-                //
-                // If D3DEx is not available, let us set the LUID to our own
-                // uniqueness count. This allows us to use these LUIDs internally
-                // to measure uniqueness of two adapters during the lifetime of a
-                // CDisplaySet.
-                //
-                // The uniqueness generated here does not span display sets like
-                // the LUID returned by the GetAdapterLUID function does.
-                //
-
-                IGNORE_HR(g_DisplayManager.GenerateUniqueAdapterLUIDForXPDM(
-                    &m_rgpDisplays[i]->m_luidD3DAdapter
-                    ));
-            }
+            ReleaseInterface(pOutput);
         }
+
+        ReleaseInterface(pAdapter);
     }
+
+    m_uD3DAdapterCount = uRecognized;
 
 Cleanup:
+
+    ReleaseInterface(pOutput);
+    ReleaseInterface(pAdapter);
 
     RRETURN(hr);
 }
@@ -1721,10 +1799,7 @@ CDisplaySet::ReadDisplayModes(
 
     for (UINT i = 0; i < uDisplays; i++)
     {
-        IFC(m_rgpDisplays[i]->ReadMode(
-            (i < m_uD3DAdapterCount) ? m_pID3D : NULL,
-            (i < m_uD3DAdapterCount) ? m_pID3DEx : NULL
-            ));
+        IFC(m_rgpDisplays[i]->ReadMode());
     }
 
 Cleanup:
@@ -2030,7 +2105,7 @@ CDisplaySet::ReadGraphicsAccelerationCaps(
     // iterate through this way.
     for (UINT i = 0; i < m_uD3DAdapterCount; i++)
     {
-        m_rgpDisplays[i]->ReadGraphicsAccelerationCaps(m_pID3D);
+        m_rgpDisplays[i]->ReadGraphicsAccelerationCaps();
     }
 
     RRETURN(S_OK);
@@ -2187,46 +2262,6 @@ CDisplaySet::GetGraphicsAccelerationCaps(
     }
 }
 
-//+----------------------------------------------------------------------------
-//
-//  Member:
-//      CDisplaySet::EnsureSwRastIsRegistered
-//
-//  Synopsis:
-//      Make sure a software rasterizer is registered for given ID3D
-//
-//      If given ID3D is not the most current version then
-//      WGXERR_DISPLAYSTATEINVALID will be returned.
-//
-//-----------------------------------------------------------------------------
-
-HRESULT
-CDisplaySet::EnsureSwRastIsRegistered() const
-{
-    HRESULT hr = S_OK;
-
-    if (DangerousHasDisplayStateChanged())
-    {
-        IFC(WGXERR_DISPLAYSTATEINVALID);
-    }
-
-    if (FAILED(m_hrSwRastRegistered))  // if SUCCEEDED then is registered already
-    {
-        CGuard<CCriticalSection> oGuard(g_DisplayManager.m_csManagement);
-
-        // check m_hrSwRastRegistered again after entering critical section
-
-        if (m_hrSwRastRegistered == WGXERR_NOTINITIALIZED)
-        {
-            m_hrSwRastRegistered = CD3DModuleLoader::RegisterSoftwareDevice(m_pID3D);
-        }
-    }
-
-    hr = m_hrSwRastRegistered;
-
-Cleanup:
-    RRETURN(hr);
-}
 
 //+----------------------------------------------------------------------------
 //
@@ -2334,13 +2369,13 @@ CDisplay::CDisplay(
     m_uGraphicsCardVendorId = GraphicsCardVendorUnknown;
     m_uGraphicsCardDeviceId = GraphicsCardUnknown;
 
-    m_DisplayMode.Size = 0;
-    m_DisplayMode.Width = 0;
-    m_DisplayMode.Height = 0;
-    m_DisplayMode.RefreshRate = 0;
-    m_DisplayMode.Format = D3DFMT_UNKNOWN;
-    m_DisplayMode.ScanLineOrdering = D3DSCANLINEORDERING(0);
-    m_DisplayRotation = static_cast<D3DDISPLAYROTATION>(0);  // Invalid rotation
+    m_pDXGIAdapter = NULL;
+    m_pDXGIOutput = NULL;
+    m_uAdapterIndex = UINT_MAX;
+
+    ZeroMemory(&m_DisplayMode, sizeof(m_DisplayMode));
+    m_DisplayMode.Format = DXGI_FORMAT_UNKNOWN;
+    m_DisplayMode.Rotation = DXGI_MODE_ROTATION_UNSPECIFIED;
 
     size_t KeyLength = 0;
     const size_t c_RegKeyPrefix = 18;   // "\Registry\Machine\"
@@ -2379,6 +2414,19 @@ CDisplay::CDisplay(
     // Members that remain uninitialized:
     // m_rcBounds
     // m_settings
+}
+
+//+------------------------------------------------------------------------
+//
+//  Function:  CDisplay::~CDisplay
+//
+//  Synopsis:  Release the DXGI adapter and output references.
+//
+//-------------------------------------------------------------------------
+CDisplay::~CDisplay()
+{
+    ReleaseInterface(m_pDXGIOutput);
+    ReleaseInterface(m_pDXGIAdapter);
 }
 
 CMILSurfaceRect const & CDisplaySet::GetBounds() const
@@ -2451,17 +2499,9 @@ Cleanup:
 //
 
 HRESULT
-CDisplay::ReadMode(
-    __in_ecount_opt(1) IDirect3D9 *pID3D,
-    __in_ecount_opt(1) IDirect3D9Ex *pID3DEx
-    )
+CDisplay::ReadMode()
 {
     Assert(m_pDisplaySet);
-
-    if (pID3D || pID3DEx)
-    {
-        Assert(m_uDisplayIndex < m_pDisplaySet->GetNumD3DRecognizedAdapters());
-    }
 
     HRESULT hr = S_OK;
 
@@ -2469,162 +2509,80 @@ CDisplay::ReadMode(
     // Assert initial state
     //
 
-    Assert(m_DisplayMode.Size == 0);
+    Assert(m_DisplayMode.Width == 0);
     Assert(m_DisplayMode.RefreshRate == 0);
-    Assert(m_DisplayMode.Format == D3DFMT_UNKNOWN);
-    Assert(m_DisplayMode.ScanLineOrdering == D3DSCANLINEORDERING(0));
-    Assert(m_DisplayRotation == 0);
+    Assert(m_DisplayMode.Format == DXGI_FORMAT_UNKNOWN);
+    Assert(m_DisplayMode.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED);
 
-    if (pID3DEx)
+    //
+    // Read display mode from GDI. DXGI has no per-output refresh rate or bit
+    // depth query that is cheaper than this, and GDI covers displays DXGI does
+    // not know about.
+    //
+
+    DEVMODE displayModeGDI;
+
+    displayModeGDI.dmSize = sizeof(displayModeGDI);
+
+    SetLastError(ERROR_SUCCESS);
+    if (0 == TW32(0,EnumDisplaySettings(
+        m_szDeviceName,
+        ENUM_CURRENT_SETTINGS,
+        &displayModeGDI
+        )))
     {
-        //
-        // Read display mode from D3DEx which has complete information.
-        //
-
-        m_DisplayMode.Size = sizeof(m_DisplayMode);
-
-        MIL_THR(pID3DEx->GetAdapterDisplayModeEx(
-            m_uDisplayIndex,
-            &m_DisplayMode,
-            &m_DisplayRotation
-            ));
-    }
-    else if (pID3D)
-    {
-        //
-        // Read display mode from D3D which has basic information.
-        //
-
-        D3DDISPLAYMODE displayMode;
-
-        MIL_THR(pID3D->GetAdapterDisplayMode(m_uDisplayIndex, &displayMode));
-
-        if (SUCCEEDED(hr))
-        {
-            // DISPLAYMODE is a direct substructure of DISPLAYMODEEX
-            m_DisplayMode.Size = offsetof(D3DDISPLAYMODEEX, ScanLineOrdering);
-            m_DisplayMode.Width = displayMode.Width;
-            m_DisplayMode.Height = displayMode.Height;
-            m_DisplayMode.RefreshRate = displayMode.RefreshRate;
-            m_DisplayMode.Format = displayMode.Format;
-        }
+        IFC( m_pDisplaySet->InspectLastError() );
     }
 
-    // If this adapter is no longer enabled or the monitor is disconnected, the call above
-    // will fail with the following error.  This can occur sometimes when remoting into a machine
-    // with certain video drivers, or when the display driver is disabled or uninstalled while WPF
-    // is running.  Ignoring the failure is okay - the function will proceed with reading display
-    // information from GDI instead.
-    if (hr == D3DERR_NOTAVAILABLE)
+    m_DisplayMode.Width = displayModeGDI.dmPelsWidth;
+    m_DisplayMode.Height = displayModeGDI.dmPelsHeight;
+    m_DisplayMode.RefreshRate = displayModeGDI.dmDisplayFrequency;
+
+    // Interpret bits per pixel to the closest DXGI format
+    switch (displayModeGDI.dmBitsPerPel)
     {
-        hr = S_OK;
-    }
-    else
-    {
-        // Fail upon encountering any other error codes.
-        IFC(hr);
+    case 32:
+    case 24:
+        m_DisplayMode.Format = DXGI_FORMAT_B8G8R8X8_UNORM;
+        break;
+
+    case 16:
+        m_DisplayMode.Format = DXGI_FORMAT_B5G6R5_UNORM;
+        break;
+
+    default:
+        m_DisplayMode.Format = DXGI_FORMAT_UNKNOWN;
+        break;
     }
 
     //
-    // For adapters D3D does not report, get information from GDI.
+    // Fill in rotation: DXGI output first, GDI otherwise
     //
-    if (   (m_DisplayMode.Format == D3DFMT_UNKNOWN)
-#if ALWAYS_READ_DISPLAY_ORIENTATION
-           // D3D9Ex will report rotation, but D3D9 will not.  Get rotation from GDI
-           // in this case.
-        || (m_DisplayRotation == static_cast<D3DDISPLAYROTATION>(0))
-#endif
-       )
+
+    if (m_pDXGIOutput)
     {
-        //
-        // Read display mode from GDI
-        //
+        DXGI_OUTPUT_DESC outputDesc;
 
-        DEVMODE displayModeGDI;
-
-        displayModeGDI.dmSize = sizeof(displayModeGDI);
-
-        SetLastError(ERROR_SUCCESS);
-        if (0 == TW32(0,EnumDisplaySettings(
-            m_szDeviceName,
-            ENUM_CURRENT_SETTINGS,
-            &displayModeGDI
-            )))
+        if (SUCCEEDED(m_pDXGIOutput->GetDesc(&outputDesc)))
         {
-            IFC( m_pDisplaySet->InspectLastError() );
+            m_DisplayMode.Rotation = outputDesc.Rotation;
         }
-
-        if (m_DisplayMode.Format == D3DFMT_UNKNOWN)
-        {
-            //
-            // Fill in information from GDI
-            //
-
-            m_DisplayMode.Size = offsetof(D3DDISPLAYMODEEX, ScanLineOrdering);
-            m_DisplayMode.Width = displayModeGDI.dmPelsWidth;
-            m_DisplayMode.Height = displayModeGDI.dmPelsHeight;
-            m_DisplayMode.RefreshRate = displayModeGDI.dmDisplayFrequency;
-
-            // Interpret bits per pixel to D3D format
-            switch (displayModeGDI.dmBitsPerPel)
-            {
-            case 32:
-                // Note - may also be D3DFMT_A2R10G10B10
-                m_DisplayMode.Format = D3DFMT_X8R8G8B8;
-                break;
-
-            case 24:
-                m_DisplayMode.Format = D3DFMT_R8G8B8;
-                break;
-
-            case 16:
-                // Note - may also be D3DFMT_X1R5G5B5
-                m_DisplayMode.Format = D3DFMT_R5G6B5;
-                break;
-
-            case 8:
-                m_DisplayMode.Format = D3DFMT_P8;
-                break;
-
-            default:
-                m_DisplayMode.Format = D3DFMT_UNKNOWN;
-                break;
-            }
-        }
-
-        //
-        // Fill in rotation from GDI when available
-        //
-
-        if (   (m_DisplayRotation == static_cast<D3DDISPLAYROTATION>(0))
-            && (displayModeGDI.dmFields & DM_DISPLAYORIENTATION))
-        {
-            C_ASSERT(DMDO_DEFAULT+1 == D3DDISPLAYROTATION_IDENTITY);
-            C_ASSERT(DMDO_90+1 == D3DDISPLAYROTATION_90);
-            C_ASSERT(DMDO_180+1 == D3DDISPLAYROTATION_180);
-            C_ASSERT(DMDO_270+1 == D3DDISPLAYROTATION_270);
-            m_DisplayRotation = static_cast<D3DDISPLAYROTATION>
-                (displayModeGDI.dmDisplayOrientation+1);
-        }
-
-        m_Caps.BitsPerPixel = displayModeGDI.dmBitsPerPel;
     }
-    else
+
+    if (   (m_DisplayMode.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED)
+        && (displayModeGDI.dmFields & DM_DISPLAYORIENTATION))
     {
-        m_Caps.BitsPerPixel = 8*D3DFormatSize(m_DisplayMode.Format);
+        C_ASSERT(DMDO_DEFAULT+1 == DXGI_MODE_ROTATION_IDENTITY);
+        C_ASSERT(DMDO_90+1 == DXGI_MODE_ROTATION_ROTATE90);
+        C_ASSERT(DMDO_180+1 == DXGI_MODE_ROTATION_ROTATE180);
+        C_ASSERT(DMDO_270+1 == DXGI_MODE_ROTATION_ROTATE270);
+        m_DisplayMode.Rotation = static_cast<DXGI_MODE_ROTATION>
+            (displayModeGDI.dmDisplayOrientation+1);
     }
+
+    m_Caps.BitsPerPixel = displayModeGDI.dmBitsPerPel;
 
 Cleanup:
-
-    if (hr == D3DERR_DEVICELOST || hr == D3DERR_DRIVERINTERNALERROR)
-    {
-        // These errors can be obtained because of display state change,
-        // though it is not guaranteed to be the only possible reason.
-        // We are replacing this HR to WGXERR_DISPLAYSTATEINVALID in order
-        // to force retry attempt CDisplayManager::DangerousGetLatestDisplaySet().
-
-        MIL_THR(WGXERR_DISPLAYSTATEINVALID);
-    }
 
     RRETURN(hr);
 }
@@ -2642,9 +2600,7 @@ Cleanup:
 //
 
 void
-CDisplay::ReadGraphicsAccelerationCaps(
-    __in_ecount(1) IDirect3D9 *pID3D
-    )
+CDisplay::ReadGraphicsAccelerationCaps()
 {
     // Report tier 0 by default - should already be set
     Assert(m_Caps.TierValue == MIL_TIER(0,0));
@@ -2663,59 +2619,45 @@ CDisplay::ReadGraphicsAccelerationCaps(
     // on CheckBadDeviceDrivers() call, leave m_Caps unchanged.
     //
 
-    if (!IsDeviceDriverBad())
+    if (!IsDeviceDriverBad() && m_pDXGIAdapter)
     {
-        D3DCAPS9 caps;
+        D3D_FEATURE_LEVEL featureLevel;
 
-        m_Caps.WindowCompatibleMode = SUCCEEDED(::CheckDisplayFormat(
-            pID3D,
-            GetDisplayIndex(),
-            D3DDEVTYPE_HAL,
-            GetFormat(),
-            MilRTInitialization::Default   // Not fullscreen; not need_dst_alpha
-            ));
-
-        if (m_Caps.WindowCompatibleMode)
+        //
+        // 디바이스를 만들 수 있는 Feature Level이 있으면 창 모드 호환이다.
+        // 백버퍼 포맷은 항상 B8G8R8A8이므로 D3D9의 CheckDeviceType은 필요 없다.
+        //
+        if (SUCCEEDED(::MilProbeAdapterFeatureLevel(m_pDXGIAdapter, &featureLevel)))
         {
-            if (SUCCEEDED(pID3D->GetDeviceCaps(
-                GetDisplayIndex(),
-                D3DDEVTYPE_HAL,
-                &caps
-                )))
-            {
-                // Copy the maximum texture size for this display
-                m_Caps.MaxTextureWidth = caps.MaxTextureWidth;
-                m_Caps.MaxTextureHeight = caps.MaxTextureHeight;
+            MilDeviceCaps caps;
 
-                // Check if the display has WDDM support
-                m_Caps.HasWDDMSupport = HwCaps::IsLDDMDevice(caps);
+            HwCaps::FromFeatureLevel(featureLevel, MilDeviceKind_Hardware, &caps);
 
-                // Copy the pixel and vertex shader versions
-                m_Caps.PixelShaderVersion = caps.PixelShaderVersion;
-                m_Caps.VertexShaderVersion = caps.VertexShaderVersion;
+            m_Caps.WindowCompatibleMode = TRUE;
 
-                // Copy the max number of instruction slots for PS 3.0
-                m_Caps.MaxPixelShader30InstructionSlots = caps.MaxPixelShader30InstructionSlots;
+            // Copy the maximum texture size for this display
+            m_Caps.MaxTextureWidth = caps.MaxTextureWidth;
+            m_Caps.MaxTextureHeight = caps.MaxTextureHeight;
 
-                if (m_Caps.HasWDDMSupport)
-                {
-                    m_fIsRecentDriver = true;
-                }
-                else
-                {
-                    m_fIsRecentDriver = CheckForRecentDriver(m_szInstalledDisplayDrivers);
-                }
+            // Every DXGI adapter runs on a WDDM driver
+            m_Caps.HasWDDMSupport = HwCaps::IsLDDMDevice(caps);
 
-                if (m_fIsRecentDriver)
-                {
-                    // Get the tier value for this display
-                    m_Caps.TierValue =
-                        GraphicsAccelerationTier::GetTier(GetMemorySize(), caps);
-                }
+            // Copy the pixel and vertex shader versions
+            m_Caps.PixelShaderVersion = caps.PixelShaderVersion;
+            m_Caps.VertexShaderVersion = caps.VertexShaderVersion;
 
-                // Determine if the processor has SSE2 support
-                m_Caps.HasSSE2Support = CCPUInfo::HasSSE2ForEffects();
-            }
+            // Copy the max number of instruction slots for PS 3.0
+            m_Caps.MaxPixelShader30InstructionSlots = caps.MaxPixelShader30InstructionSlots;
+
+            // WDDM drivers are always considered recent
+            m_fIsRecentDriver = true;
+
+            // Get the tier value for this display
+            m_Caps.TierValue =
+                GraphicsAccelerationTier::GetTier(GetMemorySize(), caps);
+
+            // Determine if the processor has SSE2 support
+            m_Caps.HasSSE2Support = CCPUInfo::HasSSE2ForEffects();
         }
     }
 }
@@ -2738,6 +2680,7 @@ CDisplay::IsEquivalentTo(
 {
     if (m_uDisplayIndex != pDisplay->m_uDisplayIndex) return false;
     if (m_luidD3DAdapter != pDisplay->m_luidD3DAdapter) return false;
+    if (m_uAdapterIndex != pDisplay->m_uAdapterIndex) return false;
     if (m_hMonitor != pDisplay->m_hMonitor) return false;
 
     if (m_rcBounds.size() != pDisplay->m_rcBounds.size()) return false;
@@ -2766,7 +2709,6 @@ CDisplay::IsEquivalentTo(
     if (m_uGraphicsCardDeviceId != pDisplay->m_uGraphicsCardDeviceId) return false;
 
     if (0 != memcmp(&m_DisplayMode, &pDisplay->m_DisplayMode, sizeof(m_DisplayMode))) return false;
-    if (m_DisplayRotation != pDisplay->m_DisplayRotation) return false;
     if (0 != memcmp(&m_Caps, &pDisplay->m_Caps, sizeof(m_Caps))) return false;
 
     return true;
@@ -2827,22 +2769,12 @@ Cleanup:
 
 HRESULT
 CDisplay::GetMode(
-    __out_xcount_part(sizeof(*pDisplayMode), pDisplayMode->Size) D3DDISPLAYMODEEX *pDisplayMode,
-    __out_ecount_opt(1) D3DDISPLAYROTATION *pDisplayRotation
+    __out_ecount(1) MilDisplayMode *pDisplayMode
     ) const
 {
-    // Note: This code does not care about dynamic size nature of
-    //       D3DDISPLAYMODEEX.  It simply assumes caller is using same version
-    //       of structure and does a simple copy.
     *pDisplayMode = m_DisplayMode;
 
-    if (pDisplayRotation)
-    {
-        // May be invalid (0)
-        *pDisplayRotation = m_DisplayRotation;
-    }
-
-    return (m_DisplayMode.Size > 0) ? S_OK : WGXERR_NOTINITIALIZED;
+    return (m_DisplayMode.Width > 0) ? S_OK : WGXERR_NOTINITIALIZED;
 }
 
 
@@ -2923,44 +2855,16 @@ CDisplay::CheckBadDeviceDrivers()
 {
     HRESULT hr = S_OK;
 
-    IDirect3D9 *pD3D = D3DObject();
-    IDirect3D9Ex *pD3DEx = D3DExObject();
-
-    D3DADAPTER_IDENTIFIER9 identifier = { 0 };
-
-#if !defined(D3DENUM_NO_DRIVERVERSION)
-#define D3DENUM_NO_DRIVERVERSION                0x00000004L
-#endif
-    // D3DENUM_NO_DRIVERVERSION allows D3D to avoid the perf hit of getting the
-    // driver's file information. D3DADAPTER_IDENTIFIER9::DriverVersion will
-    // not be valid, nor will DriverVersion be integrated into the
-    // D3DADAPTER_IDENTIFIER9::DeviceIdentifier.  This is only available on
-    // D3D9Ex devices.
-    if (pD3DEx != NULL)
-    {
-        hr = pD3DEx->GetAdapterIdentifier(
-            m_uDisplayIndex,
-            D3DENUM_NO_DRIVERVERSION,
-            &identifier);
-    }
-
-    if (pD3DEx == NULL || FAILED(hr))
-    {
-        // If GetAdapterIdentifier doesn't work with D3DENUM_NO_DRIVERVERSION
-        // then try without it, since not all versions of D3D support it.
-        IFC(pD3D->GetAdapterIdentifier(
-            m_uDisplayIndex,
-            0,
-            &identifier
-            ));
-    }
-
     //
-    // Store adapter identifier data for later using by CD3DDeviceLevel1
-    // to correct device caps for buggy drivers.
+    // Vendor and device ids were stored by ArrangeDXAdapters from
+    // DXGI_ADAPTER_DESC1. A display without a DXGI adapter has no driver to
+    // judge; it will not get a hardware device anyway.
     //
-    m_uGraphicsCardVendorId = identifier.VendorId;
-    m_uGraphicsCardDeviceId = identifier.DeviceId;
+
+    if (m_pDXGIAdapter == NULL)
+    {
+        goto Cleanup;
+    }
 
     //
     // Intel 845 is disabled for the following reasons:
@@ -2976,8 +2880,8 @@ CDisplay::CheckBadDeviceDrivers()
     // for the scenario tests.
     //
 
-    if (identifier.VendorId == GraphicsCardVendorIntel
-        && identifier.DeviceId == GraphicsCardIntel_845G)
+    if (m_uGraphicsCardVendorId == GraphicsCardVendorIntel
+        && m_uGraphicsCardDeviceId == GraphicsCardIntel_845G)
     {
         IFC(E_FAIL);
     }

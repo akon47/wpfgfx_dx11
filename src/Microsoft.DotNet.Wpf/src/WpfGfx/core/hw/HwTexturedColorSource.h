@@ -101,7 +101,7 @@ public:
     // border color instead of default clamping.
     void ForceBorder()
     {
-        m_taU = m_taV = D3DTADDRESS_BORDER;
+        m_taU = m_taV = D3D11_TEXTURE_ADDRESS_BORDER;
     }
 
     // Set a clip parallelogram that will be implemented
@@ -120,14 +120,14 @@ public:
         );
 
     void SetWrapModes(
-        D3DTEXTUREADDRESS taU,
-        D3DTEXTUREADDRESS taV
+        D3D11_TEXTURE_ADDRESS_MODE taU,
+        D3D11_TEXTURE_ADDRESS_MODE taV
         );
 
     static void ConvertWrapModeToTextureAddressModes(
         MilBitmapWrapMode::Enum wrapMode,
-        __out_ecount(1) D3DTEXTUREADDRESS *ptaU,
-        __out_ecount(1) D3DTEXTUREADDRESS *ptaV
+        __out_ecount(1) D3D11_TEXTURE_ADDRESS_MODE *ptaU,
+        __out_ecount(1) D3D11_TEXTURE_ADDRESS_MODE *ptaV
         );
 
 private:
@@ -142,16 +142,16 @@ protected:
 
     void SetFilterAndWrapModes(
         MilBitmapInterpolationMode::Enum interpolationMode,
-        D3DTEXTUREADDRESS taU,
-        D3DTEXTUREADDRESS taV
+        D3D11_TEXTURE_ADDRESS_MODE taU,
+        D3D11_TEXTURE_ADDRESS_MODE taV
         );
 
     void SetFilterMode(
         MilBitmapInterpolationMode::Enum interpolationMode
         );
 
-    D3DTEXTUREADDRESS GetTAU() const { return m_taU; }
-    D3DTEXTUREADDRESS GetTAV() const { return m_taV; }
+    D3D11_TEXTURE_ADDRESS_MODE GetTAU() const { return m_taU; }
+    D3D11_TEXTURE_ADDRESS_MODE GetTAV() const { return m_taV; }
 
     HRESULT CalcTextureTransform(
         __in_ecount(1) const BitmapToXSpaceTransform *pBitmapToXSpaceTransform,
@@ -205,7 +205,7 @@ private:
 
     const FilterMode *m_pFilterMode;    // Filter settings for render state
 
-    D3DTEXTUREADDRESS m_taU, m_taV;     // Current texture addressing/wrapping modes
+    D3D11_TEXTURE_ADDRESS_MODE m_taU, m_taV;     // Current texture addressing/wrapping modes
 
     bool m_fUseHwTransform;             // Request tex coordinate transform
                                         // from hardware device

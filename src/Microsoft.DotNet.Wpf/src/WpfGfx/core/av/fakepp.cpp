@@ -969,7 +969,7 @@ CFakePP::CreateDevice(
     }
 
     Assert(pDisplaySet->Display(0));
-    Assert(pDisplaySet->D3DObject());
+    Assert(pDisplaySet->IsD3DAvailable());
 
     //
     // This may fail if D3D support is unavailable
@@ -978,7 +978,7 @@ CFakePP::CreateDevice(
             GetDesktopWindow(),
             sc_milInitFlags,
             pDisplaySet->Display(0),
-            D3DDEVTYPE_SW,
+            MilDeviceKind_Warp,
             ppD3DDevice,
             NULL,
             NULL));
@@ -1072,6 +1072,11 @@ CFakePP::BeginRender(
     }
 
     GetUnderlyingDevice(m_pCD3DDeviceLevel1, &pIDevice);
+
+    if (pIDevice == NULL)
+    {
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+    }
 
     IFC(pIDevice->ColorFill(
         pSurface,

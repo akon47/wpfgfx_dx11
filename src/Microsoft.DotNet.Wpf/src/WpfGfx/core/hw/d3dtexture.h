@@ -5,10 +5,8 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
-//      Contains D3D Texture wrapper class declaration
+//      Contains D3D texture wrapper class declaration
 //
 
 class CD3DTexture : public CD3DResource
@@ -19,35 +17,30 @@ public:
         TextureMipMapLevel eMipMapLevel,
         UINT uTextureWidth,
         UINT uTextureHeight,
-        __out_ecount(1) DWORD *pdwUsage,
+        __out_ecount(1) UINT *puBindFlags,
+        __out_ecount(1) UINT *puMiscFlags,
         __out_ecount(1) UINT *puLevels
         );
 
     void GetTextureSize(
-        __out_ecount(1) UINT *puWidth, 
+        __out_ecount(1) UINT *puWidth,
         __out_ecount(1) UINT *puHeight
         ) const;
 
-    void GetD3DBaseTexture(
-        __deref_out_ecount(1) IDirect3DBaseTexture9 **ppd3dBaseTexture
-        )
-    {
-        Assert(IsValid());
-        Assert(m_pD3DTexture);
-
-        *ppd3dBaseTexture = m_pD3DTexture;
-        (*ppd3dBaseTexture)->AddRef();
-    }
-
-    __out_ecount(1) IDirect3DTexture9 *GetD3DTextureNoRef() const
+    __out_ecount(1) ID3D11Texture2D *GetD3DTextureNoRef() const
     {
         Assert(IsValid());
         Assert(m_pD3DTexture);
 
         return m_pD3DTexture;
     }
-    
-    const D3DSURFACE_DESC& D3DSurface0Desc() const { return m_sdLevel0; }
+
+    // Shader resource view over all levels. Created on first use, not AddRef'd.
+    HRESULT GetShaderResourceViewNoRef(
+        __deref_out_ecount(1) ID3D11ShaderResourceView **ppSRV
+        );
+
+    const D3D11_TEXTURE2D_DESC& D3DSurface0Desc() const { return m_sdLevel0; }
 
     __range(1,32) UINT Levels() const { return m_cLevels; }
 
@@ -56,22 +49,13 @@ public:
         __deref_out_ecount(1) CD3DSurface **ppSurfaceLevel
         );
 
-    HRESULT GetID3DSurfaceLevel(
-        UINT uLevel,
-        __deref_out_ecount(1) IDirect3DSurface9 **ppd3dSurfaceLevel
-        ) const
-    {
-        IDirect3DTexture9 *pD3DTextureNoRef = GetD3DTextureNoRef();
-
-        Assert(pD3DTextureNoRef);
-
-        RRETURN(THR(pD3DTextureNoRef->GetSurfaceLevel(
-            uLevel,
-            ppd3dSurfaceLevel
-            )));
-    }
-
     HRESULT UpdateMipmapLevels();
+
+    // Lockable textures copy CPU side changes to the GPU texture here.
+    virtual HRESULT EnsureGpuContents()
+    {
+        return S_OK;
+    }
 
     override bool RequiresDelayedRelease() const
     {
@@ -84,27 +68,26 @@ protected:
 
     HRESULT Init(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+        __inout_ecount(1) ID3D11Texture2D *pD3DTexture
         );
 
     HRESULT InitResource(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+        __inout_ecount(1) ID3D11Texture2D *pD3DTexture
         );
 
-private:
+protected:
 
-    // 
+    //
     // CD3DResource methods
     //
 
     // Should only be called by CD3DResourceManager (destructor is okay, too)
     void ReleaseD3DResources();
-    
-protected:
 
-    IDirect3DTexture9 *m_pD3DTexture;
-    D3DSURFACE_DESC m_sdLevel0;
+    ID3D11Texture2D *m_pD3DTexture;
+    ID3D11ShaderResourceView *m_pSRV;
+    D3D11_TEXTURE2D_DESC m_sdLevel0;
 
 private:
 
@@ -113,5 +96,3 @@ private:
     // Cache of surface levels
     __field_ecount_full_opt(m_cLevels) CD3DSurface **m_rgSurfaceLevel;
 };
-
-

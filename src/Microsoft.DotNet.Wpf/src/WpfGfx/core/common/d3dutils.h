@@ -3,27 +3,18 @@
 // See the LICENSE file in the project root for more information.
 
 
-//------------------------------------------------------------------------------
-//
-
+//+-----------------------------------------------------------------------------
 //
 //  Description:
-//      Contains declarations for generic render utility routines.
+//      텍스처 설명(D3D11_TEXTURE2D_DESC)을 디바이스 능력에 맞게 다듬는 유틸리티.
 //
 //------------------------------------------------------------------------------
 
 #pragma once
 
-//------------------------------------------------------------------------------
-//
-//  Defines: Flags for GetMinimalTextureDesc
-//
-//  Description:
-//  Flags passed to GetMinimalTextureDesc that control what fields
-//      of the surface description are checked.
-//
-//------------------------------------------------------------------------------
+struct MilDeviceCaps;
 
+// Flags for GetMinimalTextureDesc
 #define GMTD_IGNORE_WIDTH     0x1
 #define GMTD_IGNORE_HEIGHT    0x2
 #define GMTD_IGNORE_FORMAT    0x4
@@ -42,16 +33,6 @@
 
 #define GMTD_DEFAULT          GMTD_CHECK_ALL
 
-//
-// The bitmap cache logic needs the mipmap levels to have a strict ordering 
-// policy.
-//
-// Mipmaps realizations with greater levels must have a greater value.
-//
-// Example:
-//
-// TMML_All > TMML_One
-//
 enum TextureMipMapLevel
 {
     TMML_All = 1,
@@ -59,50 +40,36 @@ enum TextureMipMapLevel
     TMML_Unknown
 };
 
-
-//+----------------------------------------------------------------------------
-//
-//  Function:
-//      TextureAddressingAllowsConditionalNonPower2Usage
-//
-//  Synopsis:
-//      Returns true if given texture addressing modes allow use of D3D's
-//      conditional non-power of two support.
-//
-
 MIL_FORCEINLINE bool TextureAddressingAllowsConditionalNonPower2Usage(
-    D3DTEXTUREADDRESS taU,
-    D3DTEXTUREADDRESS taV
+    D3D11_TEXTURE_ADDRESS_MODE taU,
+    D3D11_TEXTURE_ADDRESS_MODE taV
     )
 {
-    // Conditional non-power of two support only works when both texture
-    // addressing modes are CLAMP (a.k.a. extend edge) despite presence of
-    // D3DPTADDRESSCAPS_INDEPENDENTUV.
-    return ((taU == D3DTADDRESS_CLAMP) && (taV == D3DTADDRESS_CLAMP));
+    return ((taU == D3D11_TEXTURE_ADDRESS_CLAMP) && (taV == D3D11_TEXTURE_ADDRESS_CLAMP));
 }
 
-
 void PopulateSurfaceDesc(
-    D3DFORMAT fmtPixelFormat,
-    D3DPOOL d3dPool,
-    DWORD dwUsage, 
+    DXGI_FORMAT fmtPixelFormat,
+    D3D11_USAGE usage,
+    UINT uBindFlags,
+    UINT uCpuAccessFlags,
     UINT uTextureWidth,
     UINT uTextureHeight,
-    __out_ecount(1) D3DSURFACE_DESC *pDesc 
+    __out_ecount(1) D3D11_TEXTURE2D_DESC *pDesc
     );
 
 HRESULT GetMinimalTextureDesc(
-    __in_ecount(1) IDirect3DDevice9 *pD3DDevice,
-    D3DFORMAT AdapterFormat,
-    __in_ecount(1) D3DCAPS9 const *pcaps,
-    __inout_ecount(1) D3DSURFACE_DESC *pd3dsd,
+    __in_ecount(1) MilDeviceCaps const *pcaps,
+    __inout_ecount(1) D3D11_TEXTURE2D_DESC *pDesc,
     BOOL fPalUsesAlpha,
     DWORD dwFlags
     );
 
-D3DFORMAT GetSuperiorSurfaceFormat(
-    D3DFORMAT d3dFormat,
-    BOOL fPalUsesAlpha
+bool IsSupportedTextureFormat(
+    DXGI_FORMAT fmt
     );
 
-
+DXGI_FORMAT GetSuperiorSurfaceFormat(
+    DXGI_FORMAT fmt,
+    BOOL fPalUsesAlpha
+    );

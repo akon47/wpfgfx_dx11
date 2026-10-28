@@ -62,17 +62,18 @@ CHwSoftwareFallback::Init(
     // Create the temporary textures we need 
     //
 
-    D3DSURFACE_DESC d3dsd;
+    D3D11_TEXTURE2D_DESC d3dsd;
 
     ZeroMemory(&d3dsd, sizeof(d3dsd));
-    d3dsd.Format = D3DFMT_A8R8G8B8;
-    d3dsd.Type = D3DRTYPE_TEXTURE;
-    d3dsd.Usage = 0;
-    d3dsd.Pool = pD3DDevice->GetManagedPool();
-    d3dsd.MultiSampleType = D3DMULTISAMPLE_NONE;
-    d3dsd.MultiSampleQuality = 0;
+    d3dsd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     d3dsd.Width = m_uMaxTileWidth;
     d3dsd.Height = m_uMaxTileHeight;
+    d3dsd.MipLevels = 1;
+    d3dsd.ArraySize = 1;
+    d3dsd.SampleDesc.Count = 1;
+    d3dsd.SampleDesc.Quality = 0;
+    d3dsd.Usage = D3D11_USAGE_DEFAULT;
+    d3dsd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     IFC(pD3DDevice->GetMinimalTextureDesc(
         &d3dsd,
@@ -80,7 +81,7 @@ CHwSoftwareFallback::Init(
         GMTD_CHECK_ALL
         ));
 
-    Assert(d3dsd.Format == D3DFMT_A8R8G8B8);
+    Assert(d3dsd.Format == DXGI_FORMAT_B8G8R8A8_UNORM);
 
     // if our initial guess exceeds texture limits, we need to adjust it
     Assert(d3dsd.Width > 0);
@@ -135,17 +136,18 @@ CHwSoftwareFallback::InitAlphaTextures()
 
     Assert(!m_fAlphaTexturesInited);
 
-    D3DSURFACE_DESC d3dsd;
+    D3D11_TEXTURE2D_DESC d3dsd;
 
     ZeroMemory(&d3dsd, sizeof(d3dsd));
-    d3dsd.Format = D3DFMT_A8R8G8B8;
-    d3dsd.Type = D3DRTYPE_TEXTURE;
-    d3dsd.Usage = 0;
-    d3dsd.Pool = m_pD3DDevice->GetManagedPool();
-    d3dsd.MultiSampleType = D3DMULTISAMPLE_NONE;
-    d3dsd.MultiSampleQuality = 0;
+    d3dsd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     d3dsd.Width = m_uMaxTileWidth;
     d3dsd.Height = m_uMaxTileHeight;
+    d3dsd.MipLevels = 1;
+    d3dsd.ArraySize = 1;
+    d3dsd.SampleDesc.Count = 1;
+    d3dsd.SampleDesc.Quality = 0;
+    d3dsd.Usage = D3D11_USAGE_DEFAULT;
+    d3dsd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     IFC(m_pD3DDevice->GetMinimalTextureDesc(
         &d3dsd,
@@ -153,7 +155,7 @@ CHwSoftwareFallback::InitAlphaTextures()
         GMTD_CHECK_ALL
         ));
 
-    Assert(d3dsd.Format == D3DFMT_A8R8G8B8);
+    Assert(d3dsd.Format == DXGI_FORMAT_B8G8R8A8_UNORM);
 
     for (int i = 0; i < NUM_FALLBACK_TILES; i++)
     {

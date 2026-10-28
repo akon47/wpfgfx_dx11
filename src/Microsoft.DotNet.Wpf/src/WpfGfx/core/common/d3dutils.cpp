@@ -3,256 +3,158 @@
 // See the LICENSE file in the project root for more information.
 
 
-//------------------------------------------------------------------------------
-//
-
+//+-----------------------------------------------------------------------------
 //
 //  Description:
-//      Contains generic d3d utility routines.
+//      텍스처 설명(D3D11_TEXTURE2D_DESC)을 디바이스 능력에 맞게 다듬는 유틸리티.
 //
+//------------------------------------------------------------------------------
 
 #include "precomp.hpp"
 
-//+------------------------------------------------------------------------
+//+-----------------------------------------------------------------------------
 //
 //  Function:  PopulateSurfaceDesc
 //
-//  Synopsis:  Creates a D3DSURFACE_DESC from the specified parameters
+//  Synopsis:  2D 텍스처 설명을 채운다. 밉 1단계, 배열 1, 멀티샘플 없음.
 //
-// Return Value:
-//
-//  None
-//
-//-------------------------------------------------------------------------
-void 
+//------------------------------------------------------------------------------
+
+void
 PopulateSurfaceDesc(
-    D3DFORMAT fmtPixelFormat,
-    D3DPOOL d3dPool,
-    DWORD dwUsage, 
+    DXGI_FORMAT fmtPixelFormat,
+    D3D11_USAGE usage,
+    UINT uBindFlags,
+    UINT uCpuAccessFlags,
     UINT uTextureWidth,
     UINT uTextureHeight,
-    __out_ecount(1) D3DSURFACE_DESC *pDesc 
+    __out_ecount(1) D3D11_TEXTURE2D_DESC *pDesc
     )
 {
-    //
-    // Add more usages here as we need them.
-    //
-    Assert(   dwUsage == D3DUSAGE_RENDERTARGET
-           || dwUsage == 0
-           );
     Assert(uTextureWidth > 0 && uTextureHeight > 0);
 
-    pDesc->Format = fmtPixelFormat;
-    pDesc->Type = D3DRTYPE_TEXTURE;
-    pDesc->Usage = dwUsage;
-    pDesc->Pool = d3dPool;
-    pDesc->MultiSampleType = D3DMULTISAMPLE_NONE;
-    pDesc->MultiSampleQuality = 0;
+    ZeroMemory(pDesc, sizeof(*pDesc));
+
     pDesc->Width = uTextureWidth;
     pDesc->Height = uTextureHeight;
+    pDesc->MipLevels = 1;
+    pDesc->ArraySize = 1;
+    pDesc->Format = fmtPixelFormat;
+    pDesc->SampleDesc.Count = 1;
+    pDesc->SampleDesc.Quality = 0;
+    pDesc->Usage = usage;
+    pDesc->BindFlags = uBindFlags;
+    pDesc->CPUAccessFlags = uCpuAccessFlags;
+    pDesc->MiscFlags = 0;
 }
 
-//+------------------------------------------------------------------------
+//+-----------------------------------------------------------------------------
 //
-//  Function:  GetMinimalTextureDesc
+//  Function:  IsSupportedTextureFormat
 //
-//  Synopsis:  Returns a surface description for a texture the
-//              given D3D device should be capable of creating that
-//              can retain all data a texture with given
-//              description could hold.
+//  Synopsis:  WpfGfx가 Feature Level 10.0 이상에서 텍스처로 만드는 포맷.
+//             팔레트·24bpp·16bpp 소스 비트맵은 CPU에서 32bpp로 바꿔 올린다.
 //
-// Return Value:
-//
-//   S_OK - suitable texture description was found,
-//   S_FALSE - smaller texture description was found,
-//            otherwise, varying D3DERR_Xxx values.
-//
+//------------------------------------------------------------------------------
+
+bool
+IsSupportedTextureFormat(
+    DXGI_FORMAT fmt
+    )
+{
+    switch (fmt)
+    {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8X8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+    case DXGI_FORMAT_A8_UNORM:
+    case DXGI_FORMAT_R8_UNORM:
+        return true;
+    default:
+        return false;
+    }
+}
 
 DeclareTagEx(tagTextureFixup, "MIL_HW", "Texture Create Description Fixup", FALSE /* fEnabled */);
 
+//+-----------------------------------------------------------------------------
+//
+//  Function:  GetMinimalTextureDesc
+//
+//  Synopsis:  디바이스 한계에 맞게 크기와 포맷을 고친다. 크기를 줄였으면 S_FALSE.
+//             Feature Level 10.0 이상에서는 비2의 거듭제곱 제약이 없다.
+//
+//------------------------------------------------------------------------------
+
 HRESULT
 GetMinimalTextureDesc(
-    __in_ecount(1) IDirect3DDevice9 *pD3DDevice,    // The D3D device to check
-                                                    // for the surface
-                                                    // description
-
-    D3DFORMAT AdapterFormat,                        // Format the adapter is
-                                                    // displaying
-
-    __in_ecount(1) D3DCAPS9 const *pcaps,           // The caps for the
-                                                    // D3DDevice
-
-    __inout_ecount(1) D3DSURFACE_DESC *pd3dsd,      // D3D surface description
-                                                    // that holds the minimal
-                                                    // dimension at start and
-                                                    // at the end what should
-                                                    // be given passed to
-                                                    // CreateTexture.
-
-    BOOL fPalUsesAlpha,                             // set to TRUE when an
-                                                    // associated palette is
-                                                    // not completely opaque
-
-    DWORD dwFlags                                   // Flags specifying which
-                                                    // fields need checked.
+    __in_ecount(1) MilDeviceCaps const *pcaps,     // The caps for the device
+    __inout_ecount(1) D3D11_TEXTURE2D_DESC *pDesc,  // Texture description to fix up
+    BOOL fPalUsesAlpha,                             // TRUE when an associated palette has alpha
+    DWORD dwFlags                                   // Flags specifying which fields to check
     )
 {
     HRESULT hr = S_OK;
 
 #if DBG
-    D3DSURFACE_DESC d3dsdOrg;
-
-    d3dsdOrg.Format = pd3dsd->Format;
-    d3dsdOrg.Width  = pd3dsd->Width;
-    d3dsdOrg.Height = pd3dsd->Height;
+    D3D11_TEXTURE2D_DESC descOrg = *pDesc;
 #endif DBG
 
-    // Do either width or height need checked?
-    //  => Are relative flags not equal to ignoring both width and height?
-    if ((dwFlags & (GMTD_IGNORE_WIDTH | GMTD_IGNORE_HEIGHT))
-        != (GMTD_IGNORE_WIDTH | GMTD_IGNORE_HEIGHT))
+    if ((dwFlags & GMTD_IGNORE_WIDTH) == 0)
     {
-        // Adjust dimensions per texture capabilites
-        if ((dwFlags & GMTD_IGNORE_WIDTH) == 0)
+        if (pDesc->Width > pcaps->MaxTextureWidth)
         {
-            // Adjust width as needed
-            if (pd3dsd->Width > pcaps->MaxTextureWidth)
-            {
-                pd3dsd->Width = pcaps->MaxTextureWidth;
-
-                Assert(!(pcaps->TextureCaps & D3DPTEXTURECAPS_POW2) ||
-                       (pcaps->MaxTextureWidth ==
-                        RoundToPow2(pcaps->MaxTextureWidth)));
-
-                hr = S_FALSE;
-            }
-            else if (pcaps->TextureCaps & D3DPTEXTURECAPS_POW2)
-            {
-                if (dwFlags & GMTD_NONPOW2CONDITIONAL_OK)
-                {
-                    Assert(pcaps->TextureCaps & D3DPTEXTURECAPS_NONPOW2CONDITIONAL);
-                    // Width need not be adjusted
-                }
-                else
-                {
-                    pd3dsd->Width = RoundToPow2(pd3dsd->Width);
-
-                    Assert(pd3dsd->Width <= pcaps->MaxTextureWidth);
-                }
-            }
+            pDesc->Width = pcaps->MaxTextureWidth;
+            hr = S_FALSE;
         }
+    }
 
-        if ((dwFlags & GMTD_IGNORE_HEIGHT) == 0)
+    if ((dwFlags & GMTD_IGNORE_HEIGHT) == 0)
+    {
+        if (pDesc->Height > pcaps->MaxTextureHeight)
         {
-            // Adjust height as needed
-            if (pd3dsd->Height > pcaps->MaxTextureHeight)
-            {
-                pd3dsd->Height = pcaps->MaxTextureHeight;
-
-                Assert(!(pcaps->TextureCaps & D3DPTEXTURECAPS_POW2) ||
-                       (pcaps->MaxTextureHeight ==
-                        RoundToPow2(pcaps->MaxTextureHeight)));
-
-                hr = S_FALSE;
-            }
-            else if (pcaps->TextureCaps & D3DPTEXTURECAPS_POW2)
-            {
-                if (dwFlags & GMTD_NONPOW2CONDITIONAL_OK)
-                {
-                    Assert(pcaps->TextureCaps & D3DPTEXTURECAPS_NONPOW2CONDITIONAL);
-                    // Height need not be adjusted
-                }
-                else
-                {
-                    pd3dsd->Height = RoundToPow2(pd3dsd->Height);
-
-                    Assert(pd3dsd->Height <= pcaps->MaxTextureHeight);
-                }
-            }
+            pDesc->Height = pcaps->MaxTextureHeight;
+            hr = S_FALSE;
         }
     }
 
     if ((dwFlags & GMTD_IGNORE_FORMAT) == 0)
     {
-        IDirect3D9 *    pd3d9;
-        D3DFORMAT       d3dFormat;
-
-        // Save HR from width/height check
         HRESULT hrWH = hr;
+        DXGI_FORMAT fmt = pDesc->Format;
 
-        if (SUCCEEDED((hr = THR(pD3DDevice->GetDirect3D(&pd3d9)))))
+        while (fmt != DXGI_FORMAT_UNKNOWN && !IsSupportedTextureFormat(fmt))
         {
-            d3dFormat = pd3dsd->Format;
-
-            // If the format is palettized and the palette has alpha, but
-            //  the device can't draw alpha from a palette then, the format
-            //  needs bumped at least once.
-            if ((d3dFormat == D3DFMT_P8) &&
-                fPalUsesAlpha &&
-                !(pcaps->TextureCaps & D3DPTEXTURECAPS_ALPHAPALETTE))
-            {
-                d3dFormat = GetSuperiorSurfaceFormat(d3dFormat, fPalUsesAlpha);
-            }
-
-            do
-            {
-                hr = pd3d9->CheckDeviceFormat(
-                    pcaps->AdapterOrdinal,
-                    pcaps->DeviceType,
-                    AdapterFormat,
-                    pd3dsd->Usage,
-                    pd3dsd->Type,
-                    d3dFormat
-                    );
-
-                if (SUCCEEDED(hr))
-                {
-                    pd3dsd->Format = d3dFormat;
-                    break;
-                }
-
-                d3dFormat = GetSuperiorSurfaceFormat(d3dFormat, fPalUsesAlpha);
-
-            } while ( d3dFormat != D3DFMT_UNKNOWN );
-
-            pd3d9->Release();
-
-            //
-            // There are some formats to which the condition non-power of 2
-            // support does not apply.  We shouldn't be using them anyway; so
-            // just assert that is so.
-            //
-            Assert(   ((dwFlags & GMTD_NONPOW2CONDITIONAL_OK) == 0)
-                   || (   (d3dFormat != D3DFMT_DXT1)
-                       && (d3dFormat != D3DFMT_DXT2)
-                       && (d3dFormat != D3DFMT_DXT3)
-                       && (d3dFormat != D3DFMT_DXT4)
-                       && (d3dFormat != D3DFMT_DXT5)
-                  )   );
+            fmt = GetSuperiorSurfaceFormat(fmt, fPalUsesAlpha);
         }
 
-        // If format is ok, restore HR from width/height check
-        if(SUCCEEDED(hr))
+        if (fmt == DXGI_FORMAT_UNKNOWN)
         {
+            hr = E_FAIL;
+        }
+        else
+        {
+            pDesc->Format = fmt;
             hr = hrWH;
         }
-        
     }
 
 #if DBG
     if (IsTagEnabled(tagTextureFixup) &&
         SUCCEEDED(hr) &&
-        (d3dsdOrg.Format != pd3dsd->Format ||
-         d3dsdOrg.Width  != pd3dsd->Width ||
-         d3dsdOrg.Height != pd3dsd->Height
+        (descOrg.Format != pDesc->Format ||
+         descOrg.Width  != pDesc->Width ||
+         descOrg.Height != pDesc->Height
        ))
     {
         TraceTag((tagTextureFixup,
-                  "CD3DDeviceLevel1::GetMinimalTextureDesc modified description:\n"
+                  "GetMinimalTextureDesc modified description:\n"
                   "  In:  Fmt: %lu  %lu x %lu\n"
                   " Out:  Fmt: %lu  %lu x %lu",
-                  d3dsdOrg.Format, d3dsdOrg.Width, d3dsdOrg.Height,
-                  pd3dsd->Format, pd3dsd->Width, pd3dsd->Height
+                  descOrg.Format, descOrg.Width, descOrg.Height,
+                  pDesc->Format, pDesc->Width, pDesc->Height
                   ));
     }
 #endif DBG
@@ -260,59 +162,38 @@ GetMinimalTextureDesc(
     return hr;
 }
 
-//+------------------------------------------------------------------------
+//+-----------------------------------------------------------------------------
 //
 //  Function:  GetSuperiorSurfaceFormat
 //
-//  Synopsis:  Returns a surface format that is superior to the given
-//         format in that it can hold more color information.
+//  Synopsis:  주어진 포맷을 표현할 수 있는 다음 상위 포맷. 더 없으면 UNKNOWN.
 //
-// Return Value:
-//
-//   D3DFMT_UNKNOWN - no superior format was found.
-//
-//-------------------------------------------------------------------------
-D3DFORMAT
+//------------------------------------------------------------------------------
+
+DXGI_FORMAT
 GetSuperiorSurfaceFormat(
-    D3DFORMAT d3dFormat,    // In: base D3D surface format
-    BOOL fPalUsesAlpha      // In: set to TRUE when an associated
-                            //      palette is not completely opaque
+    DXGI_FORMAT fmt,        // In: base surface format
+    BOOL fPalUsesAlpha      // In: set to TRUE when an associated palette has alpha
     )
 {
-    switch (d3dFormat)
+    switch (fmt)
     {
-    case D3DFMT_P8:
-        if (fPalUsesAlpha)
-        {
-            return D3DFMT_A8R8G8B8;
-        }
-        else
-        {
-            return D3DFMT_R8G8B8;
-        }
+    case DXGI_FORMAT_B5G5R5A1_UNORM:
+        return DXGI_FORMAT_B5G6R5_UNORM;
 
-    case D3DFMT_X1R5G5B5:
-        return D3DFMT_R5G6B5;
+    case DXGI_FORMAT_B5G6R5_UNORM:
+        return DXGI_FORMAT_B8G8R8X8_UNORM;
 
-    case D3DFMT_R5G6B5:
-        return D3DFMT_R8G8B8;
+    case DXGI_FORMAT_R8_UNORM:
+        return fPalUsesAlpha ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
 
-    case D3DFMT_R8G8B8:
-        return D3DFMT_X8R8G8B8;
+    case DXGI_FORMAT_B8G8R8X8_UNORM:
+        return DXGI_FORMAT_B8G8R8A8_UNORM;
 
-    case D3DFMT_X8R8G8B8:
-        return D3DFMT_A8R8G8B8;
-
-    case D3DFMT_A8P8:
-        return D3DFMT_A8R8G8B8;
-
-    case D3DFMT_A1R5G5B5:
-        return D3DFMT_A8R8G8B8;
-
-    case D3DFMT_A8R8G8B8:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
     default:
         break;
     }
 
-    return D3DFMT_UNKNOWN;
+    return DXGI_FORMAT_UNKNOWN;
 }

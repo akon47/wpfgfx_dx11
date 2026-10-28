@@ -33,7 +33,7 @@ const size_t kTargetPixelSize = sizeof(ARGB);
 CHw3DSoftwareSurface::CHw3DSoftwareSurface(
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
     MilPixelFormat::Enum fmtTarget,
-    D3DFORMAT d3dfmtTarget,
+    DXGI_FORMAT d3dfmtTarget,
     DisplayId associatedDisplay,
     bool fComposeWithCopy
     ) :
@@ -113,7 +113,7 @@ CHw3DSoftwareSurface::Create(
     }
 
     // Make sure device is capable of using this target format
-    D3DFORMAT d3dfmtTarget = PixelFormatToD3DFormat(fmtTarget);
+    DXGI_FORMAT d3dfmtTarget = PixelFormatToD3DFormat(fmtTarget);
     IFC(pD3DDevice->CheckRenderTargetFormat(d3dfmtTarget));
 
     pHw3DFallback = new CHw3DSoftwareSurface(
@@ -192,7 +192,7 @@ CHw3DSoftwareSurface::BeginSw3D(
 
     if (m_rcBounds.Intersect(rcBounds))
     {
-        D3DLOCKED_RECT d3dLock;
+        MilLockedRect d3dLock;
 
         //
         // Lock everything within bounds
@@ -264,7 +264,7 @@ CHw3DSoftwareSurface::BeginSw3D(
 
         if (prZ)
         {
-            D3DMULTISAMPLE_TYPE MultisampleType = D3DMULTISAMPLE_NONE;
+            DXGI_SAMPLE_DESC MultisampleType = { 1, 0 };
 
             IFC(CHwSurfaceRenderTarget::Begin3DInternal(
                 *prZ,
@@ -272,8 +272,8 @@ CHw3DSoftwareSurface::BeginSw3D(
                 MultisampleType
                 ));
 
-            // We should not change MultisampleType if D3DMULTISAMPLE_NONE is requested
-            Assert(MultisampleType == D3DMULTISAMPLE_NONE);
+            // We should not change MultisampleType if no multisampling is requested
+            Assert(MultisampleType.Count == 1);
         }
 
     }
@@ -457,13 +457,14 @@ CHw3DSoftwareSurface::EnsureSurface()
     {
         ENTER_DEVICE_FOR_SCOPE(*m_pD3DDevice);
 
+        DXGI_SAMPLE_DESC sampleDesc = { 1, 0 };
+
         IFC(m_pD3DDevice->CreateRenderTarget(
             m_uiNewTargetWidth,
             m_uiNewTargetHeight,
             m_d3dfmtTargetSurface,
-            D3DMULTISAMPLE_NONE,
-            0,
-            TRUE,
+            sampleDesc,
+            true,
             &m_pD3DTargetSurface
             ));
 
@@ -520,7 +521,7 @@ CHw3DSoftwareSurface::CompositeWithSwRenderTarget(
     )
 {
     HRESULT hr = S_OK;
-    D3DLOCKED_RECT d3dLock;
+    MilLockedRect d3dLock;
 
     BOOL fSurfaceLocked = false;
 

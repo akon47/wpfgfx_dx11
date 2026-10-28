@@ -89,7 +89,7 @@ void CDesktopHWNDRenderTarget::ComputeRenderAndAdjustPresentBounds(
         && (   (m_eWindowLayerType == MilWindowLayerType::NotLayered)
             || (m_cRT == 1)
             || (   (m_eWindowLayerType == MilWindowLayerType::ApplicationManagedLayer)
-                && (m_pDisplaySet->D3DExObject() == NULL))
+                && false /* always WDDM with D3D11 */)
        )   )
     {
 

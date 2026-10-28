@@ -37,7 +37,7 @@ public:
     //
 
     static HRESULT InitializeFromRegistry(
-        __in_ecount(1) IDirect3D9 *pD3D
+        UINT cAdapters
         );
 
     static HRESULT IsAdapterEnabled(
@@ -63,7 +63,7 @@ private:
         );
 
     static HRESULT InitializeDriversFromRegistry(
-        __inout_ecount(1) IDirect3D9 *pD3D
+        UINT cAdapters
         );
 
 private:

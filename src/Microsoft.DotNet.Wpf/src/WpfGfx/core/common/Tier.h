@@ -5,10 +5,9 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//  
-//  Description
-//     Graphic Hardware Acceleration Tier declarations
+//  Description:
+//      Graphics acceleration tier computation.
+//
 //------------------------------------------------------------------------------
 
 #pragma once
@@ -18,14 +17,13 @@
 typedef int TierType;
 
 class CDisplay;
+struct MilDeviceCaps;
 
 namespace GraphicsAccelerationTier
 {
     TierType
     GetTier(
         UINT uMemorySize,
-        __in_ecount(1) const D3DCAPS9 &caps
+        __in_ecount(1) const MilDeviceCaps &caps
         );
 }
-
-

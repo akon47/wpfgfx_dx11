@@ -5,8 +5,6 @@
 
 //------------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DSwapChain implementation
 //
@@ -19,17 +17,15 @@ MtExtern(D3DResource_SwapChain);
 //  Class: CD3DSwapChain
 //
 //  Description:
-//     Abstracts the core D3D swapchain.  The main reason to wrap this
-//     d3d object is so that we can respond to mode changes, i.e.,   
-//     respond to E_DEVICELOST on the Present.
+//     Abstracts the DXGI swapchain.  The main reason to wrap this object is
+//     so that we can respond to mode changes and device removal on Present.
 //
 //------------------------------------------------------------------------------
 
 class CD3DSwapChain : public CD3DResource
 {
     // We present through CD3DDeviceLevel1 instead of the CD3DSwap chain so that
-    // we can have CD3DDeviceLevel1 internally call Begin/EndScene instead of
-    // exposing this on the CD3DDeviceLevel1 interface
+    // we can have CD3DDeviceLevel1 handle present failures centrally.
 
     friend HRESULT CD3DDeviceLevel1::Present(
         __in_ecount(1) CD3DSwapChain const *pD3DSwapChain,
@@ -51,24 +47,20 @@ public:
 
     static HRESULT Create(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DSwapChain9 *pID3DSwapChain9,
+        __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain,
         UINT BackBufferCount,
-        __in_ecount_opt(1) CMILDeviceContext const *pPresentContext,        
+        __in_ecount_opt(1) CMILDeviceContext const *pPresentContext,
         __deref_out_ecount(1) CD3DSwapChain **ppSwapChain
         );
 
     //
-    // IDirect3DSwapChain9 like helper methods
+    // IDXGISwapChain like helper methods
     //
-    
+
     HRESULT GetBackBuffer(
         __in_range(<, this->m_cBackBuffers) UINT iBackBuffer,
         __deref_out_ecount(1) CD3DSurface **ppBackBuffer
         ) const;
-
-    HRESULT GetFrontBuffer(
-        __deref_out_ecount(1) CD3DSurface **ppFrontBuffer
-        );
 
     virtual HRESULT GetDC(
         __in_range(<, this->m_cBackBuffers) UINT iBackBuffer,
@@ -79,7 +71,12 @@ public:
     virtual HRESULT ReleaseDC(
         __in_range(<, this->m_cBackBuffers) UINT iBackBuffer,
         __in HDC hdcBackBuffer
-        ) const;  
+        ) const;
+
+    __out_ecount_opt(1) IDXGISwapChain1 *GetDXGISwapChainNoRef() const
+    {
+        return m_pDXGISwapChain;
+    }
 
 #if DBG
     UINT DbgGetNumBackBuffers() const
@@ -90,7 +87,7 @@ public:
 
 protected:
     CD3DSwapChain(
-        __inout_ecount(1) IDirect3DSwapChain9 *pD3DSwapChain9,
+        __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain,
         __in_range(>, 0) __out_range(==, this->m_cBackBuffers) UINT cBackBuffers,
         __out_ecount_full_opt(cBackBuffers) CD3DSurface * * const prgBackBuffers
         );
@@ -111,23 +108,19 @@ private:
 #endif
 
 
-    // 
+    //
     // CD3DResource methods
     //
 
     void ReleaseD3DResources();
 
 private:
-    // Pointer to the actual D3D resource.
+    // Pointer to the actual DXGI resource.
     //  The pointer is constant to help enforce the modification restrictions
     //  of CD3DResource objects.
-    IDirect3DSwapChain9 * const m_pD3DSwapChain;
-
-    IDirect3DSwapChain9Ex *m_pD3DSwapChainEx;
+    IDXGISwapChain1 * const m_pDXGISwapChain;
 
 protected:
     __field_range(>, 1) UINT const m_cBackBuffers;
     __field_ecount(m_cBackBuffers) CD3DSurface * * const m_rgBackBuffers;
 };
-
-

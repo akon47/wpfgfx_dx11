@@ -11,6 +11,11 @@
 //
 //------------------------------------------------------------------------------
 
+// D3DImage 사용자 백 버퍼 객체. vtable 로만 호출한다 (d3d9.h 는 .cpp 에서만 포함).
+interface IDirect3DSurface9;
+interface IDirect3DDevice9;
+interface IDirect3DDevice9Ex;
+
 MtExtern(CInteropDeviceBitmap);
 
 class CInteropDeviceBitmap : 

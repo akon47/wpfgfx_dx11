@@ -25,6 +25,7 @@
 //
 //------------------------------------------------------------------------------
 
+#include "d3d9interop.h"   // Vmr9.h/dxva2api.h/evr.h 가 D3D9 타입을 쓴다 (D16)
 #include <strmif.h>
 #include <Vmr9.h>
 #include <nserror.h>

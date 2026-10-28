@@ -445,8 +445,8 @@ CHwDestinationTexture::SetContents(
         // If our dimensions are valid create a texture
         if (m_uTextureWidth > 0 && m_uTextureHeight > 0)
         {
-            D3DSURFACE_DESC sdLevel0;
-            
+            D3D11_TEXTURE2D_DESC sdLevel0;
+
             // We're recreating the texture, so we'll need to re-realize
             m_fValidRealization = false;
 
@@ -454,8 +454,9 @@ CHwDestinationTexture::SetContents(
 
             PopulateSurfaceDesc(
                 PixelFormatToD3DFormat(fmtRT),
-                D3DPOOL_DEFAULT,
-                D3DUSAGE_RENDERTARGET,
+                D3D11_USAGE_DEFAULT,
+                D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+                0,
                 m_uTextureWidth,
                 m_uTextureHeight,
                 &sdLevel0
@@ -466,7 +467,7 @@ CHwDestinationTexture::SetContents(
             // successfully validated.
 #if DBG
 
-            D3DSURFACE_DESC sd = sdLevel0;
+            D3D11_TEXTURE2D_DESC sd = sdLevel0;
             Assert(SUCCEEDED(m_pDevice->GetMinimalTextureDesc(
                 &sd, 
                 FALSE, 
@@ -501,8 +502,8 @@ CHwDestinationTexture::SetContents(
 
             SetFilterAndWrapModes(
                 MilBitmapInterpolationMode::NearestNeighbor, 
-                D3DTADDRESS_CLAMP, 
-                D3DTADDRESS_CLAMP
+                D3D11_TEXTURE_ADDRESS_CLAMP, 
+                D3D11_TEXTURE_ADDRESS_CLAMP
                 );
             
             // Remember format
@@ -672,7 +673,7 @@ CHwDestinationTexture::UpdateSourceRect(
         IFC(pHwTargetSurface->PopulateDestinationTexture(
             &rcSource,
             &rcDest,
-            m_pBackgroundTexture->GetD3DTextureNoRef()
+            m_pBackgroundTexture
             ));
     }
 
@@ -701,18 +702,13 @@ CHwDestinationTexture::DbgSetContentsInvalid(
 {
     HRESULT hr = S_OK;
 
-    IDirect3DSurface9 *pDestSurface = NULL;
-
+    CD3DSurface *pDestSurface = NULL;
 
     // get the destination surface
-    {
-        IDirect3DTexture9 *pDestTextureNoRef = m_pBackgroundTexture->GetD3DTextureNoRef();
-    
-        IFC(pDestTextureNoRef->GetSurfaceLevel(
-            0,
-            &pDestSurface
-            ));
-    }
+    IFC(m_pBackgroundTexture->GetD3DSurfaceLevel(
+        0,
+        &pDestSurface
+        ));
 
     // fill to some kind of purple
     D3DCOLOR fillColor = D3DCOLOR_ARGB(255, 255, 0, 128);

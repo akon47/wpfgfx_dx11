@@ -1360,6 +1360,12 @@ NewMixerDevice(
 
     GetUnderlyingDevice(pMixerDevice, &pIMixerDevice);
 
+    if (pIMixerDevice == NULL)
+    {
+        // No D3D9 device behind the D3D11 engine device until M11.
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+    }
+
     //
     // Media requires a multithreaded device
     //
@@ -3412,7 +3418,7 @@ EvrPresenter::AVSurfaceRenderer::GetHWDevice(
     }
 
     Assert(pDisplaySet->Display(adapter));
-    Assert(pDisplaySet->D3DObject());
+    Assert(pDisplaySet->IsD3DAvailable());
 
     //
     // This may fail if D3D support is unavailable
@@ -3421,7 +3427,7 @@ EvrPresenter::AVSurfaceRenderer::GetHWDevice(
             GetDesktopWindow(),
             sc_milInitFlags,
             pDisplaySet->Display(adapter),
-            D3DDEVTYPE_HAL,
+            MilDeviceKind_Hardware,
             ppD3DDevice,
             NULL,
             NULL));

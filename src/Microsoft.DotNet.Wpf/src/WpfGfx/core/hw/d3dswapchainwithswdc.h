@@ -5,8 +5,6 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DSwapChainWithSwDC implementation
 //
@@ -18,8 +16,9 @@
 //
 //  Description:
 //      This class overrides the GetDC method of CD3DSwapChain to implement
-//      GetDC using GetRenderTargetData. This approach acheived phenominal perf
-//      wins in WDDM since there is no GDI hardware acceleration in WDDM.
+//      GetDC by reading the back buffer into a system memory DIB. This
+//      approach acheived phenominal perf wins in WDDM since there is no GDI
+//      hardware acceleration in WDDM.
 //
 //------------------------------------------------------------------------------
 
@@ -27,7 +26,7 @@ class CD3DSwapChainWithSwDC : public CD3DSwapChain
 {
     friend static HRESULT CD3DSwapChain::Create(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DSwapChain9 *pID3DSwapChain9,
+        __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain,
         UINT BackBufferCount,
         __in_ecount_opt(1) CMILDeviceContext const *pPresentContext,
         __deref_out_ecount(1) CD3DSwapChain **ppSwapChain
@@ -49,7 +48,7 @@ private:
     CD3DSwapChainWithSwDC(
         __in HDC hdcPresentVia,
         __in_range(>, 0) /*__out_range(==, this->m_cBackBuffers)*/ UINT cBackBuffers,
-        __inout_ecount(1) IDirect3DSwapChain9 *pID3DSwapChain
+        __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain
         );
 
 protected:
@@ -68,6 +67,3 @@ private:
     UINT m_cbBuffer;
     UINT m_stride;
 };
-
-
-

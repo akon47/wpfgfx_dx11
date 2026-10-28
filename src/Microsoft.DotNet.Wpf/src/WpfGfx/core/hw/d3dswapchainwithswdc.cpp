@@ -5,14 +5,11 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DSwapChainWithSwDC implementation
 //
 //      This class overrides the GetDC method of CD3DSwapChain to implement
-//      GetDC using GetRenderTargetData. This approach acheived phenominal perf
-//      wins in WDDM.
+//      GetDC by reading the back buffer into a system memory DIB.
 //
 
 #include "precomp.hpp"
@@ -32,9 +29,9 @@
 CD3DSwapChainWithSwDC::CD3DSwapChainWithSwDC(
     __in HDC hdcPresentVia,
     __in_range(>, 0) /*__out_range(==, this->m_cBackBuffers)*/ UINT cBackBuffers,
-    __inout_ecount(1) IDirect3DSwapChain9 *pD3DSwapChain
+    __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain
     ) : CD3DSwapChain(
-            pD3DSwapChain,
+            pDXGISwapChain,
             cBackBuffers,
             reinterpret_cast<CD3DSurface **>(reinterpret_cast<BYTE *>(this) + sizeof(*this))
             ),
@@ -71,7 +68,7 @@ CD3DSwapChainWithSwDC::~CD3DSwapChainWithSwDC()
 
 //+----------------------------------------------------------------------------
 //
-//  Member:    
+//  Member:
 //      CD3DSwapChainWithSwDC::Init
 //
 //  Synopsis:
@@ -89,11 +86,11 @@ CD3DSwapChainWithSwDC::Init(
     IFC(CD3DSwapChain::Init(pResourceManager));
 
     Assert(m_cBackBuffers >= 1);
-    D3DSURFACE_DESC const &surfDesc = m_rgBackBuffers[0]->Desc();
+    D3D11_TEXTURE2D_DESC const &surfDesc = m_rgBackBuffers[0]->Desc();
 
     // We don't handle anything else yet
-    Assert(   surfDesc.Format == D3DFMT_A8R8G8B8
-           || surfDesc.Format == D3DFMT_X8R8G8B8
+    Assert(   surfDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM
+           || surfDesc.Format == DXGI_FORMAT_B8G8R8X8_UNORM
           );
 
     BITMAPINFO bmi;
@@ -134,7 +131,7 @@ CD3DSwapChainWithSwDC::Init(
         m_hdcCopiedBackBuffer,
         m_hbmpCopiedBackBuffer
         ));
-    
+
 Cleanup:
     RRETURN(hr);
 }
@@ -164,7 +161,7 @@ CD3DSwapChainWithSwDC::GetDC(
 
     Assert(iBackBuffer < m_cBackBuffers);
 
-    D3DSURFACE_DESC const &surfDesc = m_rgBackBuffers[iBackBuffer]->Desc();
+    D3D11_TEXTURE2D_DESC const &surfDesc = m_rgBackBuffers[iBackBuffer]->Desc();
 
     UINT cbBufferInset =
           m_stride * rcDirty.top
@@ -211,7 +208,3 @@ CD3DSwapChainWithSwDC::ReleaseDC(
 
     return S_OK;
 }
-
-
-
-

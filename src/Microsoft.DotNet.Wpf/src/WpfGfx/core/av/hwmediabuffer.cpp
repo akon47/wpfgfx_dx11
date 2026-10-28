@@ -197,6 +197,12 @@ Init(
 
     GetUnderlyingDevice(m_pMixerDevice, &pIMixerDevice);
 
+    if (pIMixerDevice == NULL)
+    {
+        // No D3D9 device behind the D3D11 engine device until M11.
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+    }
+
     IFC(m_pIMixerTexture->GetSurfaceLevel(0, &m_pIMixerSurface));
 
     //
@@ -280,6 +286,12 @@ CreateMixerTexture(
 
     GetUnderlyingDevice(m_pMixerDevice, &pIMixerDevice);
 
+    if (pIMixerDevice == NULL)
+    {
+        // No D3D9 device behind the D3D11 engine device until M11.
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+    }
+
     IFC(pIMixerDevice->CreateTexture(
             ddsd.Width,
             ddsd.Height,
@@ -338,11 +350,9 @@ CacheTextureOnBitmap(
         //
         Assert(m_pIMixerTexture);
 
-        IFC(CacheHwTextureOnBitmap(
-            m_pIMixerTexture,
-            m_pBitmap,
-            m_pRenderDevice
-            ));
+        // The mixer texture is a D3D9 texture; caching it on the D3D11 engine
+        // bitmap is reworked in M11.
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
 
         m_fTextureCachedOnBitmap = true;
     }
@@ -386,15 +396,14 @@ GetSurfaceDescription(
     pD3DSurfaceDesc->MultiSampleType = D3DMULTISAMPLE_NONE;
     pD3DSurfaceDesc->MultiSampleQuality = 0;    // Multisample quality is irrelevant.
 
-    hr = m_pRenderDevice->GetMinimalTextureDesc(pD3DSurfaceDesc, false, GMTD_CHECK_ALL | GMTD_NONPOW2CONDITIONAL_OK);
-
-    if (hr == S_FALSE) // means we can't create a big enough texture
+    //
+    // The D3D9 mixer texture is not adjusted by the D3D11 device caps (M11);
+    // only the size limit is checked.
+    //
+    if (   m_uiWidth > m_pRenderDevice->GetMaxTextureWidth()
+        || m_uiHeight > m_pRenderDevice->GetMaxTextureHeight())
     {
         IFC(WGXERR_AV_REQUESTEDTEXTURETOOBIG);
-    }
-    else
-    {
-        IFC(hr);
     }
 
 Cleanup:
@@ -461,7 +470,7 @@ CopyBitmap(
         m_pBitmap->HrInit(
             m_uiWidth,
             m_uiHeight,
-            D3DFormatToPixelFormat(
+            MilD3D9FormatToPixelFormat(
                 m_format,
                 FALSE),
             lockedRect.Pitch * m_uiHeight,  // Buffer size

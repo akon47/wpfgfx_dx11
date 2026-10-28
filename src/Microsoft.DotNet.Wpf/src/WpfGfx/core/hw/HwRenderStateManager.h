@@ -5,74 +5,33 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics_d3d
 //      $Keywords:
 //
 //  $Description:
-//      Contains CHwRenderStateManager implementation
+//      Contains CHwRenderStateManager declaration
 //
-//      The purpose of this class is to centralize all states used by our
-//      rendering engine so that we can reduce state transitions for better
-//      performance.  We also limit the states that can be set so that we can
-//      understand and restrict the requirements for our engine.
+//      파이프라인 상태의 그림자 사본을 들고 있다가 Draw 직전(ApplyStateForDraw)에
+//      바뀐 것만 D3D11 컨텍스트에 바인딩한다. 블렌드·깊이스텐실·래스터라이저·샘플러
+//      상태는 desc를 키로 상태 객체를 캐시한다. 셰이더 상수는 D3D9와 같은 레지스터
+//      번호 체계(float4 c#)를 유지하고 상수 버퍼 하나로 올린다.
 //
-//      This class also maintains a table of render states and will only call
-//      D3D on the states that change.  We've measured noticeable performance
-//      improvements by avoiding the D3D API overhead.
-//
-//      NOTE-2004/05/21-chrisra State blocks are not a win.
-//
-//      Removing the stateblocks to go to setting the states and restoring them
-//      for 3D saved about 20% on our scenarios.  If we have to manage more
-//      states that may change, but for the time it looks like a big win to keep
-//      from using stateblocks.
+//      버텍스 셰이더나 픽셀 셰이더가 NULL이면 고정 기능 에뮬레이션 셰이더를 쓴다
+//      (CHwFixedFunctionShaders).
 //
 //  $ENDTAG
 //
-//  State Table Caches:
-//      The recent changes remove the Table caches from the D3DRenderState class
-//      In order to do the tables again changes would have to be made to the
-//      HwStateTable class so all the states would have a pointer to a pointer
-//      to a table that represents values for multiple states.
-//
-//      The HwRenderStateManager can keep a pointer to a table.  That pointer
-//      would be referenced by all the states in the HwStateTable so if any of
-//      them were set, they could NULL out the table pointer here in the
-//      HwRenderStateManager.  That way if any appropriate state values changed,
-//      when the HwRenderStateManager checked it's table pointer would be NULL.
-//
-//      class CHwRenderStateManager {
-//
-//      private:
-//          AlphaBlendMode *m_pCurrentAlphaBlendModeTable;
-//
-//          CHwStateTable<DWORD> m_renderStates;
-//      };
-//
-//      Then each entry in the CHwStateTable would have:
-//          [StateKnown | StateValue | StateTable]
-//
-//      And each of the renderstates that were tracked by the AlphaBlendMode
-//      table would have their StateTable entry set to
-//      &m_pCurrentAlphaBlendModeTable, so if it's set they can set the
-//      m_pCurrentAlphaBlendModeTable in CHwRenderStateManager to NULL.
-//
 //------------------------------------------------------------------------------
 
-// MIL_MAX_TEXTURE_STAGE: The maximum number of texture stages that the class CD3DRenderState
-// can use. The actual D3DDevice might not support this many, or it might support more.
 #define MIL_TEXTURE_STAGE_COUNT  8
 #define MIL_SAMPLER_COUNT        MIL_TEXTURE_STAGE_COUNT
 
-#define NUM_D3DRS 210
-#define NUM_D3DTSS 33
-#define NUM_D3DTSAMPLERSTATES 14
-
-#define NUM_D3DNONWORLDTRANSFORMS 24
+#define MIL_VS_FLOAT4_CONSTANTS  256
+#define MIL_PS_FLOAT4_CONSTANTS  224
+#define MIL_PS_INT4_CONSTANTS    16
+#define MIL_PS_BOOL_CONSTANTS    16
 
 ExternTag(tagWireframe);
 
@@ -80,43 +39,83 @@ MtExtern(CHwRenderStateManager);
 
 class CD3DDeviceLevel1;
 
-//+-----------------------------------------------------------------------------
 //
-//  Enumeration:
-//      PixelShader
+// 변환 상태 (D3DTS_* 대체). 고정 기능 에뮬레이션과 Set*TransformForVertexShader가 쓴다.
 //
-//  Synopsis:
-//      The class CD3DRenderState handles a number of pixel shaders.
-//
-//------------------------------------------------------------------------------
+enum MilTransformState
+{
+    MilTransform_World      = 0,
+    MilTransform_View       = 1,
+    MilTransform_Projection = 2,
+
+    MilTransform_Count
+};
 
 //
-// CalcTextureStateStatePos is a helper function to allow us to use a single
-// dimensional state array to keep track of the 2 dimensional TextureStageState
-// table.
+// 샘플러 상태 그림자. 바뀌면 상태 객체를 다시 찾는다.
 //
-MIL_FORCEINLINE DWORD
-CalcTextureStageStatePos(
-    DWORD dwStage,
-    D3DTEXTURESTAGESTATETYPE stateType
-    )
+struct MilSamplerState
 {
-    return dwStage*NUM_D3DTSS + stateType;
-}
+    D3D11_FILTER               Filter;
+    D3D11_TEXTURE_ADDRESS_MODE AddressU;
+    D3D11_TEXTURE_ADDRESS_MODE AddressV;
+    D3DCOLOR                   BorderColor;
+    UINT                       MaxAnisotropy;
+    BOOL                       UseMipMaps;
 
-//
-// CalcSamplerStatePos is a helper function to allow us to use a single
-// dimensional state array to keep track of the 2 dimensional SamplerState
-// table.
-//
-MIL_FORCEINLINE DWORD
-CalcSamplerStatePos(
-    DWORD dwSampler,
-    D3DSAMPLERSTATETYPE stateType
-    )
+    bool operator==(const MilSamplerState &o) const
+    {
+        return Filter == o.Filter && AddressU == o.AddressU && AddressV == o.AddressV
+            && BorderColor == o.BorderColor && MaxAnisotropy == o.MaxAnisotropy
+            && UseMipMaps == o.UseMipMaps;
+    }
+};
+
+struct MilBlendState
 {
-    return dwSampler*NUM_D3DTSAMPLERSTATES + stateType;
-}
+    BOOL       Enable;
+    D3D11_BLEND SrcBlend;
+    D3D11_BLEND DestBlend;
+    UINT8      WriteMask;
+
+    bool operator==(const MilBlendState &o) const
+    {
+        return Enable == o.Enable && SrcBlend == o.SrcBlend && DestBlend == o.DestBlend && WriteMask == o.WriteMask;
+    }
+};
+
+struct MilDepthStencilState
+{
+    BOOL                  DepthEnable;
+    BOOL                  DepthWriteEnable;
+    D3D11_COMPARISON_FUNC DepthFunc;
+    BOOL                  StencilEnable;
+    D3D11_COMPARISON_FUNC StencilFunc;
+    UINT8                 StencilReadMask;
+    UINT8                 StencilWriteMask;
+
+    bool operator==(const MilDepthStencilState &o) const
+    {
+        return DepthEnable == o.DepthEnable && DepthWriteEnable == o.DepthWriteEnable && DepthFunc == o.DepthFunc
+            && StencilEnable == o.StencilEnable && StencilFunc == o.StencilFunc
+            && StencilReadMask == o.StencilReadMask && StencilWriteMask == o.StencilWriteMask;
+    }
+};
+
+struct MilRasterizerState
+{
+    D3D11_FILL_MODE FillMode;
+    D3D11_CULL_MODE CullMode;
+    BOOL            ScissorEnable;
+    BOOL            MultisampleEnable;
+    BOOL            AntialiasedLineEnable;
+
+    bool operator==(const MilRasterizerState &o) const
+    {
+        return FillMode == o.FillMode && CullMode == o.CullMode && ScissorEnable == o.ScissorEnable
+            && MultisampleEnable == o.MultisampleEnable && AntialiasedLineEnable == o.AntialiasedLineEnable;
+    }
+};
 
 //+-----------------------------------------------------------------------------
 //
@@ -126,21 +125,15 @@ CalcSamplerStatePos(
 //  Synopsis:
 //      Acts as an intermediary device for setting state.
 //
-//  Responsibilites:
-//      - Uses state tables to set state only when the value has changed
-//
 //------------------------------------------------------------------------------
 class CHwRenderStateManager :
          public CMILRefCountBase
 {
 public:
     static __checkReturn HRESULT Create(
-        __inout_ecount(1) IDirect3DDevice9 *pD3DDevice,
-        DWORD dwMaxBlendStages,
-        BOOL fCanHandleBlendFactor,
-        BOOL fSupportsScissorRect,
-        __range(1,UINT_MAX) DWORD dwMaxStream,
-        __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel,
+        __inout_ecount(1) ID3D11Device *pD3DDevice,
+        __inout_ecount(1) ID3D11DeviceContext *pD3DContext,
+        __in_ecount(1) const MilDeviceCaps &caps,
         __deref_out_ecount(1) CHwRenderStateManager **ppStateManager
         );
 
@@ -152,41 +145,146 @@ public:
 
     DEFINE_REF_COUNT_BASE
 
-    // error C4995: 'D3DMATRIX': name was marked as #pragma deprecated
     //
-    // Ignore deprecation of D3DMATRIX for this prototype because
-    // it is defined in the interface this class is implementing
-#pragma warning (push)
-#pragma warning (disable : 4995)
-    HRESULT SetTransform(
-        D3DTRANSFORMSTATETYPE state,
-        __in_ecount(1) const D3DMATRIX *pMatrix
+    // Render targets. 즉시 바인딩한다.
+    //
+
+    HRESULT SetRenderTargetView(
+        __in_ecount_opt(1) ID3D11RenderTargetView *pRTV,
+        UINT uWidth,
+        UINT uHeight
         );
-#pragma warning (pop)
 
-    HRESULT SetRenderState(
-        D3DRENDERSTATETYPE state,
-        DWORD dwValue
-        )
-    {
-        return SetRenderStateInline(
-            state,
-            dwValue
-            );
-    }
+    __out_ecount_opt(1) ID3D11RenderTargetView *GetRenderTargetViewNoRef() const { return m_pRTV; }
 
-    HRESULT SetTextureStageState(
+    HRESULT SetDepthStencilView(
+        __in_ecount_opt(1) ID3D11DepthStencilView *pDSV,
+        UINT uWidth,
+        UINT uHeight
+        );
+
+    __out_ecount_opt(1) ID3D11DepthStencilView *GetDepthStencilViewNoRef() const { return m_pDSV; }
+
+    bool IsDepthStencilSurfaceSmallerThan(
+        UINT uWidth,
+        UINT uHeight
+        ) const;
+
+    HRESULT ReleaseUseOfDepthStencilBuffer(
+        __in_ecount(1) ID3D11DepthStencilView *pDSV
+        );
+
+    // 어떤 리소스가 렌더타깃이 되기 전에 SRV 슬롯에서 떼어낸다.
+    void UnbindAllTextures();
+
+    //
+    // Blend
+    //
+
+    HRESULT SetAlphaBlend(BOOL fEnable, D3D11_BLEND src, D3D11_BLEND dest);
+    HRESULT SetBlendFactor(D3DCOLOR color);
+    HRESULT SetColorWriteMask(UINT8 mask);
+
+    //
+    // Depth / stencil
+    //
+
+    HRESULT SetDepthEnable(BOOL fEnable);
+    HRESULT SetDepthWriteEnable(BOOL fEnable);
+    HRESULT SetDepthFunc(D3D11_COMPARISON_FUNC func);
+    HRESULT SetStencilEnable(BOOL fEnable);
+    HRESULT SetStencilFunc(D3D11_COMPARISON_FUNC func);
+    HRESULT SetStencilRef(UINT uRef);
+    HRESULT SetStencilWriteMask(UINT8 mask);
+
+    D3D11_COMPARISON_FUNC GetDepthFunc() const { return m_depthStencil.DepthFunc; }
+
+    //
+    // Rasterizer
+    //
+
+    HRESULT SetFillMode(D3D11_FILL_MODE mode);
+    HRESULT SetCullMode(D3D11_CULL_MODE mode);
+    HRESULT SetMultisampleAntialias(BOOL fEnable);
+    HRESULT SetAntialiasedLineEnable(BOOL fEnable);
+
+    D3D11_FILL_MODE GetFillMode() const { return m_rasterizer.FillMode; }
+
+    //
+    // Samplers and textures
+    //
+
+    HRESULT SetSamplerFilter(DWORD dwSampler, D3D11_FILTER filter, BOOL fUseMipMaps);
+    HRESULT SetSamplerAddressModes(DWORD dwSampler, D3D11_TEXTURE_ADDRESS_MODE u, D3D11_TEXTURE_ADDRESS_MODE v);
+    HRESULT SetSamplerBorderColor(DWORD dwSampler, D3DCOLOR color);
+
+    MIL_FORCEINLINE HRESULT SetTextureInline(
         DWORD dwStage,
-        D3DTEXTURESTAGESTATETYPE state,
-        DWORD dwValue
+        __in_ecount_opt(1) ID3D11ShaderResourceView *pSRV
         )
     {
-        return SetTextureStageStateInline(
-            dwStage,
-            state,
-            dwValue
-            );
+        Assert(dwStage < MIL_TEXTURE_STAGE_COUNT);
+
+        if (m_rgpTextures[dwStage] != pSRV || !m_rgfTextureKnown[dwStage])
+        {
+            m_rgpTextures[dwStage] = pSRV;
+            m_rgfTextureKnown[dwStage] = true;
+            m_fTexturesDirty = true;
+        }
+
+        return S_OK;
     }
+
+    //
+    // Fixed function texture stages (used only when the pixel shader is NULL)
+    //
+
+    HRESULT SetTextureStageOperation(
+        DWORD dwStage,
+        __in_ecount(1) const MilTextureStageState &op
+        );
+
+    HRESULT DisableTextureStage(DWORD dwStage);
+
+    HRESULT SetTexCoordIndex(DWORD dwStage, UINT uTexCoordIndex);
+
+    HRESULT SetDefaultTexCoordIndices();
+
+    //
+    // Shaders
+    //
+
+    MIL_FORCEINLINE HRESULT SetPixelShaderInline(
+        __in_ecount_opt(1) ID3D11PixelShader *pPixelShader
+        )
+    {
+        if (m_pPixelShader != pPixelShader || !m_fPixelShaderKnown)
+        {
+            m_pPixelShader = pPixelShader;
+            m_fPixelShaderKnown = true;
+            m_fPixelShaderDirty = true;
+        }
+
+        return S_OK;
+    }
+
+    MIL_FORCEINLINE HRESULT SetVertexShaderInline(
+        __in_ecount_opt(1) ID3D11VertexShader *pVertexShader
+        )
+    {
+        if (m_pVertexShader != pVertexShader || !m_fVertexShaderKnown)
+        {
+            m_pVertexShader = pVertexShader;
+            m_fVertexShaderKnown = true;
+            m_fVertexShaderDirty = true;
+        }
+
+        return S_OK;
+    }
+
+    //
+    // Shader constants (D3D9 register model)
+    //
 
     HRESULT SetVertexShaderConstantF(
         UINT nRegisterIndex,
@@ -211,212 +309,18 @@ public:
         );
 
     //
-    // The inlined function calls.  We have to do this because the STDMETHODIMP
-    // functions above will not be inlined.  By doing this we can have our dll
-    // call the inlined functions by specifying them.
-    //
-
-    MIL_FORCEINLINE HRESULT SetRenderStateInline(
-        D3DRENDERSTATETYPE state,
-        DWORD dwValue
-        )
-    {
-#if DBG
-        if (state == D3DRS_FILLMODE)
-        {
-            if (IsTagEnabled(tagWireframe))
-            {
-                return S_OK;
-            }
-        }
-#endif
-        if (!m_renderStates.IsStateSet(
-            state,
-            dwValue
-            ))
-        {
-            return ForceSetRenderState(
-                state,
-                dwValue
-                );
-        }
-
-        return S_OK;
-    }
-
-    MIL_FORCEINLINE HRESULT SetTextureInline(
-        DWORD dwStage,
-        __in_ecount_opt(1) IDirect3DBaseTexture9 *pTexture
-        )
-    {
-        //
-        // Texture can be NULL
-        //
-
-        if (!m_textures.IsStateSet(dwStage,pTexture))
-        {
-            return ForceSetTexture(
-                dwStage,
-                pTexture
-                );
-        }
-
-        return S_OK;
-    }
-
-    MIL_FORCEINLINE HRESULT SetDepthStencilSurfaceInline(
-        __in_ecount_opt(1) IDirect3DSurface9 *pNewDepthSurface,
-        UINT uWidth,
-        UINT uHeight
-        )
-    {
-        if (!m_depthStencilSurface.IsStateSet(
-            0,
-            pNewDepthSurface
-            ))
-        {
-            return ForceSetDepthStencilSurface(
-                pNewDepthSurface,
-                uWidth,
-                uHeight
-                );
-        }
-
-        return S_OK;
-    }
-
-    bool
-    IsDepthStencilSurfaceSmallerThan(
-        UINT uWidth,
-        UINT uHeight
-        ) const;
-
-    MIL_FORCEINLINE HRESULT ReleaseUseOfDepthStencilBuffer(
-        __in_ecount(1) IDirect3DSurface9 *pNewDepthSurface
-        )
-    {
-        if (m_depthStencilSurface.IsStateSet(0,pNewDepthSurface))
-        {
-            return ForceSetDepthStencilSurface(
-                NULL,
-                0,
-                0
-                );
-        }
-
-        return S_OK;
-    }
-
-    MIL_FORCEINLINE HRESULT SetTextureStageStateInline(
-        DWORD dwStage,
-        D3DTEXTURESTAGESTATETYPE state,
-        DWORD dwValue
-        )
-    {
-        Assert(dwStage <= m_nMaxTextureBlendStage); 
-
-        // If dwStage == dwMaxStage, do nothing - if that stage exists, it
-        // defaults to disabled.
-
-        if ((dwStage < m_nMaxTextureBlendStage) &&
-            !m_textureStageStates.IsStateSet(
-                CalcTextureStageStatePos(dwStage, state),
-                dwValue
-                ))
-        {
-            return ForceSetTextureStageState(
-                dwStage,
-                state,
-                dwValue
-                );
-        }
-
-        return S_OK;
-    }
-
-    MIL_FORCEINLINE HRESULT SetSamplerStateInline(
-        DWORD dwSampler,
-        D3DSAMPLERSTATETYPE state,
-        DWORD dwValue
-        )
-    {
-        Assert(dwSampler <= m_nMaxTextureBlendStage);
- 
-        // If dwStage == dwMaxStage, do nothing - if that stage exists, it defaults
-        // to disabled.
-
-        if ((dwSampler < m_nMaxTextureBlendStage) &&
-            !m_samplerStageStates.IsStateSet(
-                CalcSamplerStatePos(dwSampler, state),
-                dwValue
-                ))
-        {
-            return ForceSetSamplerState(
-                dwSampler,
-                state,
-                dwValue
-                );
-        }
-
-        return S_OK;
-    }
-
-    HRESULT SetFVFInline(
-        DWORD dwFVF
-        )
-    {
-        if (!m_stateFVF.IsStateSet(
-            0,
-            dwFVF
-            ))
-        {
-            return ForceSetFVF(
-                dwFVF
-                );
-        }
-
-        return S_OK;
-    }
-
-    HRESULT SetPixelShaderInline(
-        __in_ecount_opt(1) IDirect3DPixelShader9 *pPixelShader
-        )
-    {
-        //
-        // Can have a NULL Pixel Shader
-        //
-
-        if (!m_statePixelShader.IsStateSet(0,pPixelShader))
-        {
-            return ForceSetPixelShader(
-                pPixelShader
-                );
-        }
-
-        return S_OK;
-    }
-
-    HRESULT SetVertexShaderInline(
-        __in_ecount_opt(1) IDirect3DVertexShader9 *pVertexShader
-        )
-    {
-        //
-        // Can have a NULL Vertex Shader
-        //
-
-        if (!m_stateVertexShader.IsStateSet(0,pVertexShader))
-        {
-            return ForceSetVertexShader(
-                pVertexShader
-                );
-        }
-
-        return S_OK;
-    }
-
-    //
     // Transforms
     //
+
+    HRESULT SetTransform(
+        MilTransformState state,
+        __in_ecount(1) const CBaseMatrix *pMatrix
+        );
+
+    HRESULT GetTransform(
+        MilTransformState state,
+        __out_ecount(1) CMILMatrix *pMatrix
+        ) const;
 
     HRESULT Define2DTransforms(
         __in_ecount(1) const CMatrix<CoordinateSpace::DeviceHPC,CoordinateSpace::D3DHomogeneousClipIPC> *pProjection
@@ -427,60 +331,52 @@ public:
     HRESULT Set2DTransformForVertexShader(UINT uStartRegister);
     HRESULT Set3DTransformForVertexShader(UINT uStartRegister);
 
-    HRESULT GetTransform(
-        D3DTRANSFORMSTATETYPE state,
-        __out_ecount(1) CMILMatrix *pMatrix
-        ) const;
+    //
+    // Input assembler
+    //
 
-    MIL_FORCEINLINE HRESULT SetNonWorldTransform(
-        D3DTRANSFORMSTATETYPE state,
-        __in_ecount(1) const CBaseMatrix *pMatrix
-        )
+    HRESULT SetVertexFormat(MilVertexFormatId format);
+
+    MIL_FORCEINLINE BOOL IsVertexFormatSet(
+        MilVertexFormatId format
+        ) const
     {
-        HRESULT hr = S_OK;
-
-        Assert(state < 256);
-
-        if (!m_nonWorldTransforms.IsStateSet(
-            state,
-            *pMatrix
-            ))
-        {
-            IFC(ForceSetNonWorldTransform(
-                state,
-                pMatrix
-                ));
-
-            m_f2DTransformsUsedForFixedFunction = FALSE;
-            m_f2DTransformUsedForVertexShader = FALSE;
-        }
-
-    Cleanup:
-        RRETURN(hr);
+        return m_fVertexFormatKnown && m_vertexFormat == format;
     }
 
-    MIL_FORCEINLINE HRESULT SetWorldTransform(
-        __in_ecount(1) const CBaseMatrix *pMatrix
+    MIL_FORCEINLINE HRESULT SetStreamSource(
+        __in_ecount_opt(1) ID3D11Buffer *pStream,
+        UINT uVertexStride
         )
     {
-        HRESULT hr = S_OK;
-
-        if (!m_worldTransform.IsStateSet(
-            0,
-            *pMatrix
-            ))
+        if (   m_pVertexBuffer != pStream
+            || m_uVertexStride != uVertexStride
+            || !m_fVertexBufferKnown)
         {
-            IFC(ForceSetWorldTransform(
-                pMatrix
-                ));
-
-            m_f2DTransformsUsedForFixedFunction = FALSE;
-            m_f2DTransformUsedForVertexShader = FALSE;
+            m_pVertexBuffer = pStream;
+            m_uVertexStride = uVertexStride;
+            m_fVertexBufferKnown = true;
+            m_fVertexBufferDirty = true;
         }
 
-    Cleanup:
-        RRETURN(hr);
+        return S_OK;
     }
+
+    MIL_FORCEINLINE HRESULT SetIndices(
+        __in_ecount_opt(1) ID3D11Buffer *pStream
+        )
+    {
+        if (m_pIndexBuffer != pStream || !m_fIndexBufferKnown)
+        {
+            m_pIndexBuffer = pStream;
+            m_fIndexBufferKnown = true;
+            m_fIndexBufferDirty = true;
+        }
+
+        return S_OK;
+    }
+
+    HRESULT SetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY topology);
 
     //
     // ScissorRect Functions
@@ -493,22 +389,6 @@ public:
     HRESULT SetScissorRect(
         __in_ecount_opt(1) const MilPointAndSizeL *prc
         );
-
-    MIL_FORCEINLINE BOOL IsFVFSet(
-        DWORD dwFVF
-        ) const
-    {
-        return m_stateFVF.IsStateSet(
-            0,
-            dwFVF
-            );
-    }
-
-
-    MIL_FORCEINLINE HRESULT SetConvolutionMonoKernel(UINT width, UINT height)
-    {
-        return m_pID3DDeviceEx->SetConvolutionMonoKernel(width, height, NULL, NULL);
-    }
 
     //
     // Clip Functions
@@ -538,158 +418,43 @@ public:
         { return m_rcViewport; }
 
     //
-    // Misc
+    // Apply and defaults
     //
 
-    HRESULT DisableTextureStage(DWORD dwStage);
+    // Draw 직전에 부른다. 더티 상태를 컨텍스트에 바인딩한다.
+    HRESULT ApplyStateForDraw();
 
-    HRESULT GetRenderState(
-        D3DRENDERSTATETYPE state,
-        __out_ecount(1) DWORD *pdwValue
-        ) const
-    {
-        return m_renderStates.GetState(
-            state,
-            pdwValue
-            );
-    }
+    HRESULT SetDefaultState();
 
-    MIL_FORCEINLINE HRESULT SetStreamSource(
-        __in_ecount_opt(1) IDirect3DVertexBuffer9 *pStream,
-        UINT uVertexStride
-        )
-    {
-        if (!m_streamSourceVertexBuffer.IsStateSet(0,pStream) ||
-            !m_streamSourceVertexStride.IsStateSet(0,uVertexStride)
-           )
-        {
-            return ForceSetStreamSource(pStream,uVertexStride);
-        }
-        else
-        {
-            return S_OK;
-        }
-    }
+    // 컨텍스트 상태를 모르게 되었을 때(외부 코드가 컨텍스트를 썼을 때) 전부 다시 올리게 한다.
+    void InvalidateAll();
 
-    HRESULT SetIndices(
-        __in_ecount_opt(1) IDirect3DIndexBuffer9 *pStream
-        )
-    {
-        if (!m_indexStream.IsStateSet(0, pStream))
-        {
-            return ForceSetIndices(pStream);
-        }
-        else
-        {
-            return S_OK;
-        }
-    }
-
-    HRESULT SetDefaultState(
-        BOOL fCanHandleBlendFactor,
-        BOOL fSupportsScissorRect,
-        __range(1,UINT_MAX) DWORD dwMaxStream,
-        __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel
-        );
-
-    HRESULT SetDefaultTexCoordIndices();
+    __out_ecount(1) CHwFixedFunctionShaders *GetFixedFunctionShaders() { return &m_fixedFunction; }
 
 private:
-    //
-    // Force Setting functions.  These functions will set the value passed to
-    // them without checking to see if it's changed and update the stored state.
-    //
-    HRESULT ForceSetTexture(
-        DWORD dwStage,
-        __in_ecount_opt(1) IDirect3DBaseTexture9 *pTexture
-        );
-
-    HRESULT ForceSetVertexShader(
-        __in_ecount_opt(1) IDirect3DVertexShader9 *pVertexShader
-        );
-
-    HRESULT ForceSetPixelShader(
-        __in_ecount_opt(1) IDirect3DPixelShader9 *pPixelShader
-        );
-
-    HRESULT ForceSetVertexShaderConstantF(
-        UINT nRegisterIndex,
-        __in_ecount(4*nRegisterCount) const float *prConstantData,
-        UINT nRegisterCount
-        );
-
-    HRESULT ForceSetPixelShaderConstantF(
-        UINT nRegisterIndex,
-        __in_ecount(4*nRegisterCount) const float * prConstantData,
-        UINT nRegisterCount
-        );
-
-    HRESULT ForceSetPixelShaderConstantI(
-        UINT nRegisterIndex,
-        __in_ecount(4) const int * pConstantData
-        );
-
-    HRESULT ForceSetPixelShaderConstantB(
-        UINT nRegisterIndex,
-        BOOL pConstantData
-        );
-
-    HRESULT ForceSetTextureStageState(
-        DWORD dwStage,
-        D3DTEXTURESTAGESTATETYPE state,
-        DWORD dwValue
-        );
-
-    HRESULT ForceSetDepthStencilSurface(
-        __in_ecount_opt(1) IDirect3DSurface9 *pDepthStencilSurface,
-        UINT uWidth,
-        UINT uHeight
-        );
-
-    HRESULT ForceSetSamplerState(
-        DWORD dwSampler,
-        D3DSAMPLERSTATETYPE state,
-        DWORD dwValue
-        );
-
-    HRESULT ForceSetFVF(
-        DWORD dwFVF
-        );
-
-    HRESULT ForceSetRenderState(
-        D3DRENDERSTATETYPE state,
-        DWORD dwValue
-        );
-
-    HRESULT ForceSetWorldTransform(
-        __in_ecount(1) const CBaseMatrix *pMatrix
-        );
-
-    HRESULT ForceSetNonWorldTransform(
-        D3DTRANSFORMSTATETYPE state,
-        __in_ecount(1) const CBaseMatrix *pMatrix
-        );
-
-    HRESULT ForceSetIndices(
-        __in_ecount_opt(1) IDirect3DIndexBuffer9 *pStream
-        );
-
-    HRESULT ForceSetStreamSource(
-        __in_ecount_opt(1) IDirect3DVertexBuffer9 *pStream,
-        UINT uVertexStride
-        );
-
-#if DBG
-    void SetSupportedTable();
-#endif
 
     HRESULT Init(
-        __inout_ecount(1) IDirect3DDevice9 *pD3DDevice,
-        DWORD dwMaxBlendStages,
-        BOOL fCanHandleBlendFactor,
-        BOOL fSupportsScissorRect,
-        __range(1,UINT_MAX) DWORD dwMaxStream,
-        __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel
+        __inout_ecount(1) ID3D11Device *pD3DDevice,
+        __inout_ecount(1) ID3D11DeviceContext *pD3DContext,
+        __in_ecount(1) const MilDeviceCaps &caps
+        );
+
+    HRESULT CreateConstantBuffers();
+
+    HRESULT ApplyBlendState();
+    HRESULT ApplyDepthStencilState();
+    HRESULT ApplyRasterizerState();
+    HRESULT ApplySamplers();
+    HRESULT ApplyTextures();
+    HRESULT ApplyShaders();
+    HRESULT ApplyInputAssembler();
+    HRESULT ApplyConstants();
+    HRESULT ApplyViewportAndScissor();
+
+    HRESULT UploadConstantBuffer(
+        __in_ecount(1) ID3D11Buffer *pBuffer,
+        __in_bcount(cb) const void *pvData,
+        UINT cb
         );
 
     void Check2DTransformInVertexShader(
@@ -697,105 +462,108 @@ private:
         UINT nRegisterCount
         );
 
+    void MarkVSConstantsDirty(UINT nRegisterIndex, UINT nRegisterCount);
+    void MarkPSConstantsDirty(UINT nRegisterIndex, UINT nRegisterCount);
+
 private:
     DECLARE_METERHEAP_ALLOC(ProcessHeap, Mt(CHwRenderStateManager));
-
-    // This enum is used internally to remember the state of a render state
-    // that can be enabled or disabled.
-    enum EnableStatus
-    {
-        ES_DISABLED = 0,
-        ES_ENABLED = 1,
-        ES_UNKNOWN = 0xFFFFFFFF
-    };
 
     //
     // D3D Device our state setting functions will be called on
     //
-    IDirect3DDevice9* m_pID3DDevice;
-    IDirect3DDevice9Ex* m_pID3DDeviceEx;
+    ID3D11Device *m_pD3DDevice;
+    ID3D11DeviceContext *m_pD3DContext;
+
+    MilDeviceCaps m_caps;
+
+    CHwFixedFunctionShaders m_fixedFunction;
 
     //
-    // RenderStates
+    // Render targets
     //
-    CStateTable<DWORD> m_renderStates;
+    ID3D11RenderTargetView *m_pRTV;
+    UINT m_uRenderTargetWidth;
+    UINT m_uRenderTargetHeight;
+
+    ID3D11DepthStencilView *m_pDSV;
+    UINT m_uDepthStencilSurfaceWidth;
+    UINT m_uDepthStencilSurfaceHeight;
 
     //
-    // Texture Stage State
+    // Blend
     //
-    CStateTable<DWORD> m_textureStageStates;
+    MilBlendState m_blend;
+    D3DCOLOR m_blendFactor;
+    bool m_fBlendDirty;
 
     //
-    // Sampler Stage States
+    // Depth / stencil
     //
-    CStateTable<DWORD> m_samplerStageStates;
+    MilDepthStencilState m_depthStencil;
+    UINT m_uStencilRef;
+    bool m_fDepthStencilDirty;
 
     //
-    // Transforms
+    // Rasterizer
     //
-    CStateTable<CMILMatrix> m_nonWorldTransforms;
-    CStateTable<CMILMatrix> m_worldTransform;
+    MilRasterizerState m_rasterizer;
+    bool m_fRasterizerDirty;
+
+    //
+    // Samplers and textures
+    //
+    MilSamplerState m_rgSamplers[MIL_SAMPLER_COUNT];
+    bool m_rgfSamplerDirty[MIL_SAMPLER_COUNT];
+    bool m_fAnySamplerDirty;
+
+    ID3D11ShaderResourceView *m_rgpTextures[MIL_TEXTURE_STAGE_COUNT];
+    bool m_rgfTextureKnown[MIL_TEXTURE_STAGE_COUNT];
+    bool m_fTexturesDirty;
+
+    //
+    // Fixed function texture stages
+    //
+    MilTextureStageState m_rgStages[MIL_FF_STAGE_COUNT];
+    UINT m_cActiveStages;
+    bool m_fStagesDirty;
 
     //
     // Shaders
     //
-    CStateTable<IDirect3DVertexShader9 *> m_stateVertexShader;
-    CStateTable<IDirect3DPixelShader9 *> m_statePixelShader;
+    ID3D11VertexShader *m_pVertexShader;
+    bool m_fVertexShaderKnown;
+    bool m_fVertexShaderDirty;
 
-    // Shader constants (float4 only)
-    CStateTable<dxlayer::vector4> m_stateVertexShaderFloat4Constants;
-    CStateTable<dxlayer::vector4> m_statePixelShaderFloat4Constants;
+    ID3D11PixelShader *m_pPixelShader;
+    bool m_fPixelShaderKnown;
+    bool m_fPixelShaderDirty;
 
-    //
-    // The int register has a dimension of 4, but we only ever allow a user to set a single value
-    // from managed code, which we then duplicate 3 times. So although we're passing 4 elements
-    // to DX, we only have to cache the first element.
-    // This works out because the MilColorI struct is generated and won't have "==", which
-    // CStateTable needs.
-    //
-    CStateTable<int> m_statePixelShaderInt4Constants;
-    CStateTable<BOOL> m_statePixelShaderBoolConstants;
-    
-    //
-    // Textures
-    //
-    CStateTable<IDirect3DBaseTexture9 *> m_textures;
-
-    CStateTable<IDirect3DSurface9 *> m_depthStencilSurface;
-
-    UINT m_uDepthStencilSurfaceWidth;
-    UINT m_uDepthStencilSurfaceHeight;
-
-    CStateTable<DWORD> m_stateFVF;
+    // 마지막으로 컨텍스트에 바인딩한 실제 셰이더 (에뮬레이션 포함)
+    ID3D11VertexShader *m_pBoundVertexShader;
+    ID3D11PixelShader *m_pBoundPixelShader;
 
     //
-    // Streams
+    // Shader constants (shadow copies, uploaded on draw)
     //
-    CStateTable<IDirect3DIndexBuffer9 *> m_indexStream;
+    float m_rgVSFloat4[MIL_VS_FLOAT4_CONSTANTS * 4];
+    float m_rgPSFloat4[MIL_PS_FLOAT4_CONSTANTS * 4];
+    int   m_rgPSInt4[MIL_PS_INT4_CONSTANTS * 4];
+    int   m_rgPSBool4[MIL_PS_BOOL_CONSTANTS * 4];
 
-    CStateTable<UINT> m_streamSourceVertexStride;
-    CStateTable<IDirect3DVertexBuffer9 *> m_streamSourceVertexBuffer;
+    bool m_fVSConstantsDirty;
+    bool m_fPSConstantsDirty;
+    bool m_fPSIntBoolConstantsDirty;
 
-    //
-    // Scissor rect
-    //
-    MilPointAndSizeL m_rcScissorRect;
-
-    BOOL m_fClipSet;
-    MilPointAndSizeL m_rcClip;
-
-    MilPointAndSizeL m_rcViewport;
-
-    UINT m_nMaxTextureBlendStage;
+    ID3D11Buffer *m_pVSConstantBuffer;
+    ID3D11Buffer *m_pPSConstantBuffer;
+    ID3D11Buffer *m_pPSIntBoolConstantBuffer;
+    ID3D11Buffer *m_pFFConstantBuffer;
 
     //
-    // Additional Caching
-    //
-
-    // True if D3DTSS_TEXCOORDINDEX is default for all stages.
-    bool m_fTexCoordIndicesDefault;
-
     // Transforms
+    //
+    CMILMatrix m_rgTransforms[MilTransform_Count];
+    bool m_fFFTransformDirty;
 
     CMatrix<CoordinateSpace::DeviceHPC,CoordinateSpace::D3DHomogeneousClipIPC>
         m_mat2DProjectionTransform;
@@ -803,7 +571,78 @@ private:
     BOOL m_f2DTransformsUsedForFixedFunction;
     BOOL m_f2DTransformUsedForVertexShader;
     UINT m_u2DTransformVertexShaderStartRegister;
+
+    //
+    // Input assembler
+    //
+    MilVertexFormatId m_vertexFormat;
+    bool m_fVertexFormatKnown;
+    bool m_fVertexFormatDirty;
+
+    ID3D11Buffer *m_pVertexBuffer;
+    UINT m_uVertexStride;
+    bool m_fVertexBufferKnown;
+    bool m_fVertexBufferDirty;
+
+    ID3D11Buffer *m_pIndexBuffer;
+    bool m_fIndexBufferKnown;
+    bool m_fIndexBufferDirty;
+
+    D3D11_PRIMITIVE_TOPOLOGY m_topology;
+    bool m_fTopologyDirty;
+
+    //
+    // Scissor rect and viewport
+    //
+    MilPointAndSizeL m_rcScissorRect;
+    bool m_fScissorRectValid;
+    bool m_fScissorDirty;
+
+    BOOL m_fClipSet;
+    MilPointAndSizeL m_rcClip;
+
+    MilPointAndSizeL m_rcViewport;
+    bool m_fViewportDirty;
+
+    //
+    // State object caches
+    //
+    template<class DescT, class ObjT>
+    struct CStateObjectCache
+    {
+        enum { c_cMax = 32 };
+        struct Entry { DescT desc; ObjT *pObject; } rg[c_cMax];
+        UINT c;
+
+        void Release()
+        {
+            for (UINT i = 0; i < c; i++) { ReleaseInterface(rg[i].pObject); }
+            c = 0;
+        }
+
+        ObjT *Find(const DescT &desc) const
+        {
+            for (UINT i = 0; i < c; i++) { if (rg[i].desc == desc) return rg[i].pObject; }
+            return NULL;
+        }
+
+        void Add(const DescT &desc, ObjT *pObject)
+        {
+            if (c >= c_cMax)
+            {
+                ReleaseInterface(rg[0].pObject);
+                MoveMemory(&rg[0], &rg[1], sizeof(Entry) * (c_cMax - 1));
+                c--;
+            }
+            rg[c].desc = desc;
+            rg[c].pObject = pObject;
+            pObject->AddRef();
+            c++;
+        }
+    };
+
+    CStateObjectCache<MilBlendState, ID3D11BlendState> m_blendCache;
+    CStateObjectCache<MilDepthStencilState, ID3D11DepthStencilState> m_depthStencilCache;
+    CStateObjectCache<MilRasterizerState, ID3D11RasterizerState> m_rasterizerCache;
+    CStateObjectCache<MilSamplerState, ID3D11SamplerState> m_samplerCache;
 };
-
-
-

@@ -201,8 +201,8 @@ CHwSurfaceRenderTargetSharedData::DerivePipelineShader(
     PCSTR pHLSLSource = NULL;
     UINT cbHLSLSource = 0;
 
-    IDirect3DPixelShader9 *pPixelShader = NULL;
-    IDirect3DVertexShader9 *pVertexShader = NULL;
+    ID3D11PixelShader *pPixelShader = NULL;
+    ID3D11VertexShader *pVertexShader = NULL;
 
     //
     // Generate the shader source

@@ -26,17 +26,9 @@
 //
 //          AlphaBlendMode FilterMode TextureStageOperation
 //
-//      We used to check to see if we had the same table set to minimize work,
-//      but since the change to using the CHwRenderStateManager that
-//      optimization was removed.  We will likely have to revisit it for
-//      performance.
-//
 //  $ENDTAG
 //
 //------------------------------------------------------------------------------
-
-#define D3DCOLORWRITEENABLE_ALL \
-    (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA)
 
 enum TextureBlendArgument
 {
@@ -59,10 +51,6 @@ enum PixelShader
     // Notation: PXS_<TextSmoothingType><ColorSource>, where:
     // TextSmoothingType: CT = clear type, GS = grey scale
     // ColorSource: SB = solid brush, TB = textured brush
-    // Note that each mnemonic stays for one of two possible
-    // pixel shaders, one for D3DFMT_L8 alpha texture and another
-    // for D3DFMT_A8, D3DFMT_A8R8G8B8 and D3DFMT_P8. Proper choice
-    // is made on Init().
     PXS_CTSB      = 0,
     PXS_GSSB      = 1,
     PXS_CTTB      = 2,
@@ -70,10 +58,52 @@ enum PixelShader
     PXS_NUM
 };
 
+//+-----------------------------------------------------------------------------
+//
+//  Structure:
+//      AlphaBlendMode
+//
+//  Synopsis:
+//      Blend mode for the back-end alpha blender.
+//
+//------------------------------------------------------------------------------
+struct AlphaBlendMode
+{
+    BOOL        AlphaBlendEnable;
+    D3D11_BLEND SrcBlend;
+    D3D11_BLEND DestBlend;
+};
 
-struct AlphaBlendMode;
-struct TextureStageOperation;
-struct FilterMode;
+//+-----------------------------------------------------------------------------
+//
+//  Structure:
+//      TextureStageOperation
+//
+//  Synopsis:
+//      Description of the operation performed in a given texture stage. These
+//      are the building blocks of the fixed-function (emulated) pixel shader.
+//
+//------------------------------------------------------------------------------
+struct TextureStageOperation
+{
+    BOOL m_fUsesTexture;
+    MilTextureStageState m_state;   // TexCoordIndex is not used from here
+};
+
+//+-----------------------------------------------------------------------------
+//
+//  Structure:
+//      FilterMode
+//
+//  Synopsis:
+//      A set of filter modes for a given sampler.
+//
+//------------------------------------------------------------------------------
+struct FilterMode
+{
+    D3D11_FILTER Filter;
+    BOOL         UseMipMaps;    // FALSE == D3D9 D3DTEXF_NONE mip filter
+};
 
 class CD3DSurface;
 
@@ -98,15 +128,11 @@ public:
     // Associate a d3d device with the render state object
     HRESULT Init(
         __in_ecount(1) CD3DDeviceLevel1 *pDevice,
-        __inout_ecount(1) IDirect3DDevice9 *pD3DDevice
+        __inout_ecount(1) ID3D11Device *pD3DDevice,
+        __inout_ecount(1) ID3D11DeviceContext *pD3DContext
         );
 
     HRESULT ResetState();
-
-    //
-    // Need to check how to annotate.
-    //
-
 
     HRESULT SetVertexShaderConstantF(
         UINT StartRegister,
@@ -157,7 +183,7 @@ public:
         }
 
     // Get alpha texture format that becomes known during Init() and then never changes
-    D3DFORMAT GetAlphaTextureFormat() const { return m_alphaTextureFormat; }
+    DXGI_FORMAT GetAlphaTextureFormat() const { return m_alphaTextureFormat; }
 
     // Setting render state for text
     HRESULT SetRenderState_Text_ClearType_SolidBrush(
@@ -187,11 +213,11 @@ public:
         );
 
     HRESULT GetFillMode(
-        __out_ecount(1) D3DFILLMODE *d3dFillMode
+        __out_ecount(1) D3D11_FILL_MODE *pFillMode
         ) const;
 
     HRESULT GetDepthTestFunction(
-        __out_ecount(1) D3DCMPFUNC *pd3dDepthTestFunction
+        __out_ecount(1) D3D11_COMPARISON_FUNC *pDepthTestFunction
         ) const;
 
     // Auxiliary render state switching for text
@@ -231,16 +257,8 @@ public:
             );
     }
 
-    MIL_FORCEINLINE HRESULT SetConvolutionMonoKernel(UINT width, UINT height)
-    {
-        return m_pStateManager->SetConvolutionMonoKernel(
-            width,
-            height
-            );
-    }
-
     MIL_FORCEINLINE HRESULT SetTransform(
-        D3DTRANSFORMSTATETYPE state,
+        MilTransformState state,
         __in_ecount(1) const CMILMatrix *pMatrix
         )
     {
@@ -254,24 +272,26 @@ public:
         __in_ecount(1) const CBaseMatrix *pMatrix
         )
     {
-        return m_pStateManager->SetWorldTransform(
+        return m_pStateManager->SetTransform(
+            MilTransform_World,
             pMatrix
             );
     }
 
     MIL_FORCEINLINE HRESULT SetNonWorldTransform(
-        D3DTRANSFORMSTATETYPE state,
+        MilTransformState state,
         __in_ecount(1) const CMILMatrix *pMatrix
         )
     {
-        return m_pStateManager->SetNonWorldTransform(
+        Assert(state != MilTransform_World);
+        return m_pStateManager->SetTransform(
             state,
             pMatrix
             );
     }
 
     MIL_FORCEINLINE HRESULT GetTransform(
-        D3DTRANSFORMSTATETYPE state,
+        MilTransformState state,
         __out_ecount(1) CMILMatrix *pMatrix
         ) const
     {
@@ -281,28 +301,76 @@ public:
             );
     }
 
-    MIL_FORCEINLINE HRESULT SetRenderState(
-        D3DRENDERSTATETYPE state,
-        DWORD dwValue
+    //
+    // Semantic render states (replace D3D9 SetRenderState)
+    //
+
+    MIL_FORCEINLINE HRESULT SetDepthEnable(BOOL fEnable)
+        { return m_pStateManager->SetDepthEnable(fEnable); }
+
+    MIL_FORCEINLINE HRESULT SetDepthWriteEnable(BOOL fEnable)
+        { return m_pStateManager->SetDepthWriteEnable(fEnable); }
+
+    MIL_FORCEINLINE HRESULT SetDepthFunc(D3D11_COMPARISON_FUNC func)
+        { return m_pStateManager->SetDepthFunc(func); }
+
+    MIL_FORCEINLINE HRESULT SetStencilEnable(BOOL fEnable)
+        { return m_pStateManager->SetStencilEnable(fEnable); }
+
+    MIL_FORCEINLINE HRESULT SetStencilFunc(D3D11_COMPARISON_FUNC func)
+        { return m_pStateManager->SetStencilFunc(func); }
+
+    MIL_FORCEINLINE HRESULT SetStencilRef(UINT uRef)
+        { return m_pStateManager->SetStencilRef(uRef); }
+
+    MIL_FORCEINLINE HRESULT SetStencilWriteMask(UINT8 mask)
+        { return m_pStateManager->SetStencilWriteMask(mask); }
+
+    MIL_FORCEINLINE HRESULT SetFillMode(D3D11_FILL_MODE mode)
+        { return m_pStateManager->SetFillMode(mode); }
+
+    MIL_FORCEINLINE HRESULT SetCullMode(D3D11_CULL_MODE mode)
+        { return m_pStateManager->SetCullMode(mode); }
+
+    MIL_FORCEINLINE HRESULT SetMultisampleAntialias(BOOL fEnable)
+        { return m_pStateManager->SetMultisampleAntialias(fEnable); }
+
+    MIL_FORCEINLINE HRESULT SetAntialiasedLineEnable(BOOL fEnable)
+        { return m_pStateManager->SetAntialiasedLineEnable(fEnable); }
+
+    MIL_FORCEINLINE HRESULT SetBlendFactor(D3DCOLOR color)
+        { return m_pStateManager->SetBlendFactor(color); }
+
+    MIL_FORCEINLINE HRESULT SetColorWriteMask(UINT8 mask)
+        { return m_pStateManager->SetColorWriteMask(mask); }
+
+    //
+    // Sampler states (replace D3D9 SetSamplerState)
+    //
+
+    MIL_FORCEINLINE HRESULT SetSamplerAddressModes(
+        DWORD dwSampler,
+        D3D11_TEXTURE_ADDRESS_MODE u,
+        D3D11_TEXTURE_ADDRESS_MODE v
         )
     {
-        return m_pStateManager->SetRenderStateInline(
-            state,
-            dwValue
-            );
+        return m_pStateManager->SetSamplerAddressModes(dwSampler, u, v);
     }
 
-    MIL_FORCEINLINE HRESULT SetTextureStageState(
-        DWORD dwStage,
-        D3DTEXTURESTAGESTATETYPE state,
-        DWORD dwValue
+    MIL_FORCEINLINE HRESULT SetSamplerBorderColor(
+        DWORD dwSampler,
+        D3DCOLOR color
         )
     {
-        return m_pStateManager->SetTextureStageStateInline(
-            dwStage,
-            state,
-            dwValue
-            );
+        return m_pStateManager->SetSamplerBorderColor(dwSampler, color);
+    }
+
+    MIL_FORCEINLINE HRESULT SetTexCoordIndex(
+        DWORD dwStage,
+        UINT uTexCoordIndex
+        )
+    {
+        return m_pStateManager->SetTexCoordIndex(dwStage, uTexCoordIndex);
     }
 
     MIL_FORCEINLINE HRESULT SetDefaultTexCoordIndices()
@@ -310,41 +378,9 @@ public:
         return m_pStateManager->SetDefaultTexCoordIndices();
     }
 
-    MIL_FORCEINLINE HRESULT DisableTextureTransform(DWORD dwStage)
-    {
-        return m_pStateManager->SetTextureStageStateInline(
-            dwStage,
-            D3DTSS_TEXTURETRANSFORMFLAGS,
-            D3DTTFF_DISABLE
-            );
-    }
-
-    MIL_FORCEINLINE HRESULT SetSamplerState(
-        DWORD dwSampler,
-        D3DSAMPLERSTATETYPE state,
-        DWORD dwValue
-        )
-    {
-        //
-        // Setting the ADDRESSU sampler state to NULL is not supported.
-        //
-        Assert(dwValue || state != D3DSAMP_ADDRESSU);
-
-        //
-        // Setting the ADDRESSV sampler state to NULL is not supported.
-        //
-        Assert(dwValue || state != D3DSAMP_ADDRESSV);
-
-        return m_pStateManager->SetSamplerStateInline(
-            dwSampler,
-            state,
-            dwValue
-            );
-    }
-
     MIL_FORCEINLINE HRESULT SetTexture(
         DWORD dwStage,
-        __in_ecount_opt(1) IDirect3DBaseTexture9 *pTexture
+        __in_ecount_opt(1) ID3D11ShaderResourceView *pTexture
         )
     {
         return m_pStateManager->SetTextureInline(
@@ -354,7 +390,7 @@ public:
     }
 
     MIL_FORCEINLINE HRESULT SetVertexShader(
-        __in_ecount_opt(1) IDirect3DVertexShader9 *pVertexShader
+        __in_ecount_opt(1) ID3D11VertexShader *pVertexShader
         )
     {
         return m_pStateManager->SetVertexShaderInline(
@@ -363,7 +399,7 @@ public:
     }
 
     MIL_FORCEINLINE HRESULT SetPixelShader(
-        __in_ecount_opt(1) IDirect3DPixelShader9 *pPixelShader
+        __in_ecount_opt(1) ID3D11PixelShader *pPixelShader
         )
     {
         return m_pStateManager->SetPixelShaderInline(
@@ -381,7 +417,7 @@ public:
     }
 
     MIL_FORCEINLINE HRESULT SetStreamSource(
-        __in_ecount_opt(1) IDirect3DVertexBuffer9 *pStream,
+        __in_ecount_opt(1) ID3D11Buffer *pStream,
         UINT uVertexStride
         )
     {
@@ -389,11 +425,10 @@ public:
             pStream,
             uVertexStride
             );
-
     }
 
     MIL_FORCEINLINE HRESULT SetIndices(
-        __in_ecount_opt(1) IDirect3DIndexBuffer9 *pStream
+        __in_ecount_opt(1) ID3D11Buffer *pStream
         )
     {
         return m_pStateManager->SetIndices(
@@ -401,11 +436,16 @@ public:
             );
     }
 
-    MIL_FORCEINLINE BOOL IsFVFSet(
-        DWORD dwFVF
+    MIL_FORCEINLINE BOOL IsVertexFormatSet(
+        MilVertexFormatId format
         ) const
     {
-        return m_pStateManager->IsFVFSet(dwFVF);
+        return m_pStateManager->IsVertexFormatSet(format);
+    }
+
+    MIL_FORCEINLINE HRESULT SetVertexFormat(MilVertexFormatId format)
+    {
+        return m_pStateManager->SetVertexFormat(format);
     }
 
     MIL_FORCEINLINE HRESULT Set2DTransformForFixedFunction()
@@ -463,11 +503,6 @@ public:
         return m_pStateManager->GetViewport();
     }
 
-    MIL_FORCEINLINE HRESULT SetFVF(DWORD dwFVF)
-    {
-        return m_pStateManager->SetFVFInline(dwFVF);
-    }
-
     MIL_FORCEINLINE void SetClipSet(BOOL fSet)
     {
         return m_pStateManager->SetClipSet(fSet);
@@ -487,6 +522,28 @@ public:
         return m_pStateManager->SetScissorRect(prc);
     }
 
+    MIL_FORCEINLINE HRESULT SetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY topology)
+    {
+        return m_pStateManager->SetPrimitiveTopology(topology);
+    }
+
+    // Bind all dirty state to the context. Must be called before every draw.
+    MIL_FORCEINLINE HRESULT ApplyStateForDraw()
+    {
+        return m_pStateManager->ApplyStateForDraw();
+    }
+
+    // Context state is unknown (external code used the context).
+    MIL_FORCEINLINE void InvalidateContextState()
+    {
+        m_pStateManager->InvalidateAll();
+    }
+
+    MIL_FORCEINLINE void UnbindAllTextures()
+    {
+        m_pStateManager->UnbindAllTextures();
+    }
+
 protected:
     //
     // Functions only for CD3DDeviceLevel1
@@ -500,6 +557,10 @@ protected:
         return m_pStateManager->IsDepthStencilSurfaceSmallerThan(uWidth, uHeight);
     }
 
+    HRESULT SetRenderTargetInternal(
+        __in_ecount_opt(1) CD3DSurface *pRenderTarget
+        );
+
     HRESULT SetDepthStencilSurfaceInternal(
         __in_ecount_opt(1) CD3DSurface *pDepthStencilBuffer
         );
@@ -507,20 +568,6 @@ protected:
     HRESULT ReleaseUseOfDepthStencilSurfaceInternal(
         __in_ecount(1) CD3DSurface *pDepthStencilBuffer
         );
-
-private:
-
-#if DBG
-    VOID AssertFilterMode(DWORD dwSampler);
-    VOID AssertAlphaBlendMode();
-    VOID AssertPixelShader();
-    VOID AssertTextureStageOperation(DWORD dwStage);
-#else
-    VOID AssertFilterMode(DWORD dwSampler) {}
-    VOID AssertAlphaBlendMode() {}
-    VOID AssertPixelShader() {}
-    VOID AssertTextureStageOperation(DWORD dwStage) {}
-#endif
 
 public:
 
@@ -535,7 +582,7 @@ public:
         );
 
     BOOL CanDrawText() const { return m_fCanDrawText; }
-    BOOL CanDrawTextUsingPS20() const { return m_fDrawTextUsingPS20; }
+    BOOL CanDrawTextUsingPS20() const { return m_fCanDrawText; }
 
     HRESULT SetClearTypeOffsets(float ds, float dt);
 
@@ -543,7 +590,6 @@ public:
 
     // Render state variants
     static const AlphaBlendMode
-        sc_abmUnknown,
         sc_abmSrcCopy,
         sc_abmDestCopy,
         sc_abmSrcOverPremultiplied,
@@ -558,16 +604,13 @@ public:
         sc_abmSrcAlphaWithInvDestColor;
 
     static const FilterMode
-        sc_fmUnknown,
         sc_fmNearest,
         sc_fmLinear,
         sc_fmTriLinear,
         sc_fmAnisotropic,
-        sc_fmMinOnlyAnisotropic,
-        sc_fmConvolution;
+        sc_fmMinOnlyAnisotropic;
 
     static const TextureStageOperation
-        sc_tsoUnknown,
         sc_tsoDiffuse,
         sc_tsoTextureXCurrentRGB,
         sc_tsoTextureXSpecularRGB,
@@ -588,21 +631,14 @@ private:
     CD3DDeviceLevel1 *m_pDeviceNoRef;
 
     // format of the textures used to represent glyph run shapes
-    D3DFORMAT m_alphaTextureFormat;
-    HRESULT InitAlphaTextures();
+    DXGI_FORMAT m_alphaTextureFormat;
 
     BOOL m_fCanDrawText;
-    BOOL m_fDrawTextUsingPS20;
 
-    IDirect3DPixelShader9* m_pPixelShaders[PXS_NUM];
+    ID3D11PixelShader* m_pPixelShaders[PXS_NUM];
     const FilterMode* m_pTextFilterMode;
 
     HRESULT InitPixelShaders();
-
-    HRESULT SetConstantRegisters_SolidBrush_PS11(
-        DWORD dwColor,
-        UINT gammaIndex
-        );
 
     HRESULT SetConstantRegisters_SolidBrush_PS20(
         DWORD dwColor,
@@ -615,5 +651,3 @@ private:
         );
 
 };
-
-

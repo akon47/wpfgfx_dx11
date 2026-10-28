@@ -42,9 +42,9 @@ CHwBitBltDeviceBitmapColorSource::CHwBitBltDeviceBitmapColorSource(
     __in_ecount(1) CD3DDeviceLevel1 *pDevice,
     __in_opt IWGXBitmap *pBitmap,
     MilPixelFormat::Enum fmt,
-    __in_ecount(1) const D3DSURFACE_DESC &d3dsd,
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC &d3dsd,
     UINT uLevels
-    ) 
+    )
     : 
     CHwDeviceBitmapColorSource(pDevice, pBitmap, fmt, d3dsd, uLevels), m_pTransferSurface(NULL)
 {
@@ -80,7 +80,6 @@ HRESULT
 CHwBitBltDeviceBitmapColorSource::Realize()
 {
     HRESULT hr = S_OK;
-    IDirect3DSurface9 *pISrcSurface = NULL;
 
     if (!IsRealizationValid())
     {
@@ -107,14 +106,14 @@ CHwBitBltDeviceBitmapColorSource::Realize()
             CD3DSurface *pPrimaryTransferSurface = pPrimaryCS->GetValidTransferSurfaceNoRef();
             if (pPrimaryTransferSurface)
             {
-                IFC(UpdateSurface(
-                    cDirtyRects,
-                    rgDirtyRects,
-                    pPrimaryTransferSurface->GetD3DSurfaceNoAddRef()
-                    ));
-
-                m_uCachedUniquenessToken = uNewUniqueness;
-                m_rcCachedRealizationBounds = m_rcRequiredRealizationBounds;
+                //
+                // Cross device BitBlt transfer is reworked in M9 together with
+                // the shared handle path; this color source is not created
+                // until then.
+                //
+                UNREFERENCED_PARAMETER(cDirtyRects);
+                UNREFERENCED_PARAMETER(rgDirtyRects);
+                IFC(E_NOTIMPL);
             }
         }
         // Else skip update because the device bitmap's front buffer doesn't exist yet.
@@ -122,7 +121,6 @@ CHwBitBltDeviceBitmapColorSource::Realize()
     }
 
 Cleanup:
-    ReleaseInterface(pISrcSurface);
     
     RRETURN(hr);
 }
@@ -150,7 +148,7 @@ CHwBitBltDeviceBitmapColorSource::Create(
     HRESULT hr = S_OK;
     CHwBitBltDeviceBitmapColorSource *pbcs = NULL;
     CacheParameters oRealizationDesc;
-    D3DSURFACE_DESC d3dsd;
+    D3D11_TEXTURE2D_DESC d3dsd;
     UINT uLevels;
 
     IFC(CHwDeviceBitmapColorSource::CreateCommon(
@@ -165,7 +163,7 @@ CHwBitBltDeviceBitmapColorSource::Create(
         ));
 
     // This will be the target of StretchRect so make sure RT was specified
-    Assert((d3dsd.Usage & D3DUSAGE_RENDERTARGET) == D3DUSAGE_RENDERTARGET);
+    Assert((d3dsd.BindFlags & D3D11_BIND_RENDER_TARGET) == D3D11_BIND_RENDER_TARGET);
 
     pbcs = new CHwBitBltDeviceBitmapColorSource(
         pDevice,
@@ -189,15 +187,18 @@ CHwBitBltDeviceBitmapColorSource::Create(
 
     IFC(pDevice->CheckRenderTargetFormat(d3dsd.Format, /* pphrTestGetDC = */ NULL));
     
-    IFC(pDevice->CreateRenderTarget(
-        d3dsd.Width,
-        d3dsd.Height,
-        d3dsd.Format,
-        D3DMULTISAMPLE_NONE,
-        0,
-        TRUE,       // fLockable
-        &pbcs->m_pTransferSurface
-        ));
+    {
+        DXGI_SAMPLE_DESC sampleDesc = { 1, 0 };
+
+        IFC(pDevice->CreateRenderTarget(
+            d3dsd.Width,
+            d3dsd.Height,
+            d3dsd.Format,
+            sampleDesc,
+            true,       // fLockable
+            &pbcs->m_pTransferSurface
+            ));
+    }
 
     *ppHwBitBltDBCS = pbcs;
     pbcs = NULL;
@@ -236,70 +237,12 @@ CHwBitBltDeviceBitmapColorSource::UpdateSurface(
     __in_ecount(1) IDirect3DSurface9 *pISrcSurface
     )
 {
-    HRESULT hr = S_OK;
-    HDC hSrcDC = NULL;
-    HDC hTransferDC = NULL;
-    IDirect3DSurface9 *pIDestSurface = NULL;
+    UNREFERENCED_PARAMETER(cDirtyRects);
+    UNREFERENCED_PARAMETER(prgDirtyRects);
+    UNREFERENCED_PARAMETER(pISrcSurface);
 
-    ENTER_DEVICE_FOR_SCOPE(*m_pDevice);
-
-    IFC(pISrcSurface->GetDC(&hSrcDC));
-    IFC(m_pTransferSurface->GetDC(&hTransferDC));
-
-    for (UINT i = 0; i < cDirtyRects; ++i)
-    {
-        const CMilRectU &rc = prgDirtyRects[i];
-        
-        IFCW32(BitBlt(
-            hTransferDC,
-            rc.left,
-            rc.top,
-            rc.right - rc.left,
-            rc.bottom - rc.top,
-            hSrcDC,
-            rc.left,
-            rc.top,
-            SRCCOPY
-            ));
-    }  
-
-    // Can't StretchRect if the surfaces are locked, so unlock now
-    IFC(pISrcSurface->ReleaseDC(hSrcDC));
-    hSrcDC = NULL;
-    IFC(m_pTransferSurface->ReleaseDC(hTransferDC));
-    hTransferDC = NULL;
-
-    // StretchRect to the final destination
-    IFC(m_pVidMemOnlyTexture->GetID3DSurfaceLevel(0, &pIDestSurface));
-    for (UINT i = 0; i < cDirtyRects; ++i)
-    {
-        // Cast is okay because dirty rects are restrained to the surface size
-        const RECT *rc = reinterpret_cast<const RECT *>(&prgDirtyRects[i]);
-
-        IFC(m_pDevice->StretchRect(
-            m_pTransferSurface,
-            rc,
-            pIDestSurface,
-            rc,
-            D3DTEXF_NONE
-            ));
-    }
-
-Cleanup:
-
-    if (hSrcDC)
-    {
-        IGNORE_HR(pISrcSurface->ReleaseDC(hSrcDC));
-    }
-
-    if (hTransferDC)
-    {
-        IGNORE_HR(m_pTransferSurface->ReleaseDC(hTransferDC));
-    }
- 
-    ReleaseInterface(pIDestSurface);
-
-    RRETURN(hr);
+    // GDI BitBlt transfer from the user's D3D9 surface: reworked in M9.
+    RRETURN(E_NOTIMPL);
 }
 
 //+-----------------------------------------------------------------------------

@@ -35,7 +35,7 @@ DbgTintDirtyRectangle(
         sizeof(GpCC) * (prcDirty->right)
         ) void *pvDbgTintBits,
     INT iPitch,
-    D3DFORMAT d3dFmt,
+    DXGI_FORMAT d3dFmt,
     const CMilRectU *prcDirty
     );
 
@@ -1308,7 +1308,7 @@ CHwBitmapColorSource::ComputeRealizationParameters(
             oRealizationParams.dlV.eLayout = FirstOnlyTexelLayout;
         }
     }
-    else if (pDevice->SupportsTextureCap(D3DPTEXTURECAPS_POW2))
+    else if (!pDevice->SupportsNonPow2Unconditionally())
     {
         if (!IS_POWER_OF_2(oRealizationParams.dlU.uLength))
         {
@@ -1325,11 +1325,11 @@ CHwBitmapColorSource::ComputeRealizationParameters(
                 // of the source.  ComputeAlternateMinimumRealizationSize makes
                 // sure that all samples needed are included in the texture.
                 //
-                oRealizationParams.dlU.d3dta = D3DTADDRESS_CLAMP;
+                oRealizationParams.dlU.d3dta = D3D11_TEXTURE_ADDRESS_CLAMP;
             }
             else
             {
-                D3DTEXTUREADDRESS d3dtaOriginal = oRealizationParams.dlU.d3dta;
+                D3D11_TEXTURE_ADDRESS_MODE d3dtaOriginal = oRealizationParams.dlU.d3dta;
 
                 IFC(AdjustLayoutForConditionalNonPowerOfTwo(
                         oRealizationParams.dlU,
@@ -1370,11 +1370,11 @@ CHwBitmapColorSource::ComputeRealizationParameters(
                 // of the source.  ComputeAlternateMinimumRealizationSize makes
                 // sure that all samples needed are included in the texture.
                 //
-                oRealizationParams.dlV.d3dta = D3DTADDRESS_CLAMP;
+                oRealizationParams.dlV.d3dta = D3D11_TEXTURE_ADDRESS_CLAMP;
             }
             else
             {
-                D3DTEXTUREADDRESS d3dtaOriginal = oRealizationParams.dlV.d3dta;
+                D3D11_TEXTURE_ADDRESS_MODE d3dtaOriginal = oRealizationParams.dlV.d3dta;
 
                 IFC(AdjustLayoutForConditionalNonPowerOfTwo(
                     oRealizationParams.dlV,
@@ -1411,7 +1411,7 @@ CHwBitmapColorSource::ComputeRealizationParameters(
         //  so we only accept S_OK.
         //
 
-        D3DSURFACE_DESC d3dsdRequired;
+        D3D11_TEXTURE2D_DESC d3dsdRequired;
         UINT uLevels;
 
         GetD3DSDRequired(
@@ -1451,7 +1451,7 @@ VOID
 CHwBitmapColorSource::GetD3DSDRequired(
     __in_ecount(1) const CD3DDeviceLevel1 *pDevice,
     __in_ecount(1) const CHwBitmapColorSource::CacheParameters &oRealizationParams,
-    __out_ecount(1) D3DSURFACE_DESC *pd3dsdRequired,
+    __out_ecount(1) D3D11_TEXTURE2D_DESC *pd3dsdRequired,
     __out_ecount(1) UINT *puLevels
     )
 {
@@ -1459,21 +1459,26 @@ CHwBitmapColorSource::GetD3DSDRequired(
            || oRealizationParams.eMipMapLevel == TMML_All
               );
 
+    ZeroMemory(pd3dsdRequired, sizeof(*pd3dsdRequired));
+
     pd3dsdRequired->Format = PixelFormatToD3DFormat(oRealizationParams.fmtTexture);
-    pd3dsdRequired->Type = D3DRTYPE_TEXTURE;
 
     CD3DTexture::DetermineUsageAndLevels(
         pDevice,
         oRealizationParams.eMipMapLevel,
         oRealizationParams.dlU.uLength,
         oRealizationParams.dlV.uLength,
-        &pd3dsdRequired->Usage,
+        &pd3dsdRequired->BindFlags,
+        &pd3dsdRequired->MiscFlags,
         puLevels
         );
 
-    pd3dsdRequired->Pool = D3DPOOL_DEFAULT;
-    pd3dsdRequired->MultiSampleType = D3DMULTISAMPLE_NONE;
-    pd3dsdRequired->MultiSampleQuality = 0;
+    pd3dsdRequired->MipLevels = *puLevels;
+    pd3dsdRequired->ArraySize = 1;
+    pd3dsdRequired->SampleDesc.Count = 1;
+    pd3dsdRequired->SampleDesc.Quality = 0;
+    pd3dsdRequired->Usage = D3D11_USAGE_DEFAULT;
+    pd3dsdRequired->CPUAccessFlags = 0;
     pd3dsdRequired->Width = oRealizationParams.dlU.uLength;
     pd3dsdRequired->Height = oRealizationParams.dlV.uLength;
 }
@@ -1557,12 +1562,12 @@ CHwBitmapColorSource::AdjustLayoutForConditionalNonPowerOfTwo(
 
     switch (dl.d3dta)
     {
-    case D3DTADDRESS_WRAP:
+    case D3D11_TEXTURE_ADDRESS_WRAP:
         if (dl.uLength + 2 <= uMaxLength)
         {
             dl.uLength += 2;
             dl.eLayout = EdgeWrappedTexelLayout;
-            dl.d3dta = D3DTADDRESS_CLAMP;
+            dl.d3dta = D3D11_TEXTURE_ADDRESS_CLAMP;
         }
         else
         {
@@ -1570,12 +1575,12 @@ CHwBitmapColorSource::AdjustLayoutForConditionalNonPowerOfTwo(
         }
         break;
 
-    case D3DTADDRESS_MIRROR:
+    case D3D11_TEXTURE_ADDRESS_MIRROR:
         if (dl.uLength + 2 <= uMaxLength)
         {
             dl.uLength += 2;
             dl.eLayout = EdgeMirroredTexelLayout;
-            dl.d3dta = D3DTADDRESS_CLAMP;
+            dl.d3dta = D3D11_TEXTURE_ADDRESS_CLAMP;
         }
         else
         {
@@ -1583,12 +1588,12 @@ CHwBitmapColorSource::AdjustLayoutForConditionalNonPowerOfTwo(
         }
         break;
 
-    case D3DTADDRESS_CLAMP:
+    case D3D11_TEXTURE_ADDRESS_CLAMP:
         // Conditional non-power of two support handles this case
         dl.eLayout = NaturalTexelLayout;
         break;
         
-    case D3DTADDRESS_BORDER:
+    case D3D11_TEXTURE_ADDRESS_BORDER:
     default:
         //  This is only hit for 3D with trilinear
         // disabled which is just the dwm for now.
@@ -1679,7 +1684,7 @@ CHwBitmapColorSource::Create(
     // time.  Compute it now and send to the constructor.
     //
 
-    D3DSURFACE_DESC d3dsd;
+    D3D11_TEXTURE2D_DESC d3dsd;
     UINT uLevels;
 
     GetD3DSDRequired(
@@ -1700,7 +1705,7 @@ CHwBitmapColorSource::Create(
     //
     if (fCreateAsRenderTarget)
     {
-        d3dsd.Usage |= D3DUSAGE_RENDERTARGET;
+        d3dsd.BindFlags |= D3D11_BIND_RENDER_TARGET;
     }
 
     AssertMinimalTextureDesc(
@@ -1740,7 +1745,7 @@ CHwBitmapColorSource::CHwBitmapColorSource(
     __in_ecount(1) CD3DDeviceLevel1 *pDevice,
     __in_ecount_opt(1) IWGXBitmap *pBitmap,
     MilPixelFormat::Enum fmt,
-    __in_ecount(1) const D3DSURFACE_DESC &d3dsd,
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC &d3dsd,
     UINT uLevels
     ) :
     CHwTexturedColorSource(pDevice),
@@ -2597,13 +2602,12 @@ CHwBitmapColorSource::CreateTexture(
 
     Assert(m_pVidMemOnlyTexture == NULL);
 
-    Assert(m_d3dsdRequired.Format != D3DFMT_UNKNOWN);
-    Assert(m_d3dsdRequired.Type == D3DRTYPE_TEXTURE);
-    // 4 usages are allowed - any combination of autogen and RT
-    Assert((m_d3dsdRequired.Usage & ~(D3DUSAGE_AUTOGENMIPMAP | D3DUSAGE_RENDERTARGET)) == 0);
-    Assert(m_d3dsdRequired.Pool == D3DPOOL_DEFAULT);
-    Assert(m_d3dsdRequired.MultiSampleType == D3DMULTISAMPLE_NONE);
-    Assert(m_d3dsdRequired.MultiSampleQuality == 0);
+    Assert(m_d3dsdRequired.Format != DXGI_FORMAT_UNKNOWN);
+    // shader resource plus an optional render target binding (mips, StretchRect target)
+    Assert((m_d3dsdRequired.BindFlags & ~(D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)) == 0);
+    Assert(m_d3dsdRequired.Usage == D3D11_USAGE_DEFAULT);
+    Assert(m_d3dsdRequired.SampleDesc.Count == 1);
+    Assert(m_d3dsdRequired.SampleDesc.Quality == 0);
     Assert(m_d3dsdRequired.Width);
     Assert(m_d3dsdRequired.Height);
 
@@ -2871,7 +2875,7 @@ CHwBitmapColorSource::FillTextureWithTransformedSource(
     // This surface is sometimes just a lightweight wrapper around
     // the bits in the IWGXBitmap.  Other times it holds a copy of the
     // bitmap.
-    IDirect3DSurface9* pD3DSysMemSurface = NULL;
+    ID3D11Texture2D* pD3DSysMemSurface = NULL;
 
     // Lock for bitmap- needed if we want to copy to or reference in
     // the system surface
@@ -3158,7 +3162,7 @@ CHwBitmapColorSource::PrepareToPushSourceBitsToVidMem(
         // non-null if we locked the IWGXBitmap- caller is responsible for unlocking, as
         // the bitmap should remain locked until after we PushTheBitsToVideoMemory()
     __out_ecount(1) bool *pfShouldCopySourceToSysMemSurface,
-    __deref_out_ecount(1) IDirect3DSurface9** ppD3DSysMemSurface
+    __deref_out_ecount(1) ID3D11Texture2D** ppD3DSysMemSurface
     DBG_COMMA_PARAM(__in_ecount(1) IWGXBitmapSource *pIDBGBitmapSource)
     )
 {
@@ -3272,10 +3276,10 @@ CHwBitmapColorSource::PrepareToPushSourceBitsToVidMem(
             Assert(m_d3dsdRequired.Format == PixelFormatToD3DFormat(bitmapFormat));
 
             //
-            // We can only share bits with D3D on an LDDM device where the pixel size
-            // is an even multiple of the stride.
+            // D3D11 staging textures cannot reference application memory, so
+            // the bits are always copied into the staging texture.
             //
-            if (m_pDevice->IsLDDMDevice())
+            if (false)
             {
                 if ((uSourceStride % bPixelWidth) == 0)
                 {
@@ -3602,10 +3606,7 @@ CHwBitmapColorSource::UpdateFromReusableSource(
                         reinterpret_cast<const RECT *>(&rcDirtySource),
                         pVidMemDestSurface,
                         reinterpret_cast<const RECT *>(&rcDirtyDest),
-                        D3DTEXF_NONE  // No stretching, so NONE is fine.  NONE is
-                                      // better than POINT only because RefRast
-                                      // doesn't expose a cap and this call would
-                                      // fail.
+                        MilStretchFilter_None
                         ));
             }
         }
@@ -3665,14 +3666,14 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
     __in_ecount(1) IWGXBitmapSource *pIBitmapSource,
     __in_range(>=,1) UINT cDirtyRects,
     __inout_ecount(cDirtyRects) CMilRectU *rgDirtyRects,
-    __inout_ecount(1) IDirect3DSurface9 *pD3DSysMemSurface,
+    __inout_ecount(1) ID3D11Texture2D *pD3DSysMemSurface,
     bool fCopySourceToSysMemSurface
             // true will cause #2
     )
 {
     HRESULT hr = S_OK;
 
-    IDirect3DSurface9 *pD3DDestSurface = NULL;
+    CD3DSurface *pD3DDestSurface = NULL;
 
     bool fLockedSurface = false;
 
@@ -3686,7 +3687,7 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
         (m_tlV == EdgeWrappedTexelLayout || m_tlV == EdgeMirroredTexelLayout) ? 1 : 0;
 
     UINT const uPixelSize = D3DFormatSize(m_d3dsdRequired.Format);
-    D3DLOCKED_RECT d3dlrBitmapCopyDestination = { 0, NULL };
+    MilLockedRect d3dlrBitmapCopyDestination = { 0, NULL };
     UINT cbLockedBufferSize = 0;
 
     bool fUpdateBorder = false;
@@ -3697,19 +3698,21 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
 
     if (fCopySourceToSysMemSurface)
     {
-        RECT rcTextureLock;
-
-        rcTextureLock.left = 0;
-        rcTextureLock.top = 0;
-        rcTextureLock.right = static_cast<LONG>(m_d3dsdRequired.Width);
-        rcTextureLock.bottom = static_cast<LONG>(m_d3dsdRequired.Height);
-
         Assert(!fLockedSurface);
-        IFC(pD3DSysMemSurface->LockRect(
-            &d3dlrBitmapCopyDestination,
-            &rcTextureLock,
-            D3DLOCK_NO_DIRTY_UPDATE
-            ));
+        {
+            D3D11_MAPPED_SUBRESOURCE mapped;
+
+            IFC(MilTranslateD3D11Error(m_pDevice->GetD3DContextNoRef()->Map(
+                pD3DSysMemSurface,
+                0,
+                D3D11_MAP_WRITE,
+                0,
+                &mapped
+                )));
+
+            d3dlrBitmapCopyDestination.Pitch = static_cast<INT>(mapped.RowPitch);
+            d3dlrBitmapCopyDestination.pBits = mapped.pData;
+        }
 
         WICRect rcMilTextureLock;
         rcMilTextureLock.X = 0;
@@ -3727,7 +3730,7 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
         fLockedSurface = true;
     }
 
-    IFC(m_pVidMemOnlyTexture->GetID3DSurfaceLevel(0, &pD3DDestSurface));
+    IFC(m_pVidMemOnlyTexture->GetD3DSurfaceLevel(0, &pD3DDestSurface));
 
     //
     // If there is a border and any dirty rect touches an edge then the border
@@ -3867,7 +3870,7 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
     //
     if (fLockedSurface)
     {
-        IFC(pD3DSysMemSurface->UnlockRect());
+        m_pDevice->GetD3DContextNoRef()->Unmap(pD3DSysMemSurface, 0);
         fLockedSurface = false;
     }
 
@@ -3936,8 +3939,10 @@ CHwBitmapColorSource::PushTheSourceBitsToVideoMemory(
 
         IFC(m_pDevice->UpdateSurface(
                 pD3DSysMemSurface,
+                0,
                 reinterpret_cast<const RECT *>(&rcDirtySource),
-                pD3DDestSurface,
+                pD3DDestSurface->ID3DTexture(),
+                pD3DDestSurface->Subresource(),
                 &ptDest
                 ));
     }
@@ -3965,7 +3970,7 @@ Cleanup:
     if (fLockedSurface)
     {
         Assert(FAILED(hr));
-        IGNORE_HR(pD3DSysMemSurface->UnlockRect());
+        m_pDevice->GetD3DContextNoRef()->Unmap(pD3DSysMemSurface, 0);
     }
 
     ReleaseInterfaceNoNULL(pD3DDestSurface);
@@ -3986,7 +3991,7 @@ HRESULT CHwBitmapColorSource::GetSysMemUpdateSurfaceSource(
     UINT uWidth,
     UINT uHeight,
     bool fCanCreateFromBits,
-    __deref_out_ecount(1) IDirect3DSurface9** ppD3DSysMemSurface
+    __deref_out_ecount(1) ID3D11Texture2D** ppD3DSysMemSurface
     )
 {
     HRESULT hr = S_OK;
@@ -4308,12 +4313,12 @@ CHwBitmapColorSource::AddToReusableRealizationSourceList(
 VOID
 CHwBitmapColorSource::AssertMinimalTextureDesc(
     __in_ecount(1) const CD3DDeviceLevel1 *pDevice,
-    D3DTEXTUREADDRESS taU,
-    D3DTEXTUREADDRESS taV,
-    __in_ecount(1) const D3DSURFACE_DESC *pd3dsdRequired
+    D3D11_TEXTURE_ADDRESS_MODE taU,
+    D3D11_TEXTURE_ADDRESS_MODE taV,
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC *pd3dsdRequired
     )
 {
-    D3DSURFACE_DESC d3dsdRequired;
+    D3D11_TEXTURE2D_DESC d3dsdRequired;
     
     RtlCopyMemory(
         OUT &d3dsdRequired,
@@ -4340,20 +4345,18 @@ CHwBitmapColorSource::AssertMinimalTextureDesc(
 //
 //-----------------------------------------------------------------------------
 void CHwBitmapColorSource::AssertSysMemSurfaceDescriptionNotChanged(
-    __in_ecount(1) IDirect3DSurface9 *pD3DSysMemSurface,
+    __in_ecount(1) ID3D11Texture2D *pD3DSysMemSurface,
     UINT Width,
     UINT Height
     )
 {
-    D3DSURFACE_DESC desc;
+    D3D11_TEXTURE2D_DESC desc;
 
-    Verify(SUCCEEDED(pD3DSysMemSurface->GetDesc(&desc)));
+    pD3DSysMemSurface->GetDesc(&desc);
 
     Assert(desc.Format ==               m_d3dsdRequired.Format);
-    Assert(desc.Usage ==                (m_d3dsdRequired.Usage & desc.Usage));
-    Assert(desc.Pool ==                 D3DPOOL_SYSTEMMEM);
-    Assert(desc.MultiSampleType ==      m_d3dsdRequired.MultiSampleType);
-    Assert(desc.MultiSampleQuality ==   m_d3dsdRequired.MultiSampleQuality);
+    Assert(desc.Usage ==                D3D11_USAGE_STAGING);
+    Assert(desc.SampleDesc.Count ==     1);
     Assert(desc.Width ==                Width);
     Assert(desc.Height ==               Height);
 }
@@ -4367,26 +4370,14 @@ void CHwBitmapColorSource::AssertSysMemSurfaceDescriptionNotChanged(
 //
 //-----------------------------------------------------------------------------
 void CHwBitmapColorSource::AssertSysMemTextureDescriptionNotChanged(
-    __in_ecount(1) IDirect3DTexture9 *pD3DSysMemTexture
+    __in_ecount(1) ID3D11Texture2D *pD3DSysMemTexture
     )
 {
-    IDirect3DSurface9 *pD3DSysMemSurface = NULL;
-
-    Verify(SUCCEEDED(pD3DSysMemTexture->GetSurfaceLevel(
-        0,
-        &pD3DSysMemSurface
-        )));
-
-    if (pD3DSysMemSurface)
-    {
-        AssertSysMemSurfaceDescriptionNotChanged(
-            pD3DSysMemSurface,
-            m_d3dsdRequired.Width,
-            m_d3dsdRequired.Height
-            );
-
-        pD3DSysMemSurface->Release();
-    }
+    AssertSysMemSurfaceDescriptionNotChanged(
+        pD3DSysMemTexture,
+        m_d3dsdRequired.Width,
+        m_d3dsdRequired.Height
+        );
 }
 #endif
 
@@ -4421,7 +4412,7 @@ DbgTintDirtyRectangle(
         sizeof(GpCC) * (prcDirty->right)
         ) void *pvDbgTintBits,
     INT iPitch,
-    D3DFORMAT d3dFmt,
+    DXGI_FORMAT d3dFmt,
     const CMilRectU *prcDirty
     )
 {

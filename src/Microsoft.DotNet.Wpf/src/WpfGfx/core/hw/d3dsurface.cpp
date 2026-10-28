@@ -5,13 +5,11 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DSurface implementation
 //
-//      Provides basic abstraction of a D3D surface and tracks it as a D3D
-//      resource.
+//      Provides basic abstraction of a D3D11 texture subresource and tracks
+//      it as a D3D resource.
 //
 
 #include "precomp.hpp"
@@ -23,13 +21,14 @@ MtDefine(D3DResource_Surface, MILHwMetrics, "Approximate surface sizes");
 //
 //  Member:    CD3DSurface::Create
 //
-//  Synopsis:  Create a CD3DSurface object to wrap a D3D texture
+//  Synopsis:  Create a CD3DSurface object to wrap a D3D texture subresource
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DSurface::Create(
     __inout_ecount(1) CD3DResourceManager *pResourceManager,
-    __inout_ecount(1) IDirect3DSurface9 *pD3DSurface,
+    __inout_ecount(1) ID3D11Texture2D *pD3DTexture,
+    UINT uSubresource,
     __deref_out_ecount(1) CD3DSurface **ppSurface
     )
 {
@@ -41,7 +40,7 @@ CD3DSurface::Create(
     // Create the D3D surface wrapper
     //
 
-    *ppSurface = new CD3DSurface(pD3DSurface);
+    *ppSurface = new CD3DSurface(pD3DTexture, uSubresource);
     IFCOOM(*ppSurface);
     (*ppSurface)->AddRef(); // CD3DSurface::ctor sets ref count == 0
 
@@ -69,11 +68,18 @@ Cleanup:
 //
 //-------------------------------------------------------------------------
 CD3DSurface::CD3DSurface(
-    __inout_ecount(1) IDirect3DSurface9 * const pD3DSurface
+    __inout_ecount(1) ID3D11Texture2D * const pD3DTexture,
+    UINT uSubresource
     )
-    : m_pD3DSurface(pD3DSurface)
+    : m_pD3DTexture(pD3DTexture),
+      m_uSubresource(uSubresource),
+      m_pRTV(NULL),
+      m_pDSV(NULL),
+      m_pSRV(NULL),
+      m_fLocked(false)
 {
-    m_pD3DSurface->AddRef();
+    m_pD3DTexture->AddRef();
+    ZeroMemory(&m_desc, sizeof(m_desc));
 }
 
 //+------------------------------------------------------------------------
@@ -85,7 +91,29 @@ CD3DSurface::CD3DSurface(
 //-------------------------------------------------------------------------
 CD3DSurface::~CD3DSurface()
 {
-    ReleaseInterfaceNoNULL(m_pD3DSurface);
+    ReleaseViews();
+    ReleaseInterfaceNoNULL(m_pD3DTexture);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::ReadDesc
+//
+//  Synopsis:  Read the texture description and adjust it to this level
+//
+//-------------------------------------------------------------------------
+void
+CD3DSurface::ReadDesc()
+{
+    m_pD3DTexture->GetDesc(&m_desc);
+
+    UINT uMipLevel = (m_desc.MipLevels > 0) ? (m_uSubresource % m_desc.MipLevels) : 0;
+
+    for (UINT i = 0; i < uMipLevel; i++)
+    {
+        m_desc.Width = max(1u, m_desc.Width / 2);
+        m_desc.Height = max(1u, m_desc.Height / 2);
+    }
 }
 
 //+------------------------------------------------------------------------
@@ -95,7 +123,7 @@ CD3DSurface::~CD3DSurface()
 //  Synopsis:  Inits the surface wrapper
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DSurface::Init(
     __inout_ecount(1) CD3DResourceManager *pResourceManager
     )
@@ -107,23 +135,17 @@ CD3DSurface::Init(
     // Compute the size of the resource
     //
 
-    IFC(m_pD3DSurface->GetDesc(&m_d3dsd));
+    ReadDesc();
 
-    if (m_d3dsd.Pool == D3DPOOL_SYSTEMMEM)
+    if (IsStaging())
     {
         uResourceSize = 0;
     }
     else
     {
-        UINT uSamplesPerPixel = 1;
-    
-        if (m_d3dsd.MultiSampleType >= D3DMULTISAMPLE_2_SAMPLES)
-        {
-            C_ASSERT(D3DMULTISAMPLE_2_SAMPLES == 2);
-            uSamplesPerPixel = static_cast<UINT>(m_d3dsd.MultiSampleType);
-        }
-    
-        uResourceSize = D3DFormatSize(m_d3dsd.Format) * m_d3dsd.Width * m_d3dsd.Height * uSamplesPerPixel;
+        UINT uSamplesPerPixel = max(1u, m_desc.SampleDesc.Count);
+
+        uResourceSize = D3DFormatSize(m_desc.Format) * m_desc.Width * m_desc.Height * uSamplesPerPixel;
         Assert(uResourceSize > 0);
     }
 
@@ -133,8 +155,22 @@ CD3DSurface::Init(
 
     CD3DResource::Init(pResourceManager, uResourceSize);
 
-Cleanup:
     RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::ReleaseViews
+//
+//  Synopsis:  Release lazily created views
+//
+//-------------------------------------------------------------------------
+void
+CD3DSurface::ReleaseViews()
+{
+    ReleaseInterface(m_pRTV);
+    ReleaseInterface(m_pDSV);
+    ReleaseInterface(m_pSRV);
 }
 
 //+------------------------------------------------------------------------
@@ -148,7 +184,7 @@ Cleanup:
 //             ReleaseD3DResources is okay.
 //
 //-------------------------------------------------------------------------
-void 
+void
 CD3DSurface::ReleaseD3DResources()
 {
     // This resource should have been marked invalid already or at least be out
@@ -156,18 +192,20 @@ CD3DSurface::ReleaseD3DResources()
     Assert(!m_fResourceValid || (m_cRef == 0));
     Assert(IsValid() == m_fResourceValid);
 
-    if (m_d3dsd.Usage & D3DUSAGE_RENDERTARGET)
+    if (IsRenderTarget())
     {
         Device().ReleaseUseOfRenderTarget(this);
     }
 
-    if (m_d3dsd.Usage & D3DUSAGE_DEPTHSTENCIL)
+    if (IsDepthStencil())
     {
         Device().ReleaseUseOfDepthStencilSurface(this);
     }
 
+    ReleaseViews();
+
     // This context is protected so it is safe to release the D3D resource
-    ReleaseInterface((*const_cast<IDirect3DSurface9 **>(&m_pD3DSurface)));
+    ReleaseInterface((*const_cast<ID3D11Texture2D **>(&m_pD3DTexture)));
 
     return;
 }
@@ -187,34 +225,244 @@ CD3DSurface::GetSurfaceSize(
 {
     Assert(IsValid());
 
-    *puWidth = m_d3dsd.Width;
-    *puHeight = m_d3dsd.Height;
+    *puWidth = m_desc.Width;
+    *puHeight = m_desc.Height;
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::GetRenderTargetViewNoRef
+//
+//  Synopsis:  Get (and lazily create) the render target view for this level
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::GetRenderTargetViewNoRef(
+    __deref_out_ecount(1) ID3D11RenderTargetView **ppRTV
+    )
+{
+    HRESULT hr = S_OK;
+
+    Assert(IsValid());
+    Assert(IsRenderTarget());
+
+    if (m_pRTV == NULL)
+    {
+        D3D11_RENDER_TARGET_VIEW_DESC desc;
+
+        desc.Format = m_desc.Format;
+
+        if (IsMultisampled())
+        {
+            desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
+        }
+        else
+        {
+            desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            desc.Texture2D.MipSlice = (m_desc.MipLevels > 0) ? (m_uSubresource % m_desc.MipLevels) : 0;
+        }
+
+        IFC(MilTranslateD3D11Error(Device().GetD3DDeviceNoRef()->CreateRenderTargetView(
+            m_pD3DTexture,
+            &desc,
+            &m_pRTV
+            )));
+    }
+
+    *ppRTV = m_pRTV;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::GetDepthStencilViewNoRef
+//
+//  Synopsis:  Get (and lazily create) the depth stencil view
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::GetDepthStencilViewNoRef(
+    __deref_out_ecount(1) ID3D11DepthStencilView **ppDSV
+    )
+{
+    HRESULT hr = S_OK;
+
+    Assert(IsValid());
+    Assert(IsDepthStencil());
+
+    if (m_pDSV == NULL)
+    {
+        D3D11_DEPTH_STENCIL_VIEW_DESC desc;
+
+        ZeroMemory(&desc, sizeof(desc));
+        desc.Format = m_desc.Format;
+        desc.ViewDimension = IsMultisampled() ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
+        desc.Texture2D.MipSlice = 0;
+
+        IFC(MilTranslateD3D11Error(Device().GetD3DDeviceNoRef()->CreateDepthStencilView(
+            m_pD3DTexture,
+            &desc,
+            &m_pDSV
+            )));
+    }
+
+    *ppDSV = m_pDSV;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::GetShaderResourceViewNoRef
+//
+//  Synopsis:  Get (and lazily create) a shader resource view over the whole
+//             texture. Only meaningful for subresource 0.
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::GetShaderResourceViewNoRef(
+    __deref_out_ecount(1) ID3D11ShaderResourceView **ppSRV
+    )
+{
+    HRESULT hr = S_OK;
+
+    Assert(IsValid());
+    Assert(m_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE);
+
+    if (m_pSRV == NULL)
+    {
+        IFC(MilTranslateD3D11Error(Device().GetD3DDeviceNoRef()->CreateShaderResourceView(
+            m_pD3DTexture,
+            NULL,
+            &m_pSRV
+            )));
+    }
+
+    *ppSRV = m_pSRV;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::LockRect
+//
+//  Synopsis:  Map the subresource for CPU access.
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::LockRect(
+    __out_ecount(1) MilLockedRect *pLockedRect,
+    __in_ecount_opt(1) CONST RECT *pRect,
+    DWORD Flags
+    )
+{
+    HRESULT hr = S_OK;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    D3D11_MAP mapType;
+
+    Assert(IsValid());
+    Assert(!m_fLocked);
+
+    if (m_desc.Usage == D3D11_USAGE_DYNAMIC)
+    {
+        mapType = D3D11_MAP_WRITE_DISCARD;
+    }
+    else if (m_desc.Usage == D3D11_USAGE_STAGING)
+    {
+        if (Flags & D3DLOCK_READONLY)
+        {
+            mapType = D3D11_MAP_READ;
+        }
+        else if (m_desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ)
+        {
+            mapType = D3D11_MAP_READ_WRITE;
+        }
+        else
+        {
+            mapType = D3D11_MAP_WRITE;
+        }
+    }
+    else
+    {
+        IFC(WGXERR_INVALIDCALL);
+    }
+
+    IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
+        m_pD3DTexture,
+        m_uSubresource,
+        mapType,
+        0,
+        &mapped
+        )));
+
+    m_fLocked = true;
+
+    pLockedRect->Pitch = static_cast<INT>(mapped.RowPitch);
+    pLockedRect->pBits = mapped.pData;
+
+    if (pRect)
+    {
+        pLockedRect->pBits =
+              static_cast<BYTE *>(mapped.pData)
+            + static_cast<SIZE_T>(pRect->top) * mapped.RowPitch
+            + static_cast<SIZE_T>(pRect->left) * D3DFormatSize(m_desc.Format);
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::UnlockRect
+//
+//  Synopsis:  Unmap the subresource.
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::UnlockRect(
+    )
+{
+    Assert(m_fLocked);
+
+    Device().GetD3DContextNoRef()->Unmap(m_pD3DTexture, m_uSubresource);
+    m_fLocked = false;
+
+    return S_OK;
 }
 
 //+------------------------------------------------------------------------
 //
 //  Member:    CD3DSurface::GetDC
 //
-//  Synopsis:  Retrieve a DC wrapping this surface
+//  Synopsis:  Retrieve a DC wrapping this surface. Requires a GDI
+//             compatible texture.
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DSurface::GetDC(
     __out_ecount(1) HDC *phdc
     )
 {
     HRESULT hr = S_OK;
 
+    IDXGISurface1 *pDXGISurface = NULL;
     HDC hBackBuffer = NULL;
 
     *phdc = NULL;
 
-    MIL_THR(m_pD3DSurface->GetDC(
-        &hBackBuffer
-        ));
+    IFC(m_pD3DTexture->QueryInterface(__uuidof(IDXGISurface1), reinterpret_cast<void **>(&pDXGISurface)));
+
+    MIL_THR(MilTranslateD3D11Error(pDXGISurface->GetDC(FALSE, &hBackBuffer)));
 
     //
-    // D3D isn't supposed to return E_FAIL to us.  We want to see if we can 
+    // DXGI isn't supposed to return E_FAIL to us.  We want to see if we can
     // reinterpret it.
     //
     if (hr == E_FAIL)
@@ -242,13 +490,43 @@ CD3DSurface::GetDC(
 
 Cleanup:
     //
-    // If we have a backbuffer handle at this point it means 
+    // If we have a backbuffer handle at this point it means
     // something failed.
     //
     if (hBackBuffer)
     {
-        IGNORE_HR(m_pD3DSurface->ReleaseDC(hBackBuffer));
+        IGNORE_HR(pDXGISurface->ReleaseDC(NULL));
     }
+
+    ReleaseInterface(pDXGISurface);
+
+    RRETURN(hr);
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CD3DSurface::ReleaseDC
+//
+//  Synopsis:  Release a DC obtained with GetDC.
+//
+//-------------------------------------------------------------------------
+HRESULT
+CD3DSurface::ReleaseDC(
+    HDC hdc
+    )
+{
+    HRESULT hr = S_OK;
+
+    IDXGISurface1 *pDXGISurface = NULL;
+
+    UNREFERENCED_PARAMETER(hdc);
+
+    IFC(m_pD3DTexture->QueryInterface(__uuidof(IDXGISurface1), reinterpret_cast<void **>(&pDXGISurface)));
+
+    IFC(MilTranslateD3D11Error(pDXGISurface->ReleaseDC(NULL)));
+
+Cleanup:
+    ReleaseInterface(pDXGISurface);
 
     RRETURN(hr);
 }
@@ -269,10 +547,10 @@ Cleanup:
 //                   is larger than the stride of the source in the given
 //                   rectangle.
 //
-//             IMPORTANT: HwUtil.cpp's ReadRenderTargetIntoSysMemBuffer borrows 
-//             heavily from this so it should be kept in sync with this 
+//             IMPORTANT: HwUtil.cpp's ReadRenderTargetIntoSysMemBuffer borrows
+//             heavily from this so it should be kept in sync with this
 //             implementation
-//             
+//
 //-----------------------------------------------------------------------------
 HRESULT
 CD3DSurface::ReadIntoSysMemBuffer(
@@ -286,23 +564,31 @@ CD3DSurface::ReadIntoSysMemBuffer(
     )
 {
     HRESULT hr = S_OK;
-    IDirect3DSurface9 *pD3DLockableSurface = NULL;
-    IDirect3DSurface9 *pTempSurface = NULL;
-    
-    bool fNeedToManuallyCopyBits = true;
+
+    ID3D11Device *pDevice = Device().GetD3DDeviceNoRef();
+    ID3D11DeviceContext *pContext = Device().GetD3DContextNoRef();
+
+    ID3D11Texture2D *pStagingTexture = NULL;
+    ID3D11Texture2D *pResolvedTexture = NULL;
+    ID3D11Texture2D *pMappedTexture = NULL;
+
+    UINT uMappedSubresource = 0;
+    bool fMapped = false;
     UINT nStrideCopy;
+
+    // Offset of rcSource inside the mapped texture
+    UINT uMappedLeft = 0;
+    UINT uMappedTop = 0;
 
     UINT const uSourceWidth = rcSource.Width();
     UINT const uSourceHeight = rcSource.Height();
-
-    RECT const rcDest = { 0, 0, uSourceWidth, uSourceHeight };
 
     BYTE const BitsPerPixel = GetPixelFormatSize(fmtOut);
 
     if (BitsPerPixel % BITS_PER_BYTE)
     {
         TraceTag((tagMILWarning,
-                  "Call to CHwDeviceBitmapColorSource::CopyPixels requested fraction byte copy"));
+                  "Call to CD3DSurface::ReadIntoSysMemBuffer requested fraction byte copy"));
         IFC(WGXERR_INVALIDPARAMETER);
     }
 
@@ -315,115 +601,115 @@ CD3DSurface::ReadIntoSysMemBuffer(
 
     Assert(Device().IsInAUseContext());
 
-    D3DFORMAT d3dfmtOut = PixelFormatToD3DFormat(fmtOut);
+    //
+    // 출력 포맷은 서피스 포맷과 같아야 한다. BGRA와 BGRX는 비트 호환이므로 허용.
+    //
 
-    if ((m_d3dsd.Pool == D3DPOOL_MANAGED) || (m_d3dsd.Pool == D3DPOOL_SYSTEMMEM))
     {
-        if (d3dfmtOut != m_d3dsd.Format)
+        DXGI_FORMAT fmtRequested = PixelFormatToD3DFormat(fmtOut);
+
+        bool fCompatible =
+               (fmtRequested == m_desc.Format)
+            || (   (fmtRequested == DXGI_FORMAT_B8G8R8A8_UNORM || fmtRequested == DXGI_FORMAT_B8G8R8X8_UNORM)
+                && (m_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || m_desc.Format == DXGI_FORMAT_B8G8R8X8_UNORM));
+
+        if (!fCompatible)
         {
             IFC(WGXERR_INVALIDCALL);
         }
+    }
 
-        SetInterface(pD3DLockableSurface, ID3DSurface());
+    if (IsStaging() && (m_desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ))
+    {
+        pMappedTexture = m_pD3DTexture;
+        pMappedTexture->AddRef();
+        uMappedSubresource = m_uSubresource;
+        uMappedLeft = rcSource.left;
+        uMappedTop = rcSource.top;
     }
     else
     {
         //
-        // Create a lockable copy or wrapper around bit buffer and copy
+        // Copy the requested rectangle into a staging texture of the same
+        // format and read it back from there. Multisampled sources are
+        // resolved into a plain texture first.
         //
 
-#if DBG
+        D3D11_TEXTURE2D_DESC descStaging;
+
+        ZeroMemory(&descStaging, sizeof(descStaging));
+        descStaging.Width = uSourceWidth;
+        descStaging.Height = uSourceHeight;
+        descStaging.MipLevels = 1;
+        descStaging.ArraySize = 1;
+        descStaging.Format = m_desc.Format;
+        descStaging.SampleDesc.Count = 1;
+        descStaging.SampleDesc.Quality = 0;
+        descStaging.Usage = D3D11_USAGE_STAGING;
+        descStaging.BindFlags = 0;
+        descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        descStaging.MiscFlags = 0;
+
+        IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descStaging, NULL, &pStagingTexture)));
+
+        ID3D11Texture2D *pCopySource = m_pD3DTexture;
+        UINT uCopySourceSubresource = m_uSubresource;
+        D3D11_BOX box;
+
+        box.left = rcSource.left;
+        box.top = rcSource.top;
+        box.front = 0;
+        box.right = rcSource.right;
+        box.bottom = rcSource.bottom;
+        box.back = 1;
+
+        if (IsMultisampled())
         {
-            // Double check that we have the right device
-            IDirect3DDevice9 *pID3DDevice = NULL;
-            if (SUCCEEDED(ID3DSurface()->GetDevice(&pID3DDevice)))
-            {
-                Assert(pID3DDevice == Device().DbgGetID3DDevice9());
-            }
-            ReleaseInterface(pID3DDevice);
+            D3D11_TEXTURE2D_DESC descResolved = m_desc;
+
+            descResolved.MipLevels = 1;
+            descResolved.ArraySize = 1;
+            descResolved.SampleDesc.Count = 1;
+            descResolved.SampleDesc.Quality = 0;
+            descResolved.Usage = D3D11_USAGE_DEFAULT;
+            descResolved.BindFlags = D3D11_BIND_RENDER_TARGET;
+            descResolved.CPUAccessFlags = 0;
+            descResolved.MiscFlags = 0;
+
+            IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descResolved, NULL, &pResolvedTexture)));
+
+            pContext->ResolveSubresource(pResolvedTexture, 0, m_pD3DTexture, m_uSubresource, m_desc.Format);
+
+            pCopySource = pResolvedTexture;
+            uCopySourceSubresource = 0;
         }
-#endif
-        void* pvSysMemPixels = NULL;
 
-        //
-        // Shared surf create should take stride
-        // CreateSysMemUpdateSurface with WDDM can provide a wrapper around a
-        // system memory buffer owned by this module.  But surface width in
-        // bytes must equal the stride.  Since GetRenderTargetData also has
-        // surface size restrictions and nothing can be done about the out
-        // buffer properties, check that out buffer meets requirements before
-        // creating the wrapper.  If the check fails (or WDDM isn't available)
-        // have D3D allocate system memory and do an extra system memory to
-        // system memory transfer.
-        //
-        // Independent of the above, if there are clip rects, then handle
-        // clipping with CPU copies rather than attempting several
-        // GetRenderTargetData calls which probably still require a CPU
-        // transfer.
-        //
-        if (   Device().IsLDDMDevice()
-            && nStrideOut == nStrideCopy
-            && cClipRects == 0)
-        {
-            fNeedToManuallyCopyBits = false;
-            pvSysMemPixels = pbBufferOut;
-        }        
+        pContext->CopySubresourceRegion(
+            pStagingTexture,
+            0,
+            0,
+            0,
+            0,
+            pCopySource,
+            uCopySourceSubresource,
+            &box
+            );
 
-        IFC(Device().CreateSysMemUpdateSurface(
-            uSourceWidth, 
-            uSourceHeight, 
-            d3dfmtOut, 
-            pvSysMemPixels, 
-            &pD3DLockableSurface));
-
-        //
-        // The target of GetRenderTargetData has to be the same size and format
-        // as the source.  If we need less that the full rendertarget or one of
-        // a different format, we need to create a temporary rendertarget which
-        // is the right size and format, copy into that, and then readback from
-        // there.  If we need the whole thing and format matches, just use the
-        // normal rendertarget.
-        //
-        if (   uSourceWidth != m_d3dsd.Width
-            || uSourceHeight != m_d3dsd.Height
-            || d3dfmtOut != m_d3dsd.Format)
-        {
-            IFC(Device().CheckRenderTargetFormat(m_d3dsd.Format, /* pphrTestGetDC = */ NULL));
-
-            IFC(Device().CreateRenderTargetUntracked(
-                uSourceWidth,
-                uSourceHeight,
-                m_d3dsd.Format,
-                m_d3dsd.MultiSampleType,
-                m_d3dsd.MultiSampleQuality,
-                FALSE,
-                &pTempSurface
-                ));
-
-            IFC(Device().StretchRect(
-                this,
-                reinterpret_cast<CMilRectL const *>(&rcSource),
-                pTempSurface, 
-                &rcDest,
-                D3DTEXF_NONE
-                ));
-        }
-        
-        IFC(Device().GetRenderTargetData(
-            pTempSurface ? pTempSurface : this->ID3DSurface(), 
-            pD3DLockableSurface
-            ));
+        pMappedTexture = pStagingTexture;
+        pMappedTexture->AddRef();
+        uMappedSubresource = 0;
+        uMappedLeft = 0;
+        uMappedTop = 0;
     }
 
     //
-    // Manually lock the surface and copy the bits to the destination if we
-    // weren't able to get it done automatically by GetRenderTargetData.
+    // Map and copy the bits to the destination.
     //
-    if (fNeedToManuallyCopyBits)
     {
-        D3DLOCKED_RECT d3dlr;
-        
-        IFC(pD3DLockableSurface->LockRect(&d3dlr, &rcDest, D3DLOCK_READONLY));
+        D3D11_MAPPED_SUBRESOURCE mapped;
+
+        IFC(MilTranslateD3D11Error(pContext->Map(pMappedTexture, uMappedSubresource, D3D11_MAP_READ, 0, &mapped)));
+        fMapped = true;
 
         UINT const BytesPerPixel = BitsPerPixel / BITS_PER_BYTE;
 
@@ -443,7 +729,7 @@ CD3DSurface::ReadIntoSysMemBuffer(
             CMilRectU rcCopy = *rgClipRects;
             if (rcCopy.Intersect(rcSource))
             {
-                // Adjust pbBufferOut and locked D3D buffer pointer by amount
+                // Adjust pbBufferOut and mapped buffer pointer by amount
                 // inset by intersection with source rect.  None of this math
                 // should overflow since rcCopy is restricted to rcSource which
                 // has already been validated as a good bounding rectangle.
@@ -455,9 +741,13 @@ CD3DSurface::ReadIntoSysMemBuffer(
                 IFC(AddUINT(cbBufferInset, cbLeftInset, OUT cbBufferInset));
                 BYTE *pbOutBuffer = pbBufferOut + cbBufferInset;
 
-                IFC(MultiplyUINT(d3dlr.Pitch, rcCopy.top - rcSource.top, OUT cbBufferInset));
-                IFC(AddUINT(cbBufferInset, cbLeftInset, OUT cbBufferInset));
-                BYTE *pbInBuffer = static_cast<BYTE *>(d3dlr.pBits) + cbBufferInset;
+                UINT cbMappedInset;
+                IFC(MultiplyUINT(mapped.RowPitch, rcCopy.top - rcSource.top + uMappedTop, OUT cbMappedInset));
+                IFC(MultiplyUINT(BytesPerPixel, uMappedLeft, OUT cbLeftInset));
+                IFC(AddUINT(cbMappedInset, cbLeftInset, OUT cbMappedInset));
+                IFC(MultiplyUINT(BytesPerPixel, rcCopy.left - rcSource.left, OUT cbLeftInset));
+                IFC(AddUINT(cbMappedInset, cbLeftInset, OUT cbMappedInset));
+                BYTE *pbInBuffer = static_cast<BYTE *>(mapped.pData) + cbMappedInset;
 
                 IFC(MultiplyUINT(BytesPerPixel, rcCopy.Width(), OUT nStrideCopy));
 
@@ -467,21 +757,21 @@ CD3DSurface::ReadIntoSysMemBuffer(
 
                     GpMemcpy(pbOutBuffer, pbInBuffer, nStrideCopy);
                     pbOutBuffer += nStrideOut;
-                    pbInBuffer += d3dlr.Pitch;
+                    pbInBuffer += mapped.RowPitch;
                 }
             }
         } while (rgClipRects++, --cClipRects > 0);
-
-        IGNORE_HR(pD3DLockableSurface->UnlockRect());
     }
-    
+
 Cleanup:
-    ReleaseInterface(pD3DLockableSurface);
-    ReleaseInterface(pTempSurface);
-    
+    if (fMapped)
+    {
+        pContext->Unmap(pMappedTexture, uMappedSubresource);
+    }
+
+    ReleaseInterface(pMappedTexture);
+    ReleaseInterface(pResolvedTexture);
+    ReleaseInterface(pStagingTexture);
+
     RRETURN(hr);
 }
-
-
-
-

@@ -287,7 +287,7 @@ CRenderTargetManager::IsGPUThrottlingEnabled(
     // If we don't have a display set, we are patiently waiting for this
     // partition to be able to render, so, assume we can't use GPU throtting.
     //
-    if (pDisplaySet == NULL || pDisplaySet->D3DExObject() != NULL)
+    if (true /* GPU throttling was only for XPDM drivers; D3D11 means WDDM */)
     {
         Assert(!*pfEnabled);
         goto Cleanup;

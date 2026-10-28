@@ -315,7 +315,7 @@ CDrawingContext::Begin3D(
     m_contextState.In3D = true;
 
     // Setup up other state
-    m_contextState.DepthBufferFunction3D = D3DCMP_LESSEQUAL;
+    m_contextState.DepthBufferFunction3D = D3D11_COMPARISON_LESS_EQUAL;
 
     // Reset the world transform
     m_contextState.WorldTransform3D.SetToIdentity();

@@ -39,7 +39,7 @@ struct VertexDataTypeTraits<vector3>
 {
     enum 
     { 
-        D3DFVF = D3DFVF_NORMAL,
+        MILVERTEXFORMAT = MilVertexFormat_XYZNUV1,
         MILVF = MILVFAttrNormal
     };
 };
@@ -49,7 +49,7 @@ struct VertexDataTypeTraits<DWORD>
 {
     enum 
     { 
-        D3DFVF = D3DFVF_DIFFUSE,
+        MILVERTEXFORMAT = MilVertexFormat_XYZDUV1,
         MILVF = MILVFAttrDiffuse
     };
 };
@@ -269,9 +269,7 @@ CHwD3DVertexBuffer::Init(
     
     IFC(pD3DDevice->CreateVertexBuffer(
         GetCapacity(),
-        D3DUSAGE_WRITEONLY | D3DUSAGE_DYNAMIC,
-        0,
-        D3DPOOL_DEFAULT,
+        true,   // dynamic
         &m_pVertexBuffer
         ));
 
@@ -347,33 +345,25 @@ CHwD3DVertexBuffer::Lock(
         puStartVertex
         );
 
-    IFC(m_pVertexBuffer->Lock(
-        GetCurrentBytePos(),
-        GetNumBytesInLastChunk(),
-        ppLockedVertices,
-        dwLockFlags
-        ));
-
-    //
-    // Some D3D HALs can return success and a NULL address.  D3D runtime will
-    // happily accept the NULL address, add the lock offset, and return the bad
-    // address.  So, check for this hole and interpret it as failure.
-    //
-    // On Win7 it appears that there are situations where we can just
-    // get the NULL address back directly even though the call succeeds, perhaps 
-    // due to change in the D3D runtime, so check for that case as well.
-    //
-    // Warning: When using a checked D3D runtime and D3DLOCK_DISCARD flag, D3D
-    //          will blindly memset the buffer causing an access violation --
-    //          See d3d9!CDriverVertexBuffer::Lock
-    //
-
-    if (   reinterpret_cast<UINT_PTR>(*ppLockedVertices) == static_cast<UINT_PTR>(GetCurrentBytePos())
-        || *ppLockedVertices == NULL)
     {
-        IGNORE_HR(m_pVertexBuffer->Unlock());
-        *ppLockedVertices = NULL;
-        IFC(D3DERR_DRIVERINTERNALERROR);
+        D3D11_MAPPED_SUBRESOURCE mapped;
+
+        IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
+            m_pVertexBuffer,
+            0,
+            (dwLockFlags & D3DLOCK_DISCARD) ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE,
+            0,
+            &mapped
+            )));
+
+        if (mapped.pData == NULL)
+        {
+            Device().GetD3DContextNoRef()->Unmap(m_pVertexBuffer, 0);
+            *ppLockedVertices = NULL;
+            IFC(D3DERR_DRIVERINTERNALERROR);
+        }
+
+        *ppLockedVertices = static_cast<BYTE *>(mapped.pData) + GetCurrentBytePos();
     }
 
     m_fLocked = true;
@@ -400,13 +390,12 @@ CHwD3DVertexBuffer::Unlock(
     
     Assert(m_fLocked == true);
 
-    IFC(m_pVertexBuffer->Unlock());
+    Device().GetD3DContextNoRef()->Unmap(m_pVertexBuffer, 0);
 
     ReportNumberOfElementsUsedInLastChunk(cVerticesUsed);
 
     m_fLocked = false;
 
-Cleanup:
     RRETURN(hr);
 }
 
@@ -504,9 +493,7 @@ CHwD3DIndexBuffer::Init(
     
     IFC(pD3DDevice->CreateIndexBuffer(
         GetCapacity(),
-        D3DUSAGE_WRITEONLY | D3DUSAGE_DYNAMIC,
-        D3DFMT_INDEX16,
-        D3DPOOL_DEFAULT,
+        true,   // dynamic
         &m_pIndexBuffer
         ));
 
@@ -581,33 +568,25 @@ CHwD3DIndexBuffer::Lock(
         puStartIndex
         );
 
-    IFC(m_pIndexBuffer->Lock(
-        GetCurrentBytePos(),
-        GetNumBytesInLastChunk(),
-        reinterpret_cast<void **>(ppwLockedIndices),
-        dwLockFlags
-        ));
-
-    //
-    // Some D3D HALs can return success and a NULL address.  D3D runtime will
-    // happily accept the NULL address, add the lock offset, and return the bad
-    // address.  So, check for this hole and interpret it as failure.
-    //
-    // On Win7 it appears that there are situations where we can just
-    // get the NULL address back directly even though the call succeeds, perhaps 
-    // due to change in the D3D runtime, so check for that case as well.
-    //
-    // Warning: When using a checked D3D runtime and D3DLOCK_DISCARD flag, D3D
-    //          will blindly memset the buffer causing an access violation --
-    //          See d3d9!CDriverVertexBuffer::Lock
-    //
-
-    if (   reinterpret_cast<UINT_PTR>(*ppwLockedIndices) == static_cast<UINT_PTR>(GetCurrentBytePos())
-        || *ppwLockedIndices == NULL)
     {
-        IGNORE_HR(m_pIndexBuffer->Unlock());
-        *ppwLockedIndices = NULL;
-        IFC(D3DERR_DRIVERINTERNALERROR);
+        D3D11_MAPPED_SUBRESOURCE mapped;
+
+        IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
+            m_pIndexBuffer,
+            0,
+            (dwLockFlags & D3DLOCK_DISCARD) ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE,
+            0,
+            &mapped
+            )));
+
+        if (mapped.pData == NULL)
+        {
+            Device().GetD3DContextNoRef()->Unmap(m_pIndexBuffer, 0);
+            *ppwLockedIndices = NULL;
+            IFC(D3DERR_DRIVERINTERNALERROR);
+        }
+
+        *ppwLockedIndices = reinterpret_cast<WORD *>(static_cast<BYTE *>(mapped.pData) + GetCurrentBytePos());
     }
 
     m_fLocked = true;
@@ -632,11 +611,10 @@ CHwD3DIndexBuffer::Unlock()
     
     Assert(m_fLocked == true);
 
-    IFC(m_pIndexBuffer->Unlock());
+    Device().GetD3DContextNoRef()->Unmap(m_pIndexBuffer, 0);
 
     m_fLocked = false;
 
-Cleanup:
     RRETURN(hr);
 }
 
@@ -1176,12 +1154,9 @@ CHw3DGeometryRenderer<TDiffuseOrNormal>::SendDeviceState(
 {
     HRESULT hr = S_OK;
 
-    //
-    // Invalidate FVF so it will be reset next time
-    //
-    DWORD dwFVF = D3DFVF_XYZ | VertexDataTypeTraits<TDiffuseOrNormal>::D3DFVF | D3DFVF_TEX1;
-
-    IFC(pDevice->SetFVF(dwFVF));
+    IFC(pDevice->SetVertexFormat(
+        static_cast<MilVertexFormatId>(VertexDataTypeTraits<TDiffuseOrNormal>::MILVERTEXFORMAT)
+        ));
 
     //
     // NOTE-2004/09/21-chrisra Sending only 1 stream is more performant.

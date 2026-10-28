@@ -74,7 +74,6 @@
 
 #include "control\util\control.h"
 
-#include "shaders.h"
 
 
 #include "..\common\effects\effectlist.h"

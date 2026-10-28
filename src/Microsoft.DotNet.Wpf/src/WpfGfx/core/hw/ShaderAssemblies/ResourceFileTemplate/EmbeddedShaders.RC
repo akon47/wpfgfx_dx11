@@ -1,5 +1,4 @@
-VS_ShaderEffects20 RCDATA ShaderAssemblies\Binary\ShaderEffectVS.vsbin
-VS_ShaderEffects30 RCDATA ShaderAssemblies\Binary\ShaderEffectVS30.vsbin
+VS_ShaderEffects RCDATA ShaderAssemblies\Binary\ShaderEffectVS.vsbin
 PS_PassThroughShaderEffect RCDATA ShaderAssemblies\Binary\PassThroughShaderEffectPS.psbin
 
 PS_BlurH RCDATA ShaderAssemblies\Binary\HorizontalBlur.psbin
@@ -8,3 +7,8 @@ PS_BlurHMulti RCDATA ShaderAssemblies\Binary\HorizontalBlurMulti.psbin
 PS_BlurVMulti RCDATA ShaderAssemblies\Binary\VerticalBlurMulti.psbin
 
 PS_DropShadow RCDATA ShaderAssemblies\Binary\DropShadow.psbin
+
+PS_Text_CTSB RCDATA ShaderAssemblies\Binary\TextCTSB.psbin
+PS_Text_GSSB RCDATA ShaderAssemblies\Binary\TextGSSB.psbin
+PS_Text_CTTB RCDATA ShaderAssemblies\Binary\TextCTTB.psbin
+PS_Text_GSTB RCDATA ShaderAssemblies\Binary\TextGSTB.psbin

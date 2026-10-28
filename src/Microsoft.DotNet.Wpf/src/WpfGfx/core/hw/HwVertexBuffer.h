@@ -316,7 +316,7 @@ public:
         __inout_ecount(1) CD3DDeviceLevel1 *pDevice
         ) const
     {
-        RRETURN(THR(pDevice->SetFVF(TVertex::Format)));
+        RRETURN(THR(pDevice->SetVertexFormat(static_cast<MilVertexFormatId>(TVertex::Format))));
     }
 
     //+------------------------------------------------------------------------
@@ -363,7 +363,7 @@ public:
             Assert(m_rgVerticesNonIndexedTriList.GetCount() %3 == 0);
             
             IFC(pDevice->DrawPrimitiveUP(
-                D3DPT_TRIANGLELIST,
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
                 m_rgVerticesNonIndexedTriList.GetCount() / 3, // primitive count
                 m_rgVerticesNonIndexedTriList.GetDataBuffer(),
                 sizeof(TVertex)
@@ -394,7 +394,7 @@ public:
             pVertex++;
 
             IFC(pDevice->DrawPrimitiveUP(
-                D3DPT_TRIANGLESTRIP,
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
                 uVertexCount - 4, // primitive count
                 pVertex,
                 sizeof(TVertex)
@@ -408,7 +408,7 @@ public:
         if (m_rgVerticesLineList.GetCount() > 0)
         {
             IFC(pDevice->DrawPrimitiveUP(
-                D3DPT_LINELIST,
+                D3D11_PRIMITIVE_TOPOLOGY_LINELIST,
                 m_rgVerticesLineList.GetCount() / 2, // primitive count
                 m_rgVerticesLineList.GetDataBuffer(),
                 sizeof(TVertex)

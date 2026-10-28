@@ -39,7 +39,7 @@ DeclareTag(tagResetRenderStateWhenDrawing, "MIL-HW", "Reset RenderState When Dra
 CHwSurfaceRenderTarget::CHwSurfaceRenderTarget(
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
     MilPixelFormat::Enum fmtTarget,
-    D3DFORMAT d3dfmtTarget,
+    DXGI_FORMAT d3dfmtTarget,
     DisplayId associatedDisplay
     ) :
     CBaseSurfaceRenderTarget<CHwRenderTargetLayerData>(associatedDisplay),
@@ -239,7 +239,7 @@ CHwSurfaceRenderTarget::Begin3D(
         // Determine 3D AA mode
         //
 
-        D3DMULTISAMPLE_TYPE multisampleTypeRequested = D3DMULTISAMPLE_NONE;
+        DXGI_SAMPLE_DESC multisampleTypeRequested = { 1, 0 };
 
         if (AntiAliasMode != MilAntiAliasMode::None)
         {
@@ -254,7 +254,7 @@ CHwSurfaceRenderTarget::Begin3D(
         // Setup buffers and clear Z
         //
 
-        D3DMULTISAMPLE_TYPE multisampleTypeRecevied = multisampleTypeRequested;
+        DXGI_SAMPLE_DESC multisampleTypeRecevied = multisampleTypeRequested;
 
         // multisampleTypeRecevied will be modified to reflect the level of multisampling
         // achieved in a successful call to Begin3DInternal
@@ -262,7 +262,7 @@ CHwSurfaceRenderTarget::Begin3D(
 
         // If the called succeeded but could not acquire the requested multisampling level,
         // we should not request multisampling in the future
-        if (SUCCEEDED(hr) && (multisampleTypeRecevied != multisampleTypeRequested))
+        if (SUCCEEDED(hr) && (multisampleTypeRecevied.Count != multisampleTypeRequested.Count))
         {
             m_pD3DDevice->SetMultisampleFailed();
         }
@@ -296,7 +296,7 @@ HRESULT
 CHwSurfaceRenderTarget::Setup3DRenderTargetAndDepthState(
     FLOAT rZ,
     bool fUseZBuffer,
-    __inout_ecount(1) D3DMULTISAMPLE_TYPE &MultisampleType
+    __inout_ecount(1) DXGI_SAMPLE_DESC &MultisampleType
     )
 {
     HRESULT hr = S_OK;
@@ -361,7 +361,7 @@ HRESULT
 CHwSurfaceRenderTarget::Begin3DInternal(
     FLOAT rZ,
     bool fUseZBuffer,
-    __inout_ecount(1) D3DMULTISAMPLE_TYPE &MultisampleType
+    __inout_ecount(1) DXGI_SAMPLE_DESC &MultisampleType
     )
 {
     HRESULT hr = S_OK;
@@ -399,9 +399,10 @@ CHwSurfaceRenderTarget::Begin3DInternal(
 
     // If we ran out of memory and we were attempting multisampling, we should try again
     // without multisampling.
-    if ((hr == D3DERR_OUTOFVIDEOMEMORY) && (MultisampleType != D3DMULTISAMPLE_NONE))
+    if ((hr == D3DERR_OUTOFVIDEOMEMORY) && (MultisampleType.Count > 1))
     {
-        MultisampleType = D3DMULTISAMPLE_NONE;
+        MultisampleType.Count = 1;
+        MultisampleType.Quality = 0;
 
         // Clear out the previous render target
         m_pD3DTargetSurfaceFor3DNoRef = NULL;
@@ -427,9 +428,7 @@ CHwSurfaceRenderTarget::Begin3DInternal(
             &m_rcBounds,
             m_pD3DTargetSurfaceFor3DNoRef,
             &m_rcBounds,
-            D3DTEXF_NONE  // No stretching, so NONE is fine.  NONE is better
-                          // than POINT only because RefRast doesn't expose the
-                          // cap and D3D would fail this call.
+            MilStretchFilter_None
             ));
     }
 
@@ -472,9 +471,7 @@ CHwSurfaceRenderTarget::End3D(
                 &m_rcBounds,
                 m_pD3DTargetSurface,
                 &m_rcBounds,
-                D3DTEXF_NONE  // No stretching, so NONE is fine.  NONE is
-                              // better than POINT only because RefRast doesn't
-                              // expose the cap and D3D would fail this call.
+                MilStretchFilter_None
                 ));
 
             HW_DBG_RENDERING_STEP(End3D_AntiAliased);
@@ -787,7 +784,7 @@ CHwSurfaceRenderTarget::DrawMesh3D(
                 {
                     IGNORE_HR(m_pD3DDevice->DrawBox(
                         &boxMeshBounds,
-                        D3DFILL_WIREFRAME,
+                        D3D11_FILL_WIREFRAME,
                         0x80000000
                         ));
                 }
@@ -1975,7 +1972,7 @@ CHwSurfaceRenderTarget::DrawGlyphs(
     // clipping if the device supports border color.
     //
     if (   fAttemptHWText
-        && (   (   m_pD3DDevice->SupportsTextureCap(D3DPTEXTURECAPS_POW2)
+        && (   (   !m_pD3DDevice->SupportsNonPow2Unconditionally()
                 && pars.pBrushRealizer->RealizedBrushMayNeedNonPow2Tiling(pars.pBrushContext)
                )
             || (pars.pBrushRealizer->RealizedBrushWillHaveSourceClip()
@@ -2357,7 +2354,7 @@ HRESULT CHwSurfaceRenderTarget::BeginLayerInternal(
             Assert(fCopyEntireLayer);
 
             IFC(m_pD3DDevice->ColorFill(
-                m_pD3DTargetSurface->ID3DSurface(),
+                m_pD3DTargetSurface,
                 CMILSurfaceRectAsRECT(&pNewLayer->rcLayerBounds),
                 0 // Transparent
                 ));
@@ -2885,7 +2882,7 @@ Cleanup:
 
 void
 CHwSurfaceRenderTarget::Ensure3DRenderTarget(
-    D3DMULTISAMPLE_TYPE MultisampleType
+    __in_ecount(1) const DXGI_SAMPLE_DESC &MultisampleType
     )
 {
     //
@@ -2901,8 +2898,8 @@ CHwSurfaceRenderTarget::Ensure3DRenderTarget(
     //  with default target and disable multisample via render state later.
     //
 
-    if (   MultisampleType != D3DMULTISAMPLE_NONE
-        && m_pD3DTargetSurface->Desc().MultiSampleType != MultisampleType)
+    if (   MultisampleType.Count > 1
+        && m_pD3DTargetSurface->Desc().SampleDesc.Count != MultisampleType.Count)
     {
         //
         // Future Consideration:   Restrict intermediate 3D surface to need
@@ -2923,12 +2920,12 @@ CHwSurfaceRenderTarget::Ensure3DRenderTarget(
 
         if (m_pD3DIntermediateMultisampleTargetSurface)
         {
-            D3DSURFACE_DESC const &d3dsdIntermediate =
+            D3D11_TEXTURE2D_DESC const &d3dsdIntermediate =
                 m_pD3DIntermediateMultisampleTargetSurface->Desc();
 
             if (   d3dsdIntermediate.Width < uMinWidth
                 || d3dsdIntermediate.Height < uMinHeight
-                || d3dsdIntermediate.MultiSampleType != MultisampleType
+                || d3dsdIntermediate.SampleDesc.Count != MultisampleType.Count
                )
             {
                 // Insufficient intermediate - release it
@@ -2957,8 +2954,8 @@ CHwSurfaceRenderTarget::Ensure3DRenderTarget(
                 uMinWidth,
                 uMinHeight,
                 m_pD3DTargetSurface->Desc().Format,
-                MultisampleType, 0,
-                FALSE,
+                MultisampleType,
+                false,
                 &m_pD3DIntermediateMultisampleTargetSurface
                 ));
         }
@@ -2995,12 +2992,12 @@ CHwSurfaceRenderTarget::EnsureDepthState(
     // expected Target Size.  (Could be rounded up to a power of 2)
     //
 
-    D3DSURFACE_DESC const &descTargetSurface = m_pD3DTargetSurfaceFor3DNoRef->Desc();
+    D3D11_TEXTURE2D_DESC const &descTargetSurface = m_pD3DTargetSurfaceFor3DNoRef->Desc();
 
     // Release the depth buffer if it's not valid or the wrong size
     if (m_pD3DStencilSurface != NULL)
     {
-        D3DSURFACE_DESC const &descDepthSurface = m_pD3DStencilSurface->Desc();
+        D3D11_TEXTURE2D_DESC const &descDepthSurface = m_pD3DStencilSurface->Desc();
 
 
         // If there is a change in a depth buffer being required or clip
@@ -3010,7 +3007,7 @@ CHwSurfaceRenderTarget::EnsureDepthState(
         if (   !m_pD3DStencilSurface->IsValid()
             || descDepthSurface.Width < descTargetSurface.Width
             || descDepthSurface.Height < descTargetSurface.Height
-            || descDepthSurface.MultiSampleType != descTargetSurface.MultiSampleType
+            || descDepthSurface.SampleDesc.Count != descTargetSurface.SampleDesc.Count
            )
         {
             // Release the depth buffer now so that it will
@@ -3025,7 +3022,7 @@ CHwSurfaceRenderTarget::EnsureDepthState(
         IFC(m_pD3DDevice->CreateDepthBuffer(
             descTargetSurface.Width,
             descTargetSurface.Height,
-            descTargetSurface.MultiSampleType,
+            descTargetSurface.SampleDesc,
             &m_pD3DStencilSurface
             ));
     }
@@ -3157,27 +3154,15 @@ CHwSurfaceRenderTarget::Ensure2DState(
     //
     IFC(m_pD3DDevice->Set2DTransformForFixedFunction());
 
-    IFC(m_pD3DDevice->SetRenderState(
-        D3DRS_CULLMODE,
-        D3DCULL_NONE
-        ));
+    IFC(m_pD3DDevice->SetCullMode(D3D11_CULL_NONE));
 
-    IFC(m_pD3DDevice->SetRenderState(
-        D3DRS_ZFUNC,
-        D3DCMP_LESSEQUAL
-        ));
+    IFC(m_pD3DDevice->SetDepthFunc(D3D11_COMPARISON_LESS_EQUAL));
 
-    IFC(m_pD3DDevice->SetRenderState(
-        D3DRS_ZWRITEENABLE,
-        FALSE
-        ));
+    IFC(m_pD3DDevice->SetDepthWriteEnable(FALSE));
 
-    if (m_pD3DTargetSurface->Desc().MultiSampleType != D3DMULTISAMPLE_NONE)
+    if (m_pD3DTargetSurface->Desc().SampleDesc.Count > 1)
     {
-        IFC(m_pD3DDevice->SetRenderState(
-            D3DRS_MULTISAMPLEANTIALIAS,
-            FALSE
-            ));
+        IFC(m_pD3DDevice->SetMultisampleAntialias(FALSE));
     }
 
 Cleanup:
@@ -3213,30 +3198,24 @@ CHwSurfaceRenderTarget::Ensure3DState(
         pContextState->ViewportProjectionModifier3D
         ));
 
-    IFC(m_pD3DDevice->SetRenderState(
-        D3DRS_CULLMODE,
-        pContextState->CullMode3D
-        ));
+    IFC(m_pD3DDevice->SetCullMode(pContextState->CullMode3D));
 
     if (m_fZBufferEnabled)
     {
         Assert(m_pD3DStencilSurface);
         IFC(m_pD3DDevice->SetDepthStencilSurface(m_pD3DStencilSurface));
 
-        IFC(m_pD3DDevice->SetRenderState(
-            D3DRS_ZFUNC,
-            pContextState->DepthBufferFunction3D
-            ));
+        IFC(m_pD3DDevice->SetDepthFunc(pContextState->DepthBufferFunction3D));
+        IFC(m_pD3DDevice->SetDepthWriteEnable(TRUE));
     }
     else
     {
         IFC(m_pD3DDevice->SetDepthStencilSurface(NULL));
     }
 
-    if (m_pD3DTargetSurfaceFor3DNoRef->Desc().MultiSampleType != D3DMULTISAMPLE_NONE)
+    if (m_pD3DTargetSurfaceFor3DNoRef->Desc().SampleDesc.Count > 1)
     {
-        IFC(m_pD3DDevice->SetRenderState(
-            D3DRS_MULTISAMPLEANTIALIAS,
+        IFC(m_pD3DDevice->SetMultisampleAntialias(
             pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None
             ));
     }
@@ -3405,11 +3384,11 @@ HRESULT
 CHwSurfaceRenderTarget::PopulateDestinationTexture(
     __in_ecount(1) const CMILSurfaceRect *prcSource,
     __in_ecount(1) const CMILSurfaceRect *prcDest,
-    __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+    __inout_ecount(1) CD3DTexture *pD3DTexture
     )
 {
     HRESULT hr = S_OK;
-    IDirect3DSurface9 *pD3DSurface = NULL;
+    CD3DSurface *pD3DSurface = NULL;
 
     ENTER_USE_CONTEXT_FOR_SCOPE(*m_pD3DDevice);
 
@@ -3422,12 +3401,12 @@ CHwSurfaceRenderTarget::PopulateDestinationTexture(
     Assert((prcDest->right - prcDest->left) == (prcSource->right - prcSource->left));
     Assert((prcDest->bottom - prcDest->top) == (prcSource->bottom - prcSource->top));
 
-    IFC(pD3DTexture->GetSurfaceLevel(
+    IFC(pD3DTexture->GetD3DSurfaceLevel(
         0,
         &pD3DSurface
         ));
 
-    const D3DTEXTUREFILTERTYPE d3dFilter = D3DTEXF_NONE;
+    const MilStretchFilter d3dFilter = MilStretchFilter_None;
 
     IFC(m_pD3DDevice->StretchRect(
         m_pD3DTargetSurface,

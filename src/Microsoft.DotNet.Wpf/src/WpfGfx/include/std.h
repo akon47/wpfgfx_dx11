@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -352,7 +352,7 @@ RtlAssert(
 #pragma warning(push)
 #pragma warning (disable:4005) // suppress macro redefinition warning
 #include <D2D1.h>
-#include <d3d9.h>
+#include "mild3dtypes.h"
 #include "dwrite.h"
 #pragma warning(pop)
 

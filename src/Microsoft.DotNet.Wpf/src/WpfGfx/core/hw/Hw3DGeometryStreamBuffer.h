@@ -147,7 +147,7 @@ public:
         UINT cVerticesUsed
         );
 
-    __out_ecount(1) IDirect3DVertexBuffer9 *GetD3DBuffer() const
+    __out_ecount(1) ID3D11Buffer *GetD3DBuffer() const
         { return m_pVertexBuffer; }
 
 private:
@@ -174,7 +174,7 @@ private:
     void ReleaseD3DResources();
 
 private:
-    IDirect3DVertexBuffer9 *m_pVertexBuffer;    
+    ID3D11Buffer *m_pVertexBuffer;
     bool m_fLocked;
 };
 
@@ -222,7 +222,7 @@ public:
 
     HRESULT Unlock();
 
-    __out_ecount(1) IDirect3DIndexBuffer9 *GetD3DBuffer() const
+    __out_ecount(1) ID3D11Buffer *GetD3DBuffer() const
         { return m_pIndexBuffer; }
 
 private:
@@ -249,7 +249,7 @@ private:
     void ReleaseD3DResources();
 
 private:
-    IDirect3DIndexBuffer9 *m_pIndexBuffer;    
+    ID3D11Buffer *m_pIndexBuffer;
     bool m_fLocked;
 };
 

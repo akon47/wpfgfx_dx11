@@ -84,23 +84,22 @@ CMilEffectDuce::CreateIntermediateRT(
     __in CD3DDeviceLevel1 *pD3DDevice, 
     __in UINT uWidth, 
     __in UINT uHeight, 
-    __in D3DFORMAT d3dfmtTarget,
+    __in DXGI_FORMAT d3dfmtTarget,
     __out CD3DVidMemOnlyTexture **ppVidMemOnlyTexture)
-{  
+{
     HRESULT hr = S_OK;
 
-    D3DSURFACE_DESC sdLevel0;
-    sdLevel0.Format = d3dfmtTarget;
-    sdLevel0.Type = D3DRTYPE_TEXTURE;
-    sdLevel0.Usage = D3DUSAGE_RENDERTARGET;
-    // We have to use default pool since we don't have drivers
-    // that supported DDI management features needed for MANAGED
-    // render targets.
-    sdLevel0.Pool = D3DPOOL_DEFAULT;
-    sdLevel0.MultiSampleType = D3DMULTISAMPLE_NONE;
-    sdLevel0.MultiSampleQuality = 0;
-    sdLevel0.Width = uWidth;
-    sdLevel0.Height = uHeight;
+    D3D11_TEXTURE2D_DESC sdLevel0;
+
+    PopulateSurfaceDesc(
+        d3dfmtTarget,
+        D3D11_USAGE_DEFAULT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        0,
+        uWidth,
+        uHeight,
+        &sdLevel0
+        );
 
     //
     // Get the required texture characteristics
@@ -192,7 +191,7 @@ CMilEffectDuce::SetupVertexTransform(
         // Get the projection matrix saved in the device state.
         CMILMatrix matWorldToProjection;
         IFC(pDevice->GetTransform(
-            D3DTS_PROJECTION,
+            MilTransform_Projection,
             &matWorldToProjection
             ));
 
@@ -256,41 +255,24 @@ CMilEffectDuce::SetSamplerState(
     // Set the address mode to clamp for effects.
     if (setAddressMode)
     {
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_ADDRESSU, 
-            D3DTADDRESS_CLAMP));
-
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_ADDRESSV, 
-            D3DTADDRESS_CLAMP));
+        IFC(pDevice->SetSamplerAddressModes(
+            uSamplerRegister,
+            D3D11_TEXTURE_ADDRESS_CLAMP,
+            D3D11_TEXTURE_ADDRESS_CLAMP));
     }
 
     // Set the sampling mode to bilinear or nearest neighbor.
     if (useBilinear)
     {
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_MINFILTER, 
-            D3DTEXF_LINEAR));
-
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_MAGFILTER,
-            D3DTEXF_LINEAR));
+        IFC(pDevice->SetFilterMode(
+            uSamplerRegister,
+            &CD3DRenderState::sc_fmLinear));
     }
     else
     {
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_MINFILTER, 
-            D3DTEXF_POINT));
-
-        IFC(pDevice->SetSamplerState(
-            uSamplerRegister, 
-            D3DSAMP_MAGFILTER,
-            D3DTEXF_POINT));
+        IFC(pDevice->SetFilterMode(
+            uSamplerRegister,
+            &CD3DRenderState::sc_fmNearest));
     }
     
 Cleanup:
