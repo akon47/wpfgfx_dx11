@@ -31,7 +31,7 @@ class CD3DDeviceLevel1;
 //      CD3DGlyphBankTemporarySurface
 //
 //  Synopsis:
-//      Holds a D3DPOOL_SYSTEMMEM surface that's used to pump data to glyph
+//      Holds a staging texture that's used to pump data to glyph
 //      tanks.
 //
 //------------------------------------------------------------------------------
@@ -41,7 +41,7 @@ public:
     DECLARE_METERHEAP_ALLOC(ProcessHeap, Mt(CD3DGlyphBank));
 
     CD3DGlyphBankTemporarySurface(
-        __in_ecount(1) IDirect3DSurface9* pSurface,
+        __in_ecount(1) ID3D11Texture2D* pSurface,
         UINT uWidth,
         UINT uHeight,
         __in_ecount(1) IMILPoolManager *pManager
@@ -51,7 +51,7 @@ public:
 
     UINT GetWidth() const {return m_uWidth;}
     UINT GetHeight() const {return m_uHeight;}
-    IDirect3DSurface9* GetSurfaceNoAddref() const {return m_pSurface;}
+    ID3D11Texture2D* GetSurfaceNoAddref() const {return m_pSurface;}
 
     bool IsExpensive() const
     {
@@ -70,7 +70,7 @@ private:
 #endif
 
 private:
-    IDirect3DSurface9 * const m_pSurface;
+    ID3D11Texture2D * const m_pSurface;
     UINT const m_uWidth;
     UINT const m_uHeight;
 };
@@ -95,8 +95,8 @@ public:
     DECLARE_METERHEAP_CLEAR(ProcessHeap, Mt(CD3DGlyphBank));
 
     CD3DGlyphTank(
-        __in_ecount(1) IDirect3DTexture9* pTexture,
-        __in_ecount(1) IDirect3DSurface9* pSurface,
+        __in_ecount(1) ID3D11Texture2D* pTexture,
+        __in_ecount(1) ID3D11ShaderResourceView* pSRV,
         UINT uTankWidth,
         UINT uTankHeight,
         __in_ecount(1) IMILPoolManager *pManager
@@ -121,8 +121,10 @@ public:
     // accessors
     //
 
-    IDirect3DTexture9* GetTextureNoAddref() const {return m_pTexture;}
-    IDirect3DSurface9* GetSurfaceNoAddref() const {return m_pSurface;}
+    // Shader resource view used to sample the tank
+    ID3D11ShaderResourceView* GetTextureNoAddref() const {return m_pSRV;}
+    // Texture used as the copy destination
+    ID3D11Texture2D* GetSurfaceNoAddref() const {return m_pTexture;}
     float GetWidTextureRc() const {return m_rWidthReciprocal;}
     float GetHeiTextureRc() const {return m_rHeightReciprocal;}
     UINT GetLoad() const {return m_nPeakLoad - m_nLostLoad;}
@@ -165,8 +167,8 @@ private:
     // Pointers to the actual D3D resources.
     //  These pointers are constant to help enforce the modification
     //  restrictions of CD3DResource objects.
-    IDirect3DTexture9 * const m_pTexture;
-    IDirect3DSurface9 * const m_pSurface;
+    ID3D11Texture2D * const m_pTexture;
+    ID3D11ShaderResourceView * const m_pSRV;
 
     UINT m_uWidth, m_uHeight;
     float m_rWidthReciprocal, m_rHeightReciprocal;
@@ -261,7 +263,7 @@ private:
     HRESULT EnsureTempSurface(
         UINT uWidth,
         UINT uHeight,
-        __deref_out_ecount(1) IDirect3DSurface9 **ppTempSurface
+        __deref_out_ecount(1) ID3D11Texture2D **ppTempSurface
         );
 
 private:

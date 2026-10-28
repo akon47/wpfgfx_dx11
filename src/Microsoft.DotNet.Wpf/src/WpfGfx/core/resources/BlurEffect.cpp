@@ -1034,7 +1034,7 @@ CMilBlurEffectDuce::ApplyEffectImpl(
             pDevice, 
             static_cast<UINT>(uIntermediateWidth), 
             static_cast<UINT>(uIntermediateHeight), 
-            D3DFMT_A32B32G32R32F,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
             &pTexture_B));
 
         Assert(pTexture_B != NULL);
@@ -1044,7 +1044,7 @@ CMilBlurEffectDuce::ApplyEffectImpl(
             pDevice, 
             static_cast<UINT>(uIntermediateWidth), 
             static_cast<UINT>(uIntermediateHeight), 
-            D3DFMT_A32B32G32R32F,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
             &pTexture_C));
 
         Assert(pTexture_C != NULL);
@@ -1201,7 +1201,7 @@ CMilBlurEffectDuce::ApplyEffectImpl(
             pDevice, 
             static_cast<UINT>(uIntermediateWidth), 
             static_cast<UINT>(uIntermediateHeight), 
-            D3DFMT_A8R8G8B8,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
             &pTexture_B));
 
         Assert(pTexture_B != NULL);

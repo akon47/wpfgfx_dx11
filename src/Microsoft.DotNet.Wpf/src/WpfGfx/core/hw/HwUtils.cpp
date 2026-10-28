@@ -5,10 +5,8 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics
 //      $Keywords:
 //
@@ -37,7 +35,7 @@
 
 HRESULT
 CacheHwTextureOnBitmap(
-    __inout_ecount(1) IDirect3DTexture9 *pTexture,
+    __inout_ecount(1) ID3D11Texture2D *pTexture,
     __inout_ecount(1) IWGXBitmap *pBitmap,
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice
     )
@@ -53,7 +51,7 @@ CacheHwTextureOnBitmap(
     //
     // Create a video memory texture wrapper for the texture.
     //
-     
+
     IFC(CD3DVidMemOnlyTexture::Create(
         pTexture,
         false,              // fIsEvictable
@@ -96,7 +94,7 @@ CacheHwTextureOnBitmap(
 
     {
         CMilRectU rcSurfBounds(0, 0, textureWidth, textureHeight, LTRB_Parameters);
-        
+
         // Create the color source and put it in the cache
         IFC(pBitmapCache->CreateColorSourceForTexture(
             D3DFormatToPixelFormat(
@@ -106,7 +104,7 @@ CacheHwTextureOnBitmap(
             pVidMemTexture,
             OUT &pDeviceBitmapColorSource
             ));
-        
+
         // Let the bitmap color source know that it contains fully valid bits.
         // A precondition for this function is that the texture contains valid
         // bits.
@@ -119,7 +117,7 @@ Cleanup:
     ReleaseInterfaceNoNULL(pVidMemTexture);
     ReleaseInterfaceNoNULL(pBitmapCache);
     ReleaseInterfaceNoNULL(pDeviceBitmapColorSource);
-    
+
     RRETURN(hr);
 }
 
@@ -128,27 +126,25 @@ Cleanup:
 //
 //  Function:  ReadRenderTargetIntoSysMemBuffer
 //
-//  Synopsis:  Reads the surface's contents in the specified source rectangle
+//  Synopsis:  Reads the texture's contents in the specified source rectangle
 //             and writes it into the provided buffer.
 //
-//             Copied from CD3DSurface::ReadIntoSysMemBuffer because 
-//             pSourceSurface is not from one of our devices. The original 
-//             could have been refactored to work on IDirect3DDevice9, but then 
-//             we would have lost CD3DDeviceLevel1 specific functionality 
-//             (entry check, vid mem management...)
+//             Copied from CD3DSurface::ReadIntoSysMemBuffer because
+//             pSourceTexture is not from one of our devices. It uses the
+//             texture's own device and immediate context.
 //
 //             Differences:
 //              1) No clip rects
-//              2) pbBufferOut is the upper left corner, so we need to offset 
-//                 it by rcCopy if manually updating
-//              3) Only works if pSourceSurface is D3DPOOL_DEFAULT
+//              2) pbBufferOut is the upper left corner, so we need to offset
+//                 it by rcCopy
+//              3) Only works if pSourceTexture is D3D11_USAGE_DEFAULT
 //              4) Only works if system memory and video memory are same fmt
 //
 //+----------------------------------------------------------------------------
 
 HRESULT
 ReadRenderTargetIntoSysMemBuffer(
-    __in IDirect3DSurface9 *pSourceSurface,
+    __in ID3D11Texture2D *pSourceTexture,
     __in const CMilRectU &rcCopy,
     MilPixelFormat::Enum fmtOut,
     UINT uStrideOut,
@@ -162,18 +158,17 @@ ReadRenderTargetIntoSysMemBuffer(
     UINT uStrideCopy;
     const UINT uCopyWidth = rcCopy.Width();
     const UINT uCopyHeight = rcCopy.Height();
-    const RECT rcDest = { 0, 0, uCopyWidth, uCopyHeight };
 
-    IDirect3DDevice9 *pIDevice = NULL;
-    IDirect3DDevice9Ex *pIDeviceEx = NULL;
+    ID3D11Device *pIDevice = NULL;
+    ID3D11DeviceContext *pIContext = NULL;
 
-    IDirect3DTexture9 *pD3DLockableTexture = NULL;
-    IDirect3DSurface9 *pD3DLockableSurface = NULL;
-    IDirect3DSurface9 *pD3DVidMemCopySurface = NULL;
+    ID3D11Texture2D *pD3DStagingTexture = NULL;
+    ID3D11Texture2D *pD3DResolvedTexture = NULL;
+    bool fMapped = false;
 
-    if (   rcCopy.left > SURFACE_RECT_MAX 
-        || rcCopy.right > SURFACE_RECT_MAX 
-        || rcCopy.top > SURFACE_RECT_MAX 
+    if (   rcCopy.left > SURFACE_RECT_MAX
+        || rcCopy.right > SURFACE_RECT_MAX
+        || rcCopy.top > SURFACE_RECT_MAX
         || rcCopy.bottom > SURFACE_RECT_MAX
         || !rcCopy.IsWellOrdered())
     {
@@ -185,18 +180,26 @@ ReadRenderTargetIntoSysMemBuffer(
         IFC(E_INVALIDARG);
     }
 
-    D3DSURFACE_DESC d3dsd;
-    IFC(pSourceSurface->GetDesc(&d3dsd));
+    D3D11_TEXTURE2D_DESC desc;
+    pSourceTexture->GetDesc(&desc);
 
-    if (d3dsd.Pool != D3DPOOL_DEFAULT)
+    if (desc.Usage != D3D11_USAGE_DEFAULT)
     {
         IFC(E_INVALIDARG);
     }
 
-    const D3DFORMAT d3dfmtOut = PixelFormatToD3DFormat(fmtOut);
-    if (d3dsd.Format != d3dfmtOut)
     {
-        IFC(E_INVALIDARG);
+        const DXGI_FORMAT fmtRequested = PixelFormatToD3DFormat(fmtOut);
+
+        bool fCompatible =
+               (fmtRequested == desc.Format)
+            || (   (fmtRequested == DXGI_FORMAT_B8G8R8A8_UNORM || fmtRequested == DXGI_FORMAT_B8G8R8X8_UNORM)
+                && (desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || desc.Format == DXGI_FORMAT_B8G8R8X8_UNORM));
+
+        if (!fCompatible)
+        {
+            IFC(E_INVALIDARG);
+        }
     }
 
     IFC(HrCalcByteAlignedScanlineStride(uCopyWidth, uBitsPerPixel, OUT uStrideCopy));
@@ -206,130 +209,108 @@ ReadRenderTargetIntoSysMemBuffer(
     Assert(SUCCEEDED(HrCheckBufferSize(fmtOut, uStrideOut, uCopyWidth, uCopyHeight, cbBufferOut)));
 #endif
 
-    IFC(pSourceSurface->GetDevice(&pIDevice));
-    IGNORE_HR(pIDevice->QueryInterface(
-        __uuidof(IDirect3DDevice9Ex),
-        reinterpret_cast<void **>(&pIDeviceEx)
-        ));
+    pSourceTexture->GetDevice(&pIDevice);
+    pIDevice->GetImmediateContext(&pIContext);
 
-    bool fNeedToManuallyCopyBits = true;
-    void *pvSysMemPixels = NULL;
-
-    // If we're on WDDM, D3D can make a surface with our system memory assuming the layout
-    // is the same.
-    if (pIDeviceEx && uStrideCopy == uStrideOut)
+    //
+    // Create a staging texture to copy into.
+    //
     {
-        fNeedToManuallyCopyBits = false;
-        pvSysMemPixels = pbBufferOut;
+        D3D11_TEXTURE2D_DESC descStaging;
+
+        ZeroMemory(&descStaging, sizeof(descStaging));
+        descStaging.Width = uCopyWidth;
+        descStaging.Height = uCopyHeight;
+        descStaging.MipLevels = 1;
+        descStaging.ArraySize = 1;
+        descStaging.Format = desc.Format;
+        descStaging.SampleDesc.Count = 1;
+        descStaging.SampleDesc.Quality = 0;
+        descStaging.Usage = D3D11_USAGE_STAGING;
+        descStaging.BindFlags = 0;
+        descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        descStaging.MiscFlags = 0;
+
+        IFC(MilTranslateD3D11Error(pIDevice->CreateTexture2D(&descStaging, NULL, &pD3DStagingTexture)));
     }
 
-    // Create system memory surface to GetRenderTargetData() into. If the user's device
-    // is a WDDM device capable of sharing, we'll create a system memory texture from already
-    // existing bits to avoid allocating more system memory. We aren't using an offscreen plain 
-    // surface because it has LockRect synchronization issues on XP.
-    IFC(pIDevice->CreateTexture(
-        uCopyWidth,
-        uCopyHeight,
-        1,          // Level
-        0,          // Usage
-        d3dfmtOut,
-        D3DPOOL_SYSTEMMEM,
-        &pD3DLockableTexture,
-        pIDeviceEx && pvSysMemPixels ? reinterpret_cast<HANDLE *>(&pvSysMemPixels) : NULL // pSharedHandle
-        ));
-
-    IFC(pD3DLockableTexture->GetSurfaceLevel(
-        0,
-        &pD3DLockableSurface
-        ));
-
-    // GetRenderTargetData can only read the entire surface, so if we aren't trying to copy the
-    // entire surface, StretchRect to a new surface equal to what we're copying and GRTD it. We 
-    // also need to do this for multisampled surfaces as GetRenderTargetData doesn't work on them.
-    if (   uCopyWidth != d3dsd.Width 
-        || uCopyHeight != d3dsd.Height 
-        || d3dsd.MultiSampleType != D3DMULTISAMPLE_NONE)
+    //
+    // Multisampled sources are resolved first.
+    //
     {
-        IFC(pIDevice->CreateRenderTarget(
-            uCopyWidth,
-            uCopyHeight,
-            d3dsd.Format,
-            D3DMULTISAMPLE_NONE,
-            0,          // MS quality
-            FALSE,      // Lockable
-            &pD3DVidMemCopySurface,
-            NULL        // pSharedHandle
-            ));
+        ID3D11Texture2D *pCopySource = pSourceTexture;
 
-        IFC(pIDevice->StretchRect(
-            pSourceSurface,
-            reinterpret_cast<const CMilRectL *>(&rcCopy),    // cast is safe, checked for int above
-            pD3DVidMemCopySurface,
-            &rcDest,
-            D3DTEXF_NONE
-            ));
-    }
-    else
-    {
-        SetInterface(pD3DVidMemCopySurface, pSourceSurface);
+        if (desc.SampleDesc.Count > 1)
+        {
+            D3D11_TEXTURE2D_DESC descResolved = desc;
+
+            descResolved.MipLevels = 1;
+            descResolved.ArraySize = 1;
+            descResolved.SampleDesc.Count = 1;
+            descResolved.SampleDesc.Quality = 0;
+            descResolved.Usage = D3D11_USAGE_DEFAULT;
+            descResolved.BindFlags = D3D11_BIND_RENDER_TARGET;
+            descResolved.CPUAccessFlags = 0;
+            descResolved.MiscFlags = 0;
+
+            IFC(MilTranslateD3D11Error(pIDevice->CreateTexture2D(&descResolved, NULL, &pD3DResolvedTexture)));
+
+            pIContext->ResolveSubresource(pD3DResolvedTexture, 0, pSourceTexture, 0, desc.Format);
+
+            pCopySource = pD3DResolvedTexture;
+        }
+
+        D3D11_BOX box;
+
+        box.left = rcCopy.left;
+        box.top = rcCopy.top;
+        box.front = 0;
+        box.right = rcCopy.right;
+        box.bottom = rcCopy.bottom;
+        box.back = 1;
+
+        pIContext->CopySubresourceRegion(pD3DStagingTexture, 0, 0, 0, 0, pCopySource, 0, &box);
     }
 
-    IFC(pIDevice->GetRenderTargetData(
-        pD3DVidMemCopySurface,
-        pD3DLockableSurface
-        ));
-
-    if (fNeedToManuallyCopyBits)
     {
-        D3DLOCKED_RECT rcLock;
-        IFC(pD3DLockableSurface->LockRect(&rcLock, &rcDest, D3DLOCK_READONLY));
+        D3D11_MAPPED_SUBRESOURCE mapped;
+
+        IFC(MilTranslateD3D11Error(pIContext->Map(pD3DStagingTexture, 0, D3D11_MAP_READ, 0, &mapped)));
+        fMapped = true;
 
         const UINT uBytesPerPixel = uBitsPerPixel / BITS_PER_BYTE;
-        const BYTE *pbBufferIn = static_cast<const BYTE *>(rcLock.pBits);
+        const BYTE *pbBufferIn = static_cast<const BYTE *>(mapped.pData);
 #if DBG_ANALYSIS
         const BYTE *pbAnalysisBufferOutOrig = pbBufferOut;
 #endif
 
-        // If we're copying full rows, then we can do one memcpy. D3D surface pitch does not
-        // necessarily equal width * bpp
-        if (   uStrideCopy == static_cast<UINT>(rcLock.Pitch) 
-            && rcCopy.right - rcCopy.left == d3dsd.Width)
-        {     
-            UINT cbCopy;
-            IFC(UIntMult(uStrideCopy, rcCopy.bottom - rcCopy.top, &cbCopy));
+        // pbBufferOut is the upper left pixel so adjust for rcCopy
+        UINT cbLeftInset, cbBufferOutInset;
+        IFC(UIntMult(uBytesPerPixel, rcCopy.left, &cbLeftInset));
+        IFC(UIntMult(uStrideOut, rcCopy.top, &cbBufferOutInset));
+        IFC(UIntAdd(cbLeftInset, cbBufferOutInset, &cbBufferOutInset));
+        pbBufferOut += cbBufferOutInset;
 
-            Assert(cbCopy <= cbBufferOut);
-            
-            memcpy(pbBufferOut, pbBufferIn, cbCopy);
-        }
-        else
+        for (UINT i = rcCopy.top; i < rcCopy.bottom; ++i)
         {
-            // pbBufferOut is the upper left pixel so adjust for rcCopy
-            UINT cbLeftInset, cbBufferOutInset;
-            IFC(UIntMult(uBytesPerPixel, rcCopy.left, &cbLeftInset));
-            IFC(UIntMult(uStrideOut, rcCopy.top, &cbBufferOutInset));
-            IFC(UIntAdd(cbLeftInset, cbBufferOutInset, &cbBufferOutInset));
-            pbBufferOut += cbBufferOutInset;
-            
-            for (UINT i = rcCopy.top; i < rcCopy.bottom; ++i)
-            {
-                Assert(pbBufferOut + uStrideCopy <= pbAnalysisBufferOutOrig + cbBufferOut);
-                
-                memcpy(pbBufferOut, pbBufferIn, uStrideCopy);
-                pbBufferOut += uStrideOut;
-                pbBufferIn += rcLock.Pitch;
-            }
-        }
+            Assert(pbBufferOut + uStrideCopy <= pbAnalysisBufferOutOrig + cbBufferOut);
 
-        IGNORE_HR(pD3DLockableSurface->UnlockRect());
+            memcpy(pbBufferOut, pbBufferIn, uStrideCopy);
+            pbBufferOut += uStrideOut;
+            pbBufferIn += mapped.RowPitch;
+        }
     }
 
 Cleanup:
-    ReleaseInterface(pD3DLockableTexture);
-    ReleaseInterface(pD3DLockableSurface);
-    ReleaseInterface(pD3DVidMemCopySurface);
+    if (fMapped)
+    {
+        pIContext->Unmap(pD3DStagingTexture, 0);
+    }
+
+    ReleaseInterface(pD3DResolvedTexture);
+    ReleaseInterface(pD3DStagingTexture);
+    ReleaseInterface(pIContext);
     ReleaseInterface(pIDevice);
-    ReleaseInterface(pIDeviceEx);
 
     RRETURN(hr);
 }
@@ -345,9 +326,5 @@ Cleanup:
 bool IsD3DFailure(HRESULT hr)
 {
     static const HRESULT hrD3DMask = MAKE_D3DHRESULT(0);
-    return static_cast<HRESULT>(hr & hrD3DMask) == hrD3DMask;   
+    return static_cast<HRESULT>(hr & hrD3DMask) == hrD3DMask;
 }
-
-
-
-

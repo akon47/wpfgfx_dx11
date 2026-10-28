@@ -587,22 +587,6 @@ CHwShaderFragmentToHLSLConverter::AccumulateHLSL(
 
     WritePixelShader();
 
-    AppendString(
-        "//\n"
-        "// Technique\n"
-        "//\n"
-        "\n"
-        "technique T0\n"
-        "{\n"
-        "    pass P0\n"
-        "    {\n"
-        "        VertexShader = compile vs_2_0 VertexShaderImpl();\n"
-        "        PixelShader  = compile ps_2_0 PixelShaderImpl();\n"
-        "    }\n"
-        "}\n"
-        "\n"
-        );
-
 
     AppendString(
         "//\n// End of Dynamic Shader Code\n//\n"

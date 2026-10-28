@@ -11,6 +11,11 @@
 
 #include "precomp.hpp"
 
+//
+// D3DImage 는 사용자의 IDirect3DSurface9 를 받는다. 그 객체를 vtable 로만 호출하므로
+// d3d9.h 의 인터페이스 선언만 필요하고 d3d9.lib 은 링크하지 않는다 (D7).
+#include "d3d9interop.h"
+
 MtDefine(CInteropDeviceBitmap, MILRender, "CInteropDeviceBitmap");
 
 //+-----------------------------------------------------------------------------
@@ -208,31 +213,14 @@ CInteropDeviceBitmap::GetUpdateMethod(
     __in IDirect3DSurface9 *pID3DSurface
     )
 {   
-    HRESULT hr = S_OK;
-    FrontBufferUpdateMethod method = Software;
+    UNREFERENCED_PARAMETER(pID3DDevice);
+    UNREFERENCED_PARAMETER(pID3DDeviceEx);
+    UNREFERENCED_PARAMETER(pID3DSurface);
 
-    D3DCAPS9 caps;
-    IFC(pID3DDevice->GetDeviceCaps(&caps));
-
-    if ((caps.DevCaps2 & D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES) == D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES)
-    {
-        if (pID3DDeviceEx && (caps.Caps2 & D3DCAPS2_CANSHARERESOURCE) == D3DCAPS2_CANSHARERESOURCE)
-        {
-            method = SharedSurface;
-        }
-        else if (!WPFUtils::OSVersionHelper::IsWindowsVistaOrGreater())
-        {
-            HDC hdc;
-            IFC(pID3DSurface->GetDC(&hdc));
-            IFC(pID3DSurface->ReleaseDC(hdc));
-
-            // Failure of GetDC or ReleaseDC will skip this assignment
-            method = BitBlt;
-        }
-    }
-
-Cleanup:
-    return method;
+    //
+    // M9 까지는 소프트웨어 복사만 쓴다. 공유 핸들 경로(D7)는 M9 에서 다시 연다.
+    //
+    return Software;
 }
 
 //+-----------------------------------------------------------------------------
@@ -358,7 +346,7 @@ CInteropDeviceBitmap::Create(
         isSoftwareFallbackEnabled,
         desc.Width,
         desc.Height,
-        D3DFormatToPixelFormat(desc.Format, /* fPremultiplied = */ TRUE),
+        MilD3D9FormatToPixelFormat(desc.Format, /* fPremultiplied = */ TRUE),
         method,
         oCreationParams.AdapterOrdinal,
         pID3DUserSurface
@@ -741,7 +729,7 @@ CInteropDeviceBitmap::CreateFrontBuffer()
             GetDesktopWindow(),   // hwnd doesn't matter for non-fullscreen
             MilRTInitialization::Default,
             pDisplay,
-            D3DDEVTYPE_HAL,
+            MilDeviceKind_Hardware,
             &pD3DDevice,
             NULL,
             NULL
@@ -1107,7 +1095,7 @@ CInteropDeviceBitmap::CopyToSoftwareBitmap(__deref_inout IWGXBitmap **ppBitmap)
 
     Assert(cbBitmap == cbStride * m_nHeight);
 
-    IFC(ReadRenderTargetIntoSysMemBuffer(
+    IFC(ReadD3D9SurfaceIntoSysMemBuffer(
         m_pIUserSurface,
         rcFull,
         m_PixelFormat,
@@ -1160,3 +1148,118 @@ Cleanup:
     RRETURN(hr);
 }
 
+//+-----------------------------------------------------------------------------
+//
+//  Function:
+//      ReadD3D9SurfaceIntoSysMemBuffer
+//
+//  Synopsis:
+//      Reads rcCopy of the user's D3D9 render target surface into the buffer
+//      (pbBufferOut is the upper left corner of the whole surface, so the
+//      destination is offset by rcCopy).  Uses the surface's own device.
+//
+//------------------------------------------------------------------------------
+HRESULT
+ReadD3D9SurfaceIntoSysMemBuffer(
+    __in IDirect3DSurface9 *pSourceSurface,
+    __in const CMilRectU &rcCopy,
+    MilPixelFormat::Enum fmtOut,
+    UINT uStrideOut,
+    DBG_ANALYSIS_PARAM_COMMA(UINT cbBufferOut)
+    __out_bcount_full(cbBufferOut) BYTE *pbBufferOut
+    )
+{
+    HRESULT hr = S_OK;
+
+    IDirect3DDevice9 *pDevice = NULL;
+    IDirect3DSurface9 *pResolved = NULL;
+    IDirect3DSurface9 *pSysMem = NULL;
+    IDirect3DSurface9 *pSource = pSourceSurface;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+    bool fLocked = false;
+
+    const UINT uBitsPerPixel = GetPixelFormatSize(fmtOut);
+
+    if (   rcCopy.left > SURFACE_RECT_MAX
+        || rcCopy.right > SURFACE_RECT_MAX
+        || rcCopy.top > SURFACE_RECT_MAX
+        || rcCopy.bottom > SURFACE_RECT_MAX
+        || !rcCopy.IsWellOrdered()
+        || (uBitsPerPixel % BITS_PER_BYTE) != 0)
+    {
+        IFC(E_INVALIDARG);
+    }
+
+    IFC(pSourceSurface->GetDesc(&desc));
+    IFC(pSourceSurface->GetDevice(&pDevice));
+
+    if (rcCopy.right > desc.Width || rcCopy.bottom > desc.Height)
+    {
+        IFC(E_INVALIDARG);
+    }
+
+    if (desc.MultiSampleType != D3DMULTISAMPLE_NONE)
+    {
+        IFC(pDevice->CreateRenderTarget(
+            desc.Width,
+            desc.Height,
+            desc.Format,
+            D3DMULTISAMPLE_NONE,
+            0,
+            FALSE,
+            &pResolved,
+            NULL
+            ));
+
+        IFC(pDevice->StretchRect(pSourceSurface, NULL, pResolved, NULL, D3DTEXF_NONE));
+
+        pSource = pResolved;
+    }
+
+    IFC(pDevice->CreateOffscreenPlainSurface(
+        desc.Width,
+        desc.Height,
+        desc.Format,
+        D3DPOOL_SYSTEMMEM,
+        &pSysMem,
+        NULL
+        ));
+
+    IFC(pDevice->GetRenderTargetData(pSource, pSysMem));
+
+    {
+        RECT rc = { static_cast<LONG>(rcCopy.left), static_cast<LONG>(rcCopy.top), static_cast<LONG>(rcCopy.right), static_cast<LONG>(rcCopy.bottom) };
+
+        IFC(pSysMem->LockRect(&lr, &rc, D3DLOCK_READONLY));
+        fLocked = true;
+
+        const UINT uBytesPerPixel = uBitsPerPixel / BITS_PER_BYTE;
+        const UINT cbRow = rcCopy.Width() * uBytesPerPixel;
+        BYTE *pbDest = pbBufferOut + static_cast<SIZE_T>(rcCopy.top) * uStrideOut + static_cast<SIZE_T>(rcCopy.left) * uBytesPerPixel;
+        const BYTE *pbSrc = static_cast<const BYTE *>(lr.pBits);
+
+#if DBG_ANALYSIS
+        Assert(static_cast<SIZE_T>(rcCopy.bottom - 1) * uStrideOut + static_cast<SIZE_T>(rcCopy.right) * uBytesPerPixel <= cbBufferOut);
+#endif
+
+        for (UINT y = 0; y < rcCopy.Height(); y++)
+        {
+            CopyMemory(pbDest, pbSrc, cbRow);
+            pbDest += uStrideOut;
+            pbSrc += lr.Pitch;
+        }
+    }
+
+Cleanup:
+    if (fLocked)
+    {
+        IGNORE_HR(pSysMem->UnlockRect());
+    }
+
+    ReleaseInterface(pSysMem);
+    ReleaseInterface(pResolved);
+    ReleaseInterface(pDevice);
+
+    RRETURN(hr);
+}

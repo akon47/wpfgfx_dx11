@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -243,20 +243,13 @@ IsNoAlphaFormOf(
 //----------------------------------------------------------------------------
 MilPixelFormat::Enum
 D3DFormatToPixelFormat(
-    D3DFORMAT d3dFmt,   // D3D Pixel Format
+    DXGI_FORMAT fmt,    // DXGI pixel format
     BOOL bPremultiplied // Whether or not the format is premultiplied
     )
 {
-    //   Need gamma to map D3D formats to MIL formats
-    //   D3D formats don't specify gamma. So this function needs a ColorSpace
-    //   argument.
-
-    switch (d3dFmt)
+    switch (fmt)
     {
-        case D3DFMT_R8G8B8:
-            return MilPixelFormat::BGR24bpp;
-
-        case D3DFMT_A8R8G8B8:
+        case DXGI_FORMAT_B8G8R8A8_UNORM:
             if (bPremultiplied)
             {
                 return MilPixelFormat::PBGRA32bpp;
@@ -266,25 +259,22 @@ D3DFormatToPixelFormat(
                 return MilPixelFormat::BGRA32bpp;
             }
 
-        case D3DFMT_X8R8G8B8:
+        case DXGI_FORMAT_B8G8R8X8_UNORM:
             return MilPixelFormat::BGR32bpp;
 
-        case D3DFMT_R5G6B5:
+        case DXGI_FORMAT_B5G6R5_UNORM:
             return MilPixelFormat::BGR16bpp565;
 
-        case D3DFMT_X1R5G5B5:
+        case DXGI_FORMAT_B5G5R5A1_UNORM:
             return MilPixelFormat::BGR16bpp555;
 
-        case D3DFMT_P8:
-            return MilPixelFormat::Indexed8bpp;
-
-        case D3DFMT_L8:
+        case DXGI_FORMAT_R8_UNORM:
             return MilPixelFormat::Gray8bpp;
 
-        case D3DFMT_A2R10G10B10:
+        case DXGI_FORMAT_R10G10B10A2_UNORM:
             return MilPixelFormat::BGR32bpp101010;
 
-        case D3DFMT_A32B32G32R32F:
+        case DXGI_FORMAT_R32G32B32A32_FLOAT:
             if (bPremultiplied)
             {
                 return MilPixelFormat::PRGBA128bppFloat;
@@ -308,44 +298,44 @@ D3DFormatToPixelFormat(
 //  Returns:    D3DFORMAT that corresponds to the input
 //
 //----------------------------------------------------------------------------
-D3DFORMAT
+DXGI_FORMAT
 PixelFormatToD3DFormat(
     MilPixelFormat::Enum pixelFormat
     )
 {
     switch (pixelFormat)
     {
-    case MilPixelFormat::BGR24bpp:
-        return D3DFMT_R8G8B8;
-
     case MilPixelFormat::PBGRA32bpp:
     case MilPixelFormat::BGRA32bpp:
-        return D3DFMT_A8R8G8B8;
+        return DXGI_FORMAT_B8G8R8A8_UNORM;
 
     case MilPixelFormat::BGR32bpp:
-        return D3DFMT_X8R8G8B8;
+        return DXGI_FORMAT_B8G8R8X8_UNORM;
 
     case MilPixelFormat::BGR16bpp565:
-        return D3DFMT_R5G6B5;
+        return DXGI_FORMAT_B5G6R5_UNORM;
 
     case MilPixelFormat::BGR16bpp555:
-        return D3DFMT_X1R5G5B5;
-
-    case MilPixelFormat::Indexed8bpp:
-        return D3DFMT_P8;
+        return DXGI_FORMAT_B5G5R5A1_UNORM;
 
     case MilPixelFormat::Gray8bpp:
-        return D3DFMT_L8;
+        return DXGI_FORMAT_R8_UNORM;
 
     case MilPixelFormat::BGR32bpp101010:
-        return D3DFMT_A2R10G10B10;
+        return DXGI_FORMAT_R10G10B10A2_UNORM;
 
     case MilPixelFormat::RGBA128bppFloat:
     case MilPixelFormat::PRGBA128bppFloat:
-        return D3DFMT_A32B32G32R32F;
+        return DXGI_FORMAT_R32G32B32A32_FLOAT;
+
+    // DXGI에는 24bpp와 팔레트 포맷이 없다. 호출자는 32bpp로 변환해 올린다.
+    case MilPixelFormat::BGR24bpp:
+    case MilPixelFormat::Indexed8bpp:
+    default:
+        break;
     }
 
-    return D3DFMT_UNKNOWN;
+    return DXGI_FORMAT_UNKNOWN;
 }
 
 //+-----------------------------------------------------------------------------
@@ -471,36 +461,14 @@ Premultiply(
 //------------------------------------------------------------------------------
 UINT
 D3DFormatSize(
-    D3DFORMAT d3dFmt    // Format to return the size of
+    DXGI_FORMAT fmt     // Format to return the size of
     )
 {
-    switch (d3dFmt)
-    {
-    case D3DFMT_A32B32G32R32F:
-        return 16;
+    UINT cb = MilDxgiFormatSize(fmt);
 
-    case D3DFMT_A8R8G8B8:
-    case D3DFMT_X8R8G8B8:
-    case D3DFMT_D24S8:
-    case D3DFMT_A2R10G10B10:
-        return 4;
+    AssertMsg(cb != 0, "Can't get size of unsupported format");
 
-    case D3DFMT_R8G8B8:
-        return 3;
-
-    case D3DFMT_R5G6B5:
-    case D3DFMT_X1R5G5B5:
-    case D3DFMT_D16:
-        return 2;
-
-    case D3DFMT_P8:
-    case D3DFMT_L8:
-        return 1;
-    }
-
-    AssertMsg(0, "Can't get size of unsupported format");
-
-    return 0;
+    return cb;
 }
 
 //+-----------------------------------------------------------------------------

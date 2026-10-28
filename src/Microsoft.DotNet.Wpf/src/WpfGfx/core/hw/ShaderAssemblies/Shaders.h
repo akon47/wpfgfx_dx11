@@ -5,12 +5,12 @@
 
 //+-----------------------------------------------------------------------------
 //
-
+//  셰이더 리소스 ID. ShaderAssemblies.targets가 fxc로 만든 바이트코드를
+//  ResourceFileTemplate\EmbeddedShaders.RC가 이 ID로 RCDATA에 넣는다.
 //
 //------------------------------------------------------------------------------
 
-#define VS_ShaderEffects20 900
-#define VS_ShaderEffects30 901
+#define VS_ShaderEffects 901
 #define PS_PassThroughShaderEffect 902
 
 #define PS_BlurH 903
@@ -20,3 +20,8 @@
 
 #define PS_DropShadow 907
 
+// 텍스트 렌더링 (ClearType/GreyScale x SolidBrush/TextureBrush)
+#define PS_Text_CTSB 910
+#define PS_Text_GSSB 911
+#define PS_Text_CTTB 912
+#define PS_Text_GSTB 913

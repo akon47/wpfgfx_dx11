@@ -202,14 +202,14 @@ MtDefine(CD3DRegistryData, MILRender, "CD3DRegistryDatabase enable array")
 
 HRESULT 
 CD3DRegistryDatabase::InitializeFromRegistry(
-    __in_ecount(1) IDirect3D9 *pD3D
+    UINT cAdapters
     )
 {
     HRESULT hr = S_OK;
 
     Assert(!m_fInitialized);
 
-    IFC(InitializeDriversFromRegistry(pD3D));
+    IFC(InitializeDriversFromRegistry(cAdapters));
 
 Cleanup:
     m_fInitialized = SUCCEEDED(hr);
@@ -226,7 +226,7 @@ Cleanup:
 //-------------------------------------------------------------------------
 HRESULT
 CD3DRegistryDatabase::InitializeDriversFromRegistry(
-    __inout_ecount(1) IDirect3D9 *pD3D
+    UINT cAdapters
     )
 {
     HRESULT hr = S_OK;
@@ -235,13 +235,11 @@ CD3DRegistryDatabase::InitializeDriversFromRegistry(
     DWORD dwDisableHWAccleration;
     DWORD dwDataSize;
 
-    Assert(pD3D);
-
     //
-    // Get number of adaptors
+    // Number of adapters comes from the DXGI enumeration
     //
 
-    m_cNumAdapters = pD3D->GetAdapterCount();
+    m_cNumAdapters = cAdapters;
 
     //
     // Allocate adapter enable array

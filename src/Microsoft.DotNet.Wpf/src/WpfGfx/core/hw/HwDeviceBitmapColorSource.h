@@ -20,6 +20,9 @@
 //------------------------------------------------------------------------------
 
 
+// D3DImage 사용자 백 버퍼 (vtable 로만 호출, d3d9.h 는 InteropDeviceBitmap.cpp 에서만 포함)
+interface IDirect3DSurface9;
+
 MtExtern(CHwDeviceBitmapColorSource);
 
 //+-----------------------------------------------------------------------------
@@ -111,10 +114,10 @@ protected:
         __in_ecount(1) CD3DDeviceLevel1 *pDevice,
         __in_opt IWGXBitmap *pBitmap,
         MilPixelFormat::Enum fmt,
-        __in_ecount(1) const D3DSURFACE_DESC &d3dsd,
+        __in_ecount(1) const D3D11_TEXTURE2D_DESC &d3dsd,
         UINT uLevels
         );
-    
+
     virtual ~CHwDeviceBitmapColorSource();
     
     static HRESULT GetRealizationDesc(
@@ -138,17 +141,11 @@ protected:
         __in_ecount(1) const CMilRectU &rcBoundsRequired,
         __in_ecount_opt(1) const CD3DVidMemOnlyTexture *pVidMemTexture,
         __out_ecount(1) CacheParameters &oRealizationDesc,
-        __out_ecount(1) D3DSURFACE_DESC &d3dsd,
+        __out_ecount(1) D3D11_TEXTURE2D_DESC &d3dsd,
         __out_ecount(1) UINT &uLevels
         );
 
 private:
-    HRESULT Flush(
-        __in_ecount(1) IDirect3DDevice9 *pID3DDevice,
-        __in_ecount(1) IDirect3DSurface9 *pID3DSurface,
-        __in_ecount(1) const D3DSURFACE_DESC &desc
-        );
-
     HRESULT UpdateSurfaceSharedHandle(
         UINT cDirtyRects,
         __in_ecount(cDirtyRects) const CMilRectU *prgDirtyRects,

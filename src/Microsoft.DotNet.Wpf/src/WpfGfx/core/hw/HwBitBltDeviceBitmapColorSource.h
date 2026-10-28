@@ -45,7 +45,7 @@ private:
         __in_ecount(1) CD3DDeviceLevel1 *pDevice,
         __in_opt IWGXBitmap *pBitmap,
         MilPixelFormat::Enum fmt,
-        __in_ecount(1) const D3DSURFACE_DESC &d3dsd,
+        __in_ecount(1) const D3D11_TEXTURE2D_DESC &d3dsd,
         UINT uLevels
         );
 

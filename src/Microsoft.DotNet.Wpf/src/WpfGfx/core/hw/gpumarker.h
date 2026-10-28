@@ -14,6 +14,7 @@
 //
 //  $Description:
 //      GPUMarker class used to monitor GPU process of rendering
+//      (ID3D11Query of type D3D11_QUERY_EVENT).
 //
 //  $ENDTAG
 //
@@ -26,7 +27,8 @@ public:
     DECLARE_METERHEAP_CLEAR(ProcessHeap, Mt(CGPUMarker));
 
     CGPUMarker(
-        __in_ecount(1) IDirect3DQuery9 *pQuery,
+        __in_ecount(1) ID3D11Query *pQuery,
+        __in_ecount(1) ID3D11DeviceContext *pContext,
         ULONGLONG ullMarkerId
         );
 
@@ -40,14 +42,13 @@ public:
         BOOL fFlush,
         __out_ecount(1) bool *pfConsumed
         );
-    
+
     ULONGLONG GetId() const { return m_ullMarkerId; }
-    
+
 private:
-    IDirect3DQuery9 *m_pQuery;
-    ULONGLONG        m_ullMarkerId;
-    BOOL             m_fIssued;
-    BOOL             m_fConsumed;
+    ID3D11Query         *m_pQuery;
+    ID3D11DeviceContext *m_pContext;
+    ULONGLONG            m_ullMarkerId;
+    BOOL                 m_fIssued;
+    BOOL                 m_fConsumed;
 };
-
-

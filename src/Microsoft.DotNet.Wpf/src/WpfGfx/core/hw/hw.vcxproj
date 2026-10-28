@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|arm64">
@@ -70,7 +70,6 @@
     <ClCompile Include="d3dregistry.cpp" />
     <ClCompile Include="d3drenderstate.cpp" />
     <ClCompile Include="d3dresource.cpp" />
-    <ClCompile Include="d3dstats.cpp" />
     <ClCompile Include="d3dsurface.cpp" />
     <ClCompile Include="d3dswapchain.cpp" />
     <ClCompile Include="D3DSwapChainWithSwDC.cpp" />
@@ -93,6 +92,7 @@
     <ClCompile Include="HwDeviceBitmapColorSource.cpp" />
     <ClCompile Include="hwdisplayrt.cpp" />
     <ClCompile Include="hwffshaders.cpp" />
+    <ClCompile Include="HwFixedFunctionShaders.cpp" />
     <ClCompile Include="HwHLSLShaderFragments.cpp" />
     <ClCompile Include="hwhwndrt.cpp" />
     <ClCompile Include="hwinit.cpp" />

@@ -5,36 +5,16 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
-//  $TAG ENGR
-
-//      $Module:    win_mil_graphics
-//      $Keywords:
-//
-//  $Description:
-//      Graphic Hardware Acceleration Tier definitions including tier
-//      requirements and methods to determine tier of a given display
-//
-//  $ENDTAG
+//  Description:
+//      Graphics acceleration tier computation. 관리 코드의 RenderCapability.Tier가
+//      이 값을 받는다. Tier 2 = 전체 하드웨어 가속. 요구 조건은 D3D9 시절과 같은
+//      의미(PS/VS 2.0, 메모리)를 유지하되 능력 값은 MilDeviceCaps에서 읽는다.
 //
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
 
-
 const TierType kDefaultTier = MIL_TIER(0, 0);
-
-
-//+-----------------------------------------------------------------------------
-//
-//  Structure:
-//      TierRequirements
-//
-//  Synopsis:
-//      Collection of basic Tier minimum requirements
-//
-//------------------------------------------------------------------------------
 
 struct TierRequirements
 {
@@ -43,17 +23,14 @@ struct TierRequirements
     bool IgnoreMemorySizeIfLDDM;
     DWORD PixelShaderVersion;
     DWORD VertexShaderVersion;
-    bool (* pfnCheckSpecificCaps)(__in_ecount(1) const D3DCAPS9 &);
+    bool (* pfnCheckSpecificCaps)(__in_ecount(1) const MilDeviceCaps &);
     bool CheckedRegistry;
 };
 
-
-bool CheckTier1_0SpecificCaps(__in_ecount(1) const D3DCAPS9 &caps);
-bool CheckTier2_0SpecificCaps(__in_ecount(1) const D3DCAPS9 &caps);
-
+bool CheckTier1_0SpecificCaps(__in_ecount(1) const MilDeviceCaps &caps);
+bool CheckTier2_0SpecificCaps(__in_ecount(1) const MilDeviceCaps &caps);
 
 TierRequirements g_rgTierRequirements[] = {
-    // Tier 0 - no requirements
     {
         MIL_TIER(0, 0),
         0*1024*1024,            // 0 MB
@@ -63,23 +40,15 @@ TierRequirements g_rgTierRequirements[] = {
         NULL,
         true    // No need to check to registry overrides
     },
-    // Tier 1 - 2005 advanced D3D hardware
-    // 
-    // Starting with WPF 4.0, we are now requiring PS2.0 support for hardware acceleration. 
-    // For more details, see CD3DDeviceLevel1::Init.
-    //
     {
         MIL_TIER(1, 0),
         60*1024*1024,           // 60 MB
-        // Temporarily allow LDDM to override
-        //  memory settings for Tier 1 as some drivers do not correctly report memory size.
         TRUE,                   // => LDDM does override mem req
         D3DPS_VERSION(2, 0),    // Pixel Shader 2.0
         0,                      // No Vertex shader
         CheckTier1_0SpecificCaps,
         false
     },
-    // Tier 2 - 2005 advanced D3D hardware > 120MB
     {
         MIL_TIER(2, 0),
         120*1024*1024,          // 120 MB
@@ -91,44 +60,29 @@ TierRequirements g_rgTierRequirements[] = {
     },
 };
 
-
 //+-----------------------------------------------------------------------------
 //
-//  Member:
-//      GraphicsAccelerationTier::GetTier
+//  Function:  GraphicsAccelerationTier::GetTier
 //
-//  Synopsis:
-//      Interate through tier requirement and find maximum tier that is
-//      supported.
+//  Synopsis:  Compute the highest tier whose requirements the device meets.
 //
+//------------------------------------------------------------------------------
 
 TierType
 GraphicsAccelerationTier::GetTier(
     UINT uMemorySize,
-    __in_ecount(1) const D3DCAPS9 &caps
+    __in_ecount(1) const MilDeviceCaps &caps
     )
 {
     Assert(g_rgTierRequirements[0].Tier == 0);
 
     UINT uTierIndex;
 
-    //
-    // We check the tiers from 1 onwards, and the last tier whose requirements
-    // are met is the tier we report.  We do this to ensure that the
-    // requirements for a given tier implicitly include requirements from all
-    // previous tiers, and thus these requirements needn't be explicitly
-    // described in each successive tier.
-    //
-
     for (uTierIndex = 1;
          uTierIndex < ARRAY_SIZE(g_rgTierRequirements);
          uTierIndex++)
     {
         const TierRequirements &req = g_rgTierRequirements[uTierIndex];
-
-        //
-        // Check basic, common requirements for memory and shader versions
-        //
 
         if (   (   (uMemorySize < req.MemorySize)
                 && !(req.IgnoreMemorySizeIfLDDM && HwCaps::IsLDDMDevice(caps)))
@@ -139,10 +93,6 @@ GraphicsAccelerationTier::GetTier(
             break;
         }
 
-        //
-        // Check level specific caps (if any)
-        //
-
         if (   req.pfnCheckSpecificCaps
             && !req.pfnCheckSpecificCaps(caps))
         {
@@ -150,55 +100,22 @@ GraphicsAccelerationTier::GetTier(
         }
     }
 
-    // Current index is too high for given properties so return the next lower
-    // tier
     return g_rgTierRequirements[uTierIndex-1].Tier;
 }
 
-
-//+-----------------------------------------------------------------------------
-//
-//  Function:
-//      CheckTier1_0SpecificCaps
-//
-//  Synopsis:
-//      Check minimum Hw required caps using common DeviceLevel1 check
-//
-//------------------------------------------------------------------------------
-
 bool CheckTier1_0SpecificCaps(
-    __in_ecount(1) const D3DCAPS9 &caps
+    __in_ecount(1) const MilDeviceCaps &caps
     )
-{   
+{
     return (SUCCEEDED(HwCaps::CheckDeviceLevel1(caps)));
 }
 
-//+-----------------------------------------------------------------------------
-//
-//  Function:
-//      CheckTier2_0SpecificCaps
-//
-//  Synopsis:
-//      Check second tier caps requirements assuming first tier requirements are
-//      already met.
-//
-//------------------------------------------------------------------------------
-
 bool CheckTier2_0SpecificCaps(
-    __in_ecount(1) const D3DCAPS9 &caps
+    __in_ecount(1) const MilDeviceCaps &caps
     )
 {
-    // PS Version should already be at least 2.0 - this assert is to document
-    // text requirements
     Assert(caps.PixelShaderVersion >= D3DPS_VERSION(1,1));
 
-    // Other text requirements:
-    //      1) sufficient blend stages
-    //      2) blend factor support
-    return (   (caps.MaxTextureBlendStages >= 4)
+    return (   (caps.MaxSimultaneousTextures >= 4)
             && (HwCaps::CanHandleBlendFactor(caps)));
 }
-
-
-
-

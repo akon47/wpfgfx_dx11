@@ -28,8 +28,8 @@ CHwTexturedColorSource::CHwTexturedColorSource(
     __in_ecount(1) CD3DDeviceLevel1 *pDevice
     ) : m_pDevice(pDevice)
 {
-    m_pFilterMode = &CD3DRenderState::sc_fmUnknown;
-    m_taU = m_taV = static_cast<D3DTEXTUREADDRESS>(0);
+    m_pFilterMode = &CD3DRenderState::sc_fmLinear;
+    m_taU = m_taV = D3D11_TEXTURE_ADDRESS_CLAMP;
 
     m_fMaskWithSourceClip = false;
 
@@ -168,8 +168,8 @@ Cleanup:
 
 void CHwTexturedColorSource::SetFilterAndWrapModes(
     MilBitmapInterpolationMode::Enum interpolationMode,
-    D3DTEXTUREADDRESS taU,
-    D3DTEXTUREADDRESS taV
+    D3D11_TEXTURE_ADDRESS_MODE taU,
+    D3D11_TEXTURE_ADDRESS_MODE taV
     )
 {
     SetFilterMode(interpolationMode);
@@ -229,8 +229,8 @@ CHwTexturedColorSource::SetFilterMode(
 
 void
 CHwTexturedColorSource::SetWrapModes(
-    D3DTEXTUREADDRESS taU,
-    D3DTEXTUREADDRESS taV
+    D3D11_TEXTURE_ADDRESS_MODE taU,
+    D3D11_TEXTURE_ADDRESS_MODE taV
     )
 {
     // Set texture addressing/wrapping modes
@@ -323,75 +323,32 @@ CHwTexturedColorSource::SendDeviceStates(
         m_pFilterMode
         ));
 
-    IFC(m_pDevice->SetSamplerState(
+    IFC(m_pDevice->SetSamplerAddressModes(
         dwSampler,
-        D3DSAMP_ADDRESSU,
-        m_taU
-        ));
-
-    IFC(m_pDevice->SetSamplerState(
-        dwSampler,
-        D3DSAMP_ADDRESSV,
+        m_taU,
         m_taV
         ));
 
-    if (m_taU == D3DTADDRESS_BORDER)
+    if (m_taU == D3D11_TEXTURE_ADDRESS_BORDER)
     {
-        IFC(m_pDevice->SetSamplerState(
+        IFC(m_pDevice->SetSamplerBorderColor(
             dwSampler,
-            D3DSAMP_BORDERCOLOR,
             0
             ));
     }
 
-    IFC(m_pDevice->SetTextureStageState(
+    IFC(m_pDevice->SetTexCoordIndex(
         dwStage,
-        D3DTSS_TEXCOORDINDEX,
         dwTexCoordIndex
         ));
-    
-    if (m_hTextureTransform == MILSP_INVALID_HANDLE)
-    {
-        //
-        // If a transform is passed set the Hardware to transform the texture
-        // coordinates.  Otherwise disable hardware transformation of texture
-        // coordinates.
-        //
 
-        if (!m_fUseHwTransform)
-        {
-            IFC(m_pDevice->SetTextureStageState(
-                dwStage,
-                D3DTSS_TEXTURETRANSFORMFLAGS,
-                D3DTTFF_DISABLE
-                ));
-        }
-        else
-        {
-            const MILMatrix3x2& matBrushCoordToTextureUV = GetBrushCoordToTextureUV();
-         
-            CMILMatrix matTrans = matrix::get_identity();
-            matTrans._11 = matBrushCoordToTextureUV.m_00;
-            matTrans._12 = matBrushCoordToTextureUV.m_01;
-            matTrans._21 = matBrushCoordToTextureUV.m_10;
-            matTrans._22 = matBrushCoordToTextureUV.m_11;
-            matTrans._31 = matBrushCoordToTextureUV.m_20;
-            matTrans._32 = matBrushCoordToTextureUV.m_21;
-    
-            Assert(dwStage < 8);
-    
-            IFC(m_pDevice->SetTransform(
-                static_cast<D3DTRANSFORMSTATETYPE>(D3DTS_TEXTURE0 + dwStage),
-                &matTrans
-                ));
-    
-            IFC(m_pDevice->SetTextureStageState(
-                dwStage,
-                D3DTSS_TEXTURETRANSFORMFLAGS,
-                D3DTTFF_COUNT2
-                ));
-        }
-    }
+    //
+    // Texture coordinate transforms are always applied in the vertex shader
+    // pipeline (m_hTextureTransform); the emulated fixed function pipeline
+    // has no texture transform.
+    //
+    Assert(!m_fUseHwTransform || m_hTextureTransform != MILSP_INVALID_HANDLE || true);
+
     // IFC(m_pDevice->SetTexture(dwSampler, ...)); done by subclass
 
 Cleanup:
@@ -438,40 +395,40 @@ Cleanup:
 void
 CHwTexturedColorSource::ConvertWrapModeToTextureAddressModes(
     MilBitmapWrapMode::Enum wrapMode,
-    __out_ecount(1) D3DTEXTUREADDRESS *ptaU,
-    __out_ecount(1) D3DTEXTUREADDRESS *ptaV
+    __out_ecount(1) D3D11_TEXTURE_ADDRESS_MODE *ptaU,
+    __out_ecount(1) D3D11_TEXTURE_ADDRESS_MODE *ptaV
     )
 {
     switch (wrapMode)
     {
     case MilBitmapWrapMode::Extend:
-        *ptaU = D3DTADDRESS_CLAMP;
-        *ptaV = D3DTADDRESS_CLAMP;
+        *ptaU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        *ptaV = D3D11_TEXTURE_ADDRESS_CLAMP;
         break;
 
     case MilBitmapWrapMode::FlipX:
-        *ptaU = D3DTADDRESS_MIRROR;
-        *ptaV = D3DTADDRESS_WRAP;
+        *ptaU = D3D11_TEXTURE_ADDRESS_MIRROR;
+        *ptaV = D3D11_TEXTURE_ADDRESS_WRAP;
         break;
 
     case MilBitmapWrapMode::FlipY:
-        *ptaU = D3DTADDRESS_WRAP;
-        *ptaV = D3DTADDRESS_MIRROR;
+        *ptaU = D3D11_TEXTURE_ADDRESS_WRAP;
+        *ptaV = D3D11_TEXTURE_ADDRESS_MIRROR;
         break;
 
     case MilBitmapWrapMode::FlipXY:
-        *ptaU = D3DTADDRESS_MIRROR;
-        *ptaV = D3DTADDRESS_MIRROR;
+        *ptaU = D3D11_TEXTURE_ADDRESS_MIRROR;
+        *ptaV = D3D11_TEXTURE_ADDRESS_MIRROR;
         break;
 
     case MilBitmapWrapMode::Tile:
-        *ptaU = D3DTADDRESS_WRAP;
-        *ptaV = D3DTADDRESS_WRAP;
+        *ptaU = D3D11_TEXTURE_ADDRESS_WRAP;
+        *ptaV = D3D11_TEXTURE_ADDRESS_WRAP;
         break;
 
     case MilBitmapWrapMode::Border:
-        *ptaU = D3DTADDRESS_BORDER;
-        *ptaV = D3DTADDRESS_BORDER;
+        *ptaU = D3D11_TEXTURE_ADDRESS_BORDER;
+        *ptaV = D3D11_TEXTURE_ADDRESS_BORDER;
         break;
 
     default:

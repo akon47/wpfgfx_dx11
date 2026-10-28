@@ -5,10 +5,8 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics_d3d
 //      $Keywords:
 //
@@ -45,20 +43,10 @@ MtExtern(StateTableMemory);
 //      - Number of states to track buffer
 //
 //  Implementation Details:
-//      - Keeps an array of StateKnown/StateValue pairs.  This appeared to give a
-//        small performance win, although smaller resolution perf tests are
-//        necessary to confirm this.
+//      - Keeps an array of StateKnown/StateValue pairs.
 //
 //       [ StateKnown | StateValue ] [ StateKnown | StateValue ] [ StateKnown
 //       ..]
-//
-//  Reimplementing Table Caches:
-//      - Table caches could be reimplemented by keeping a table pointer along we
-//        each state value.  If the value is ever set, the table pointer would be
-//        set to NULL along with it.  The structure of data stored would then be:
-//
-//        [ StateKnown | StateValue | StateTable ] [ StateKnown | StateValue |
-//        StateTable ] [ StateKnown ...]
 //
 
 template<class StateType>
@@ -87,9 +75,6 @@ public:
         #endif
 
         const CEntry &oEntry = m_rgStateData[dwStateNum];
-        #if DBG
-        Assert(oEntry.IsDbgSupported());
-        #endif
 
         return oEntry.IsStateSet(oStateValue);
     }
@@ -108,11 +93,7 @@ public:
         DWORD dwStateNum
         );
 
-#if DBG
-    void SetSupported(
-        DWORD dwStateNum
-        );
-#endif
+    void SetAllToUnknown();
 
     void UpdateState(
         HRESULT hrStateChange,
@@ -123,7 +104,8 @@ public:
 private:
 
     CEntry *m_rgStateData;  // The real state table
-    
+    UINT m_uNumStates;      // Number of states tracked
+
 #if DBG
     UINT m_uDbgNumStates;   // Number of states tracked
 #endif
@@ -156,14 +138,14 @@ public:
     MIL_FORCEINLINE bool IsEqual(__in_ecount(1) const StateType &oTestValue) const
     {
         if (m_oValue == oTestValue)
-        {   
+        {
             return true;
         }
         else
         {
             return false;
         }
-    }        
+    }
 
     MIL_FORCEINLINE void SetValue(
         __in_ecount(1) const StateType &oNewValue
@@ -190,20 +172,10 @@ public:
     void SetKnown() { m_fKnown = true; }
     void SetUnknown() { m_fKnown = false; }
 
-#if DBG
-    bool IsDbgSupported() const { return m_fDbgSupported; }
-    void SetSupported() { m_fDbgSupported = true; }
-#endif
-
 private:
     StateType m_oValue;     // When fKnown the state set in D3D
 
     bool m_fKnown;          // True if value of the state set in D3D is known
-
-#if DBG
-    bool m_fDbgSupported;   // True only for states we expect to track
-#endif
-
 };
 
 //+-----------------------------------------------------------------------------
@@ -219,6 +191,7 @@ template<class StateType>
 CStateTable<StateType>::CStateTable()
 {
     m_rgStateData = NULL;
+    m_uNumStates = 0;
 #if DBG
     m_uDbgNumStates = 0;
 #endif
@@ -245,8 +218,7 @@ CStateTable<StateType>::~CStateTable()
 //      CStateTable<StateType>::Init
 //
 //  Synopsis:
-//      Allocate the array, set it's known values to FALSE, and set supported
-//      values to FALSE if in DBG.
+//      Allocate the array and set its known values to FALSE.
 //
 //------------------------------------------------------------------------------
 template<class StateType>
@@ -260,6 +232,7 @@ CStateTable<StateType>::Init(
     Assert(dwStateTableSize > 0);
     Assert(dwStateTableSize < 1000);
 
+    m_uNumStates = dwStateTableSize;
 #if DBG
     m_uDbgNumStates = dwStateTableSize;
 #endif
@@ -280,9 +253,6 @@ CStateTable<StateType>::Init(
     for (UINT dwStateNum = 0; dwStateNum < dwStateTableSize; dwStateNum++)
     {
         Assert(!m_rgStateData[dwStateNum].IsKnown());
-        #if DBG
-        Assert(!m_rgStateData[dwStateNum].IsDbgSupported());
-        #endif
     }
 
 Cleanup:
@@ -316,10 +286,6 @@ CStateTable<StateType>::GetState(
     Assert(pStateValue);
 
     CEntry const &oEntry = m_rgStateData[dwStateNum];
-
-    #if DBG
-    Assert(oEntry.IsDbgSupported());
-    #endif
 
     if (!oEntry.IsKnown())
     {
@@ -359,10 +325,6 @@ CStateTable<StateType>::GetStateNoAddRef(
 
     CEntry const &oEntry = m_rgStateData[dwStateNum];
 
-    #if DBG
-    Assert(oEntry.IsDbgSupported());
-    #endif
-
     if (!oEntry.IsKnown())
     {
         IFC(E_FAIL);
@@ -395,34 +357,27 @@ CStateTable<StateType>::SetToUnknown(
 
     CEntry &oEntry = m_rgStateData[dwStateNum];
 
-    #if DBG
-    Assert(oEntry.IsDbgSupported());
-    #endif
-
     oEntry.SetUnknown();
 }
 
-#if DBG
 //+-----------------------------------------------------------------------------
 //
 //  Member:
-//      CStateTable<StateType>::SetSupported
+//      CStateTable<StateType>::SetAllToUnknown
 //
 //  Synopsis:
-//      Sets the supported value to true.  This will allow setting of this
-//      state.
+//      Sets every state to Unknown.
 //
 //------------------------------------------------------------------------------
 template<class StateType>
 void
-CStateTable<StateType>::SetSupported(
-    DWORD dwStateNum
-    )
+CStateTable<StateType>::SetAllToUnknown()
 {
-    Assert(dwStateNum < m_uDbgNumStates);
-    m_rgStateData[dwStateNum].SetSupported();
+    for (UINT i = 0; i < m_uNumStates; i++)
+    {
+        m_rgStateData[i].SetUnknown();
+    }
 }
-#endif
 
 //+-----------------------------------------------------------------------------
 //
@@ -449,13 +404,6 @@ CStateTable<StateType>::UpdateState(
 
     CEntry &oEntry = m_rgStateData[dwStateNum];
 
-    //
-    // NOTE-2004/05/21-chrisra We don't assert on supported here
-    //
-    // This function is called on ForceSet**** which means this gets called even
-    // when we're setting default state.
-    //
-    
     //
     // If the state change operation failed, we set the state to unknown.
     //
@@ -487,8 +435,8 @@ CStateTable<StateType>::UpdateState(
 
 template<>
 MIL_FORCEINLINE void
-CStateTable<IDirect3DBaseTexture9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DBaseTexture9 *&oOutValue
+CStateTable<ID3D11ShaderResourceView *>::CEntry::GetValue(
+    __out_ecount(1) ID3D11ShaderResourceView *&oOutValue
     ) const
 {
     oOutValue = m_oValue;
@@ -501,8 +449,8 @@ CStateTable<IDirect3DBaseTexture9 *>::CEntry::GetValue(
 
 template<>
 MIL_FORCEINLINE void
-CStateTable<IDirect3DVertexShader9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DVertexShader9 *&oOutValue
+CStateTable<ID3D11VertexShader *>::CEntry::GetValue(
+    __out_ecount(1) ID3D11VertexShader *&oOutValue
     ) const
 {
     oOutValue = m_oValue;
@@ -515,8 +463,8 @@ CStateTable<IDirect3DVertexShader9 *>::CEntry::GetValue(
 
 template<>
 MIL_FORCEINLINE void
-CStateTable<IDirect3DPixelShader9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DPixelShader9 *&oOutValue
+CStateTable<ID3D11PixelShader *>::CEntry::GetValue(
+    __out_ecount(1) ID3D11PixelShader *&oOutValue
     ) const
 {
     oOutValue = m_oValue;
@@ -529,8 +477,8 @@ CStateTable<IDirect3DPixelShader9 *>::CEntry::GetValue(
 
 template<>
 MIL_FORCEINLINE void
-CStateTable<IDirect3DIndexBuffer9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DIndexBuffer9 *&oOutValue
+CStateTable<ID3D11Buffer *>::CEntry::GetValue(
+    __out_ecount(1) ID3D11Buffer *&oOutValue
     ) const
 {
     oOutValue = m_oValue;
@@ -540,36 +488,3 @@ CStateTable<IDirect3DIndexBuffer9 *>::CEntry::GetValue(
         m_oValue->AddRef();
     }
 }
-
-template<>
-MIL_FORCEINLINE void
-CStateTable<IDirect3DVertexBuffer9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DVertexBuffer9 *&oOutValue
-    ) const
-{
-    oOutValue = m_oValue;
-
-    if (m_oValue)
-    {
-        m_oValue->AddRef();
-    }
-}
-
-template<>
-MIL_FORCEINLINE void
-CStateTable<IDirect3DSurface9 *>::CEntry::GetValue(
-    __out_ecount(1) IDirect3DSurface9 *&oOutValue
-    ) const
-{
-    oOutValue = m_oValue;
-
-    if (m_oValue)
-    {
-        m_oValue->AddRef();
-    }
-}
-
-
-
-
-

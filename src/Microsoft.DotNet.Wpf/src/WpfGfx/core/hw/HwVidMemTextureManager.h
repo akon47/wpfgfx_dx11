@@ -5,21 +5,19 @@
 
 //+----------------------------------------------------------------------------
 //
-
-//
-//  Abstract:        
+//  Abstract:
 //      Header for CHwVidMemTextureManager
 //
 
 
 //+----------------------------------------------------------------------------
 //
-//  Class:     
+//  Class:
 //      CHwVidMemTextureManager
 //
-//  Synopsis:  
+//  Synopsis:
 //      Class for managing the transfer of bits to a video memory texture
-//      through a system memory surface.
+//      through a staging (system memory) surface.
 //
 //-----------------------------------------------------------------------------
 
@@ -33,7 +31,7 @@ public:
 
     void SetRealizationParameters(
         __in_ecount(1) CD3DDeviceLevel1 *pDevice,
-        D3DFORMAT d3dFormat,
+        DXGI_FORMAT fmt,
         UINT uWidth,
         UINT uHeight,
         TextureMipMapLevel eMipMapLevel
@@ -46,7 +44,7 @@ public:
     }
 
     HRESULT ReCreateAndLockSysMemSurface(
-        __out_ecount(1) D3DLOCKED_RECT *pD3DLockedRect
+        __out_ecount(1) MilLockedRect *pLockedRect
         );
 
     HRESULT UnlockSysMemSurface(
@@ -68,7 +66,7 @@ private:
     void Destroy();
 
     void ComputeTextureDesc(
-        D3DFORMAT d3dFormat,
+        DXGI_FORMAT fmt,
         UINT uWidth,
         UINT uHeight,
         TextureMipMapLevel eMipMapLevel
@@ -82,7 +80,7 @@ private:
 
     CD3DVidMemOnlyTexture *m_pVideoMemTexture;
 
-    D3DSURFACE_DESC m_d3dsdRequiredForVidMem;
+    D3D11_TEXTURE2D_DESC m_descRequiredForVidMem;
     UINT m_uLevelsForVidMem;
 
 #if DBG
@@ -90,5 +88,3 @@ private:
     bool m_fDBGSysMemSurfaceIsLocked;
 #endif
 };
-
-

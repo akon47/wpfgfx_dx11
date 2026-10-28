@@ -5,10 +5,8 @@
 
 //+----------------------------------------------------------------------------
 //
-
-//
-//  Abstract:        Maintains primary references to D3D module and Sw
-//                   rasterizer (as needed).
+//  Abstract:        Maintains the primary DXGI factory reference and the
+//                   display uniqueness query.
 //
 //-----------------------------------------------------------------------------
 
@@ -20,7 +18,7 @@
 //      CD3DLoader
 //
 //  Synopsys:
-//      Provides access to top level D3D objects.
+//      Provides access to top level graphics objects.
 //      Implementation is based on wrapping CDisplaySet object that
 //      protects against unnecessary reloads when uniqueness change
 //      notification turns to be irrelevant.
@@ -31,18 +29,17 @@ class CD3DLoader
 public:
 
     //
-    // Increase D3D module load count
+    // Increase graphics module load count
     //
 
     static void GetLoadRef(
         );
 
     //
-    // Decrement D3D module load count
+    // Decrement graphics module load count
     //
-    // Note: Must be paired with GetLoadRef(AndID3D), but only called
-    //       after all D3D interfaces, derived from and including ID3D,
-    //       have been released.
+    // Note: Must be paired with GetLoadRef, but only called after all
+    //       graphics interfaces derived from the factory have been released.
     //
 
     static void ReleaseLoadRef(
@@ -55,7 +52,9 @@ public:
 //      CD3DModuleLoader
 //
 //  Synopsys:
-//      Provides access to D3D module and top level D3D objects.
+//      Creates the DXGI factory and tracks its use count. d3d11.dll and
+//      dxgi.dll are linked statically, so there is no module to load or
+//      unload; the reference count only gates factory lifetime.
 //
 //-----------------------------------------------------------------------------
 class CD3DModuleLoader
@@ -71,16 +70,6 @@ private:
     friend class CDisplayManager;
 
     //
-    // Register a software rasterizer for given ID3D.
-    //
-    // Note: It is a caller responsibility not to call this method
-    //       many times against the same pID3D.
-    //
-    static HRESULT RegisterSoftwareDevice(
-        __inout_ecount(1) IDirect3D9 *pID3D
-        );
-
-    //
     // Get the current uniqueness value
     //
     // Note: A valid load reference is not required.
@@ -89,27 +78,18 @@ private:
     static ULONG GetDisplayUniqueness();
 
     //
-    // Create top level D3D objects.
+    // Create the top level DXGI factory and take a load reference.
     //
 
     static HRESULT CreateD3DObjects(
-        __deref_out_ecount(1) IDirect3D9 **ppID3D,
-        __deref_out_ecount(1) IDirect3D9Ex **ppID3DEx
+        __deref_out_ecount(1) IDXGIFactory1 **ppDXGIFactory
         );
 
     //
-    // Release the module: decrease module reference count
-    // unload dlls when they are no longer in use.
-    //
-    // Note: Must be paired with CreateD3DObjects, but only called
-    //       after all D3D interfaces, derived from and including ID3D,
-    //       have been released.
+    // Release a load reference taken by CreateD3DObjects.
     //
 
     static void ReleaseD3DLoadRef(
         );
 
 };
-
-
-

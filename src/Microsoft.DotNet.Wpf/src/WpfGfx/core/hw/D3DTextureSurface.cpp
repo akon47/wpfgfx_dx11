@@ -5,13 +5,11 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DTextureSurface implementation
 //
-//      Provides basic abstraction of a D3D surface which is part of a D3D
-//      texture.
+//      Provides basic abstraction of a surface which is one mip level of a
+//      D3D11 texture.
 //
 
 #include "precomp.hpp"
@@ -23,13 +21,14 @@ MtDefine(D3DResource_TextureSurface, MILHwMetrics, "Approximate surface sizes");
 //
 //  Member:    CD3DTextureSurface::Create
 //
-//  Synopsis:  Create a CD3DTextureSurface object to wrap a D3D texture
+//  Synopsis:  Create a CD3DTextureSurface object to wrap a texture level
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DTextureSurface::Create(
     __inout_ecount(1) CD3DResourceManager *pResourceManager,
-    __inout_ecount(1) IDirect3DSurface9 *pID3DSurface,
+    __inout_ecount(1) ID3D11Texture2D *pD3DTexture,
+    UINT uLevel,
     __deref_out_ecount(1) CD3DSurface **ppSurface
     )
 {
@@ -41,7 +40,7 @@ CD3DTextureSurface::Create(
     // Create the D3D surface wrapper
     //
 
-    pTextureSurface = new CD3DTextureSurface(pID3DSurface);
+    pTextureSurface = new CD3DTextureSurface(pD3DTexture, uLevel);
     IFCOOM(pTextureSurface);
     pTextureSurface->AddRef(); // CD3DTextureSurface::ctor sets ref count == 0
 
@@ -70,9 +69,10 @@ Cleanup:
 //
 //-------------------------------------------------------------------------
 CD3DTextureSurface::CD3DTextureSurface(
-    __inout_ecount(1) IDirect3DSurface9 * const pD3DSurface
+    __inout_ecount(1) ID3D11Texture2D * const pD3DTexture,
+    UINT uLevel
     )
-    : CD3DSurface(pD3DSurface)
+    : CD3DSurface(pD3DTexture, uLevel)
 {
 }
 
@@ -83,7 +83,7 @@ CD3DTextureSurface::CD3DTextureSurface(
 //  Synopsis:  Inits the texture surface wrapper
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DTextureSurface::Init(
     __inout_ecount(1) CD3DResourceManager *pResourceManager
     )
@@ -91,10 +91,10 @@ CD3DTextureSurface::Init(
     HRESULT hr = S_OK;
 
     //
-    // Compute the size of the resource
+    // Read the description of the level
     //
 
-    IFC(m_pD3DSurface->GetDesc(&m_d3dsd));
+    ReadDesc();
 
     //
     // Init the base class, use a zero size because texture wrapper will
@@ -103,7 +103,6 @@ CD3DTextureSurface::Init(
 
     CD3DResource::Init(pResourceManager, 0);
 
-Cleanup:
     RRETURN(hr);
 }
 
@@ -118,7 +117,7 @@ Cleanup:
 //             ReleaseD3DResources is okay.
 //
 //-------------------------------------------------------------------------
-void 
+void
 CD3DTextureSurface::ReleaseD3DResources()
 {
     // This resource should have been marked invalid already or at least be out
@@ -126,11 +125,10 @@ CD3DTextureSurface::ReleaseD3DResources()
     Assert(!m_fResourceValid || (m_cRef == 0));
     Assert(IsValid() == m_fResourceValid);
 
+    ReleaseViews();
+
     // This context is protected so it is safe to release the D3D resource
-    ReleaseInterface((*const_cast<IDirect3DSurface9 **>(&m_pD3DSurface)));
+    ReleaseInterface((*const_cast<ID3D11Texture2D **>(&m_pD3DTexture)));
 
     return;
 }
-
-
-

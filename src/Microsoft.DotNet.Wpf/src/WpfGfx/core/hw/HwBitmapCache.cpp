@@ -265,7 +265,7 @@ CHwBitmapCache::TryForDeviceBitmapColorSource(
                 // We've found a valid DBCS containing the area we need. However, we need to see
                 // if the desired wrap mode is possible given the current DBCS.
                 
-                D3DTEXTUREADDRESS taU, taV;
+                D3D11_TEXTURE_ADDRESS_MODE taU, taV;
                 CHwTexturedColorSource::ConvertWrapModeToTextureAddressModes(
                     oContextCacheParameters.wrapMode,
                     &taU,
@@ -276,7 +276,7 @@ CHwBitmapCache::TryForDeviceBitmapColorSource(
                 if (SUCCEEDED(m_pBitmap->GetSize(&uWidth, &uHeight)))
                 {
                     if (   (IS_POWER_OF_2(uWidth) && IS_POWER_OF_2(uHeight))
-                         || (m_pDevice->SupportsNonPow2Conditionally() && taU == D3DTADDRESS_CLAMP && taV == D3DTADDRESS_CLAMP)
+                         || (m_pDevice->SupportsNonPow2Conditionally() && taU == D3D11_TEXTURE_ADDRESS_CLAMP && taV == D3D11_TEXTURE_ADDRESS_CLAMP)
                          || m_pDevice->SupportsNonPow2Unconditionally()
                        )
                     {
@@ -1286,8 +1286,8 @@ CHwBitmapCache::CacheEntryList::GetSetBitmapColorSource(
                     // Update oParams (passed in) with cached settings since
                     // those are the settings that will be used.
                     //
-                    D3DTEXTUREADDRESS d3dtaU = oParams.dlU.d3dta;
-                    D3DTEXTUREADDRESS d3dtaV = oParams.dlV.d3dta;
+                    D3D11_TEXTURE_ADDRESS_MODE d3dtaU = oParams.dlU.d3dta;
+                    D3D11_TEXTURE_ADDRESS_MODE d3dtaV = oParams.dlV.d3dta;
 
                     *static_cast<CHwBitmapColorSource::CacheSizeLayoutParameters *>
                         (&oParams) = oSizeEntry.oSizeParams;

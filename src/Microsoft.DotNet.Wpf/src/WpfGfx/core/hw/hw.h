@@ -14,8 +14,11 @@
 
 // HW classes
 
+#include "HwCaps.h"
+#include "d3dvertex.h"
 #include "HwStateTable.h"
-#include "HwRenderStateManager.h"
+#include "HwFixedFunctionShaders.h"   // needs d3dvertex.h
+#include "HwRenderStateManager.h"     // needs HwFixedFunctionShaders.h, HwCaps.h
 #include "d3drenderstate.h"
 
 #include "d3dresource.h"
@@ -26,11 +29,9 @@
 
 #include "swfallback.h"         // needs d3dlockabletexture.h
 
-#include "d3dstats.h"
 #include "d3dlog.h"
 #include "d3dglyphbank.h"       // needs d3dresource.h, d3dlog.h
 
-#include "d3dvertex.h"
 #include "d3dgeometry.h"        // needs d3dvertex.h
 
 #include "Waffler.h"
@@ -75,9 +76,7 @@
 
 #include "HwSurfRTData.h"           // needs HwBrushPool.h
 
-#include "gpumarker.h"           
-
-#include "HwCaps.h"
+#include "gpumarker.h"
 
 #include "d3ddevice.h"          // needs d3dresource.h, dxbrush.h, d3dstats.h, d3dlog.h
                                 // d3dglyphbank.h, hwsurfrtdata.h, d3dglyphrun.h, HwCaps.h

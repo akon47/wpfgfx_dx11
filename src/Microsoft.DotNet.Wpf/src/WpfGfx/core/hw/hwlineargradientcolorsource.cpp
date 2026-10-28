@@ -92,7 +92,7 @@ CHwLinearGradientColorSource::SetBrushAndContext(
     CMILMatrix matSampleSpaceToTexture;
     CMILMatrix matXSpaceToTexture;
 
-    D3DTEXTUREADDRESS taU;
+    D3D11_TEXTURE_ADDRESS_MODE taU;
 
     //
     // This brush is not referenced- we expect its lifetime to be
@@ -194,11 +194,11 @@ CHwLinearGradientColorSource::SetBrushAndContext(
     // Investigate using flip mode instead of duplicating texels.
     case MilGradientWrapMode::Flip:
     case MilGradientWrapMode::Tile:
-        taU = D3DTADDRESS_WRAP;
+        taU = D3D11_TEXTURE_ADDRESS_WRAP;
         break;
 
     case MilGradientWrapMode::Extend:
-        taU = D3DTADDRESS_CLAMP;
+        taU = D3D11_TEXTURE_ADDRESS_CLAMP;
         break;
 
     default:
@@ -221,7 +221,7 @@ CHwLinearGradientColorSource::SetBrushAndContext(
     SetFilterAndWrapModes(
         MilBitmapInterpolationMode::Linear,
         taU,
-        D3DTADDRESS_CLAMP
+        D3D11_TEXTURE_ADDRESS_CLAMP
         );
 
 Cleanup:
@@ -246,7 +246,7 @@ CHwLinearGradientColorSource::FillGradientTexture(
     )
 {
     HRESULT hr = S_OK;
-    D3DLOCKED_RECT rectTexture;
+    MilLockedRect rectTexture;
 
     BOOL fLockedTexture = FALSE;
 
@@ -258,7 +258,7 @@ CHwLinearGradientColorSource::FillGradientTexture(
         ));
 
     fLockedTexture = TRUE;
-    if (rectTexture.Pitch < static_cast<INT>(m_cRealizedTextureWidth * D3DFormatSize(D3DFMT_A8R8G8B8)))
+    if (rectTexture.Pitch < static_cast<INT>(m_cRealizedTextureWidth * D3DFormatSize(DXGI_FORMAT_B8G8R8A8_UNORM)))
     {
         RIPW(L"Unexpected: The texture created is not big enough for the gradient.");
         IFC(WGXERR_INSUFFICIENTBUFFER);
@@ -382,7 +382,7 @@ CHwLinearGradientColorSource::Realize(
 
         m_vidMemManager.SetRealizationParameters(
             m_pDevice,
-            D3DFMT_A8R8G8B8,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
             m_cDesiredTextureWidth,
             1, // uHeight
             eMipMapLevel

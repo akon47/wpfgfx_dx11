@@ -25,7 +25,7 @@ WPF의 네이티브 렌더링 엔진 **WpfGfx(milcore, `wpfgfx_cor3.dll`)의 내
 ```powershell
 # 1) 엔진 빌드. 비-UTF-8 코드 페이지 로캘(한국어 CP949 등)에서는 CL=/wd4819가 필수 — docs/BUILD.md
 $env:CL = "/wd4819"
-.\build.cmd -configuration Release -platform x64 -nodeReuse $false
+.\build.cmd -configuration Release -platform x64 -nodeReuse 0
 # 산출물: artifacts\bin\wpfgfx\x64\Release\wpfgfx_cor3.dll
 #         artifacts\bin\D3DCompiler\x64\Release\D3DCompiler_47_cor3.dll  (같은 폴더에 두고 테스트)
 
@@ -51,7 +51,7 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows
 
 - ★ **앱 출력 폴더에 `wpfgfx_cor3.dll`을 복사해도 교체되지 않는다.** 프레임워크 종속 앱의 네이티브 DLL 탐색 경로에는 공유 프레임워크 폴더만 들어 있다. 교체 방법은 둘뿐이다: (a) 스모크 앱처럼 `NativeLibrary.SetDllImportResolver`로 돌리기, (b) 공유 프레임워크 폴더의 파일을 바꾸기(머신 전체에 영향).
 - ★ **`D3DCompiler_47_cor3.dll`은 `wpfgfx_cor3.dll`과 같은 폴더**에 있어야 한다. wpfgfx가 자기 폴더에서 지연 로드한다.
-- ★ `CL` 환경 변수는 MSBuild 노드가 물려받는다. 값을 바꾸면 살아 있는 노드를 먼저 끝낸다(`-nodeReuse $false`).
+- ★ `CL` 환경 변수는 MSBuild 노드가 물려받는다. 값을 바꾸면 살아 있는 노드를 먼저 끝낸다(`-nodeReuse 0`. PowerShell에서 `$false`는 문자열로 넘어가 Build.ps1이 거부한다).
 - ★ `include/Generated/`와 `codegen/`은 읽기 전용으로 취급한다. 명령 구조체가 바뀌면 관리 코드와 어긋나 즉시 깨진다.
 - ★ 관리 코드(PresentationCore 등)를 봐야 하면 이 저장소가 아니라 업스트림에서 본다: `git remote add upstream https://github.com/dotnet/wpf.git && git fetch upstream release/10.0` 뒤 `git show upstream/release/10.0:<경로>`.
 - ★ 로컬 빌드 파일 버전 `42.42.42.42424`는 의도된 값이다(Arcade 기본). 바꾸지 않는다. 스톡 DLL과 구분하는 표식이다.

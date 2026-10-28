@@ -245,7 +245,7 @@ CHwDiffuseShader::Begin(
 
     if (fZBufferEnabled)
     {
-        IFC(m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, 1));
+        IFC(m_pDevice->SetDepthWriteEnable(TRUE));
     }
 
 Cleanup:
@@ -369,7 +369,7 @@ CHwSpecularShader::Begin(
 
     if (fZBufferEnabled)
     {
-        IFC(m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, 0));
+        IFC(m_pDevice->SetDepthWriteEnable(FALSE));
     }
 
 Cleanup:
@@ -485,7 +485,7 @@ CHwEmissiveShader::Begin(
 
     if (fZBufferEnabled)
     {
-        IFC(m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, 0));
+        IFC(m_pDevice->SetDepthWriteEnable(FALSE));
     }
 
 Cleanup:

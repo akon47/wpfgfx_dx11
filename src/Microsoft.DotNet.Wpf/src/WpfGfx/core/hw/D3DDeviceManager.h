@@ -13,12 +13,11 @@
 //      $Keywords:
 //
 //  $Description:
-//      Defines CD3DDeviceManager which maintains a list of existing D3D devices
-//      via the CD3DDeviceLevel1 wrappers and creates new CD3DDeviceLevel1's as
-//      they are needed.
+//      Declares CD3DDeviceManager which maintains a list of existing D3D11
+//      devices via the CD3DDeviceLevel1 wrappers and creates new
+//      CD3DDeviceLevel1's as they are needed.
 //
-//      Also keeps a shared NullRef Device for creation of our Device
-//      Independent objects.
+//      Also keeps a shared WARP device for software 3D rendering.
 //
 //  $Notes:
 //      None at this time.
@@ -61,12 +60,12 @@ public:
         __in_opt HWND hwnd,
         MilRTInitialization::Flags dwFlags,
         __in_ecount_opt(1) CDisplay const *pDisplay,
-        D3DDEVTYPE type,
+        MilDeviceKind type,
         __deref_out_ecount(1) CD3DDeviceLevel1 **ppDeviceLevel1,
-        __out_ecount_opt(1) D3DPRESENT_PARAMETERS *pPresentParams,
+        __out_ecount_opt(1) MilSwapChainParams *pPresentParams,
         __out_ecount_opt(1) UINT *pAdapterOrdinalInGroup
         );
-                      
+
     HRESULT AddAdapterStatusListener(__in IAdapterStatusListener *pListener);
     void RemoveAdapterStatusListener(__in IAdapterStatusListener *pListener);
 
@@ -86,22 +85,26 @@ public:
 
 private:
 
-    struct D3DDeviceCreationParameters : public D3DDEVICE_CREATION_PARAMETERS
+    struct D3DDeviceCreationParameters
     {
+        UINT AdapterOrdinal;            // display index (CDisplay::GetDisplayIndex)
+        MilDeviceKind DeviceType;
+        HWND hFocusWindow;
+        DWORD BehaviorFlags;            // MIL_DEVICE_BEHAVIOR_*
         UINT MasterAdapterOrdinal;      // ordinal of master adapter for adapter group
         UINT AdapterOrdinalInGroup;     // ordinal inside the adapter group
         UINT NumberOfAdaptersInGroup;
         MilRTInitialization::Flags RTInitFlags;
     };
 
-    struct D3DDeviceInformation 
+    struct D3DDeviceInformation
     {
         CD3DDeviceLevel1 *pDeviceLevel1;
         D3DDeviceCreationParameters CreateParams;
         bool fIsDeviceLost;
 
         #if DBG
-            D3DPRESENT_PARAMETERS DbgPresentParams;
+            MilSwapChainParams DbgPresentParams;
         #endif
     };
 
@@ -123,19 +126,19 @@ private:
         __in_opt HWND hwnd,
         MilRTInitialization::Flags dwFlags,
         UINT uAdapter,
-        D3DDEVTYPE type,
+        MilDeviceKind type,
         __out_ecount(1) D3DDeviceCreationParameters *pCreateParams
         ) const;
 
     static void ComposePresentParameters(
-        __in_ecount(1) D3DDISPLAYMODEEX const &displayMode,
+        __in_ecount(1) MilDisplayMode const &displayMode,
         __in_ecount(1) D3DDeviceCreationParameters const &CreateParams,
-        __out_ecount(1) D3DPRESENT_PARAMETERS *pD3DPresentParams
+        __out_ecount(1) MilSwapChainParams *pPresentParams
         );
 
     HRESULT GetDisplayMode(
         __inout_ecount(1) D3DDeviceCreationParameters *pCreateParams,
-        __out_xcount_full(pCreateParams->NumberOfAdaptersInGroup) D3DDISPLAYMODEEX *rgDisplayModes
+        __out_xcount_full(pCreateParams->NumberOfAdaptersInGroup) MilDisplayMode *rgDisplayModes
         ) const;
 
     HRESULT FindDeviceMatch(
@@ -155,12 +158,21 @@ private:
         D3DDeviceCreationParameters *pD3DCreateParams,  // D3D Device creation
                                                         // parameters
         __inout_ecount(1)
-        D3DPRESENT_PARAMETERS *pBasePresentParams,      // Base D3D Presentation
+        MilSwapChainParams *pBasePresentParams,         // Base presentation
                                                         // parameters
         __in_xcount(pD3DCreateParams->NumberOfAdaptersInGroup)
-        D3DDISPLAYMODEEX *rgDisplayModes,               // Array of display modes
+        MilDisplayMode *rgDisplayModes,                 // Array of display modes
 
         __deref_out_ecount(1) CD3DDeviceLevel1 **ppDeviceLevel1
+        );
+
+    static HRESULT CreateD3D11Device(
+        __in_ecount_opt(1) IDXGIAdapter1 *pAdapter,
+        MilDeviceKind type,
+        DWORD dwBehaviorFlags,
+        __deref_out_ecount(1) ID3D11Device **ppDevice,
+        __deref_out_ecount(1) ID3D11DeviceContext **ppContext,
+        __out_ecount(1) D3D_FEATURE_LEVEL *pFeatureLevel
         );
 
     void NotifyDeviceLost(D3DDeviceInformation &info);
@@ -171,13 +183,11 @@ private:
     CCriticalSection m_csManagement;
 
     ULONG m_cCallers;
-    IDirect3D9 *m_pID3D;
+    IDXGIFactory1 *m_pDXGIFactory;
     bool m_fD3DLoaded;
 
     CDisplaySet const *m_pDisplaySet;
     CDisplaySet const *m_pNextDisplaySet;
-
-    IDirect3DDevice9 *m_pNullRefDevice;
 
     CD3DDeviceLevel1 *m_pSWDevice;
 
@@ -194,7 +204,3 @@ private:
                                     // is not yet in tracking list.
 #endif
 };
-
-
-
-

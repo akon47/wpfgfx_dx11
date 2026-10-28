@@ -13,12 +13,14 @@
 //      $Keywords:
 //
 //  $Description:
-//      Implementation of GPUMarker used to monitor rendering progress
+//      GPUMarker class used to monitor GPU process of rendering
 //
 //  $ENDTAG
 //
 //------------------------------------------------------------------------------
+
 #include "precomp.hpp"
+
 MtDefine(CGPUMarker, MILRender, "CGPUMarker");
 
 //+-----------------------------------------------------------------------------
@@ -27,14 +29,16 @@ MtDefine(CGPUMarker, MILRender, "CGPUMarker");
 //      CGPUMarker::CGPUMarker
 //
 //  Synopsis:
-//      Constructor
+//      Constructor. Takes ownership of the query reference.
 //
 //------------------------------------------------------------------------------
 CGPUMarker::CGPUMarker(
-    __in_ecount(1) IDirect3DQuery9 *pQuery, 
+    __in_ecount(1) ID3D11Query *pQuery,
+    __in_ecount(1) ID3D11DeviceContext *pContext,
     ULONGLONG ullMarkerId
-    ) : m_pQuery(pQuery)
-{ 
+    ) : m_pQuery(pQuery), m_pContext(pContext)
+{
+    m_pContext->AddRef();
     Reset(ullMarkerId);
 }
 
@@ -47,9 +51,10 @@ CGPUMarker::CGPUMarker(
 //      Destructor
 //
 //------------------------------------------------------------------------------
-CGPUMarker::~CGPUMarker() 
-{ 
+CGPUMarker::~CGPUMarker()
+{
     ReleaseInterface(m_pQuery);
+    ReleaseInterface(m_pContext);
 }
 
 //+-----------------------------------------------------------------------------
@@ -59,9 +64,6 @@ CGPUMarker::~CGPUMarker()
 //
 //  Synopsis:
 //      Resets the marker for reuse
-//
-//  Returns:
-//      S_OK if succeeds
 //
 //------------------------------------------------------------------------------
 void CGPUMarker::Reset(ULONGLONG ullMarkerId)
@@ -92,7 +94,7 @@ HRESULT CGPUMarker::InsertIntoCommandStream()
         IFC(E_FAIL);
     }
 
-    IFC(m_pQuery->Issue(D3DISSUE_END));
+    m_pContext->End(m_pQuery);
     m_fIssued = TRUE;
 
   Cleanup:
@@ -124,14 +126,18 @@ HRESULT CGPUMarker::CheckStatus(
     {
         if (!m_fConsumed)
         {
-            DWORD dwFlags = (fFlush ? D3DGETDATA_FLUSH : 0);
-            MIL_THR(m_pQuery->GetData(NULL, 0, dwFlags));
-            m_fConsumed = (hr == S_OK);
+            UINT uFlags = (fFlush ? 0 : D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            BOOL fDone = FALSE;
+
+            MIL_THR(m_pContext->GetData(m_pQuery, &fDone, sizeof(fDone), uFlags));
+            m_fConsumed = (hr == S_OK && fDone);
 
             if (hr == S_FALSE)
             {
                 hr = S_OK;
             }
+
+            hr = MilTranslateD3D11Error(hr);
         }
 
         *pfConsumed = (m_fConsumed != 0);
@@ -139,5 +145,3 @@ HRESULT CGPUMarker::CheckStatus(
 
     RRETURN(hr);
 }
-
-

@@ -6,26 +6,8 @@
 #include "precomp.hpp"
 //------------------------------------------------------------------------------
 //
-
-//
 //  Description:
-//      Contains CHwRenderStateManager declaration
-//
-//      The purpose of this class is to centralize all states used by our
-//      rendering engine so that we can reduce state transitions for better
-//      performance.  We also limit the states that can be set so that
-//      we can understand and restrict the requirements for our engine.
-//
-//      This class also maintains a table of render states and will only
-//      call D3D on the states that change.  We've measured noticeable
-//      performance improvements by avoiding the D3D API overhead.
-//
-//      NOTE-2004/05/21-chrisra State blocks are not a win.
-//
-//      Removing the stateblocks to go to setting the states and restoring them
-//      for 3D saved about 20% on our scenarios.  If we have to manage more
-//      states that may change, but for the time it looks like a big win to keep
-//      from using stateblocks.
+//      Contains CHwRenderStateManager implementation. See the header.
 //
 
 using namespace dxlayer;
@@ -42,12 +24,9 @@ DeclareTag(tagWireframe, "MIL-HW", "Wireframe");
 //-----------------------------------------------------------------------------
 __checkReturn HRESULT
 CHwRenderStateManager::Create(
-    __inout_ecount(1) IDirect3DDevice9 *pD3DDevice,
-    DWORD dwMaxBlendStages,
-    BOOL fCanHandleBlendFactor,
-    BOOL fSupportsScissorRect,
-    __range(1,UINT_MAX) DWORD dwMaxStream,
-    __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel,
+    __inout_ecount(1) ID3D11Device *pD3DDevice,
+    __inout_ecount(1) ID3D11DeviceContext *pD3DContext,
+    __in_ecount(1) const MilDeviceCaps &caps,
     __deref_out_ecount(1) CHwRenderStateManager **ppStateManager
     )
 {
@@ -59,11 +38,8 @@ CHwRenderStateManager::Create(
 
     IFC(pNewStateManager->Init(
         pD3DDevice,
-        dwMaxBlendStages,
-        fCanHandleBlendFactor,
-        fSupportsScissorRect,
-        dwMaxStream,
-        dwAnisotropicFilterLevel
+        pD3DContext,
+        caps
         ));
 
     pNewStateManager->AddRef();
@@ -79,119 +55,626 @@ Cleanup:
 
 //+----------------------------------------------------------------------------
 //
-//  Function:   CHwRenderStateManager::Init
+//  Function:   CHwRenderStateManager::ctor
 //
-//  Synopsis:   Initializes the size of all the state tables.
+//-----------------------------------------------------------------------------
+CHwRenderStateManager::CHwRenderStateManager()
+{
+    m_pD3DDevice = NULL;
+    m_pD3DContext = NULL;
+    ZeroMemory(&m_caps, sizeof(m_caps));
+
+    m_pRTV = NULL;
+    m_uRenderTargetWidth = 0;
+    m_uRenderTargetHeight = 0;
+    m_pDSV = NULL;
+    m_uDepthStencilSurfaceWidth  = 0;
+    m_uDepthStencilSurfaceHeight = 0;
+
+    ZeroMemory(&m_blend, sizeof(m_blend));
+    m_blendFactor = 0;
+    m_fBlendDirty = true;
+
+    ZeroMemory(&m_depthStencil, sizeof(m_depthStencil));
+    m_uStencilRef = 0;
+    m_fDepthStencilDirty = true;
+
+    ZeroMemory(&m_rasterizer, sizeof(m_rasterizer));
+    m_fRasterizerDirty = true;
+
+    ZeroMemory(m_rgSamplers, sizeof(m_rgSamplers));
+    ZeroMemory(m_rgfSamplerDirty, sizeof(m_rgfSamplerDirty));
+    m_fAnySamplerDirty = true;
+
+    ZeroMemory(m_rgpTextures, sizeof(m_rgpTextures));
+    ZeroMemory(m_rgfTextureKnown, sizeof(m_rgfTextureKnown));
+    m_fTexturesDirty = true;
+
+    ZeroMemory(m_rgStages, sizeof(m_rgStages));
+    m_cActiveStages = 0;
+    m_fStagesDirty = true;
+
+    m_pVertexShader = NULL;
+    m_fVertexShaderKnown = false;
+    m_fVertexShaderDirty = true;
+    m_pPixelShader = NULL;
+    m_fPixelShaderKnown = false;
+    m_fPixelShaderDirty = true;
+    m_pBoundVertexShader = NULL;
+    m_pBoundPixelShader = NULL;
+
+    ZeroMemory(m_rgVSFloat4, sizeof(m_rgVSFloat4));
+    ZeroMemory(m_rgPSFloat4, sizeof(m_rgPSFloat4));
+    ZeroMemory(m_rgPSInt4, sizeof(m_rgPSInt4));
+    ZeroMemory(m_rgPSBool4, sizeof(m_rgPSBool4));
+    m_fVSConstantsDirty = true;
+    m_fPSConstantsDirty = true;
+    m_fPSIntBoolConstantsDirty = true;
+
+    m_pVSConstantBuffer = NULL;
+    m_pPSConstantBuffer = NULL;
+    m_pPSIntBoolConstantBuffer = NULL;
+    m_pFFConstantBuffer = NULL;
+
+    for (UINT i = 0; i < MilTransform_Count; i++)
+    {
+        m_rgTransforms[i] = IdentityMatrix;
+    }
+    m_fFFTransformDirty = true;
+
+    m_f2DTransformsUsedForFixedFunction = FALSE;
+    m_f2DTransformUsedForVertexShader = FALSE;
+    m_u2DTransformVertexShaderStartRegister = 0;
+
+    m_vertexFormat = MilVertexFormat_XYZDUV2;
+    m_fVertexFormatKnown = false;
+    m_fVertexFormatDirty = true;
+
+    m_pVertexBuffer = NULL;
+    m_uVertexStride = 0;
+    m_fVertexBufferKnown = false;
+    m_fVertexBufferDirty = true;
+
+    m_pIndexBuffer = NULL;
+    m_fIndexBufferKnown = false;
+    m_fIndexBufferDirty = true;
+
+    m_topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    m_fTopologyDirty = true;
+
+    ZeroMemory(&m_rcScissorRect, sizeof(m_rcScissorRect));
+    m_fScissorRectValid = false;
+    m_fScissorDirty = true;
+
+    m_fClipSet = FALSE;
+    ZeroMemory(&m_rcClip, sizeof(m_rcClip));
+
+    ZeroMemory(&m_rcViewport, sizeof(m_rcViewport));
+    m_fViewportDirty = true;
+
+    m_blendCache.c = 0;
+    m_depthStencilCache.c = 0;
+    m_rasterizerCache.c = 0;
+    m_samplerCache.c = 0;
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:     CHwRenderStateManager::dtor
+//
+//-------------------------------------------------------------------------
+CHwRenderStateManager::~CHwRenderStateManager()
+{
+    m_blendCache.Release();
+    m_depthStencilCache.Release();
+    m_rasterizerCache.Release();
+    m_samplerCache.Release();
+
+    ReleaseInterface(m_pVSConstantBuffer);
+    ReleaseInterface(m_pPSConstantBuffer);
+    ReleaseInterface(m_pPSIntBoolConstantBuffer);
+    ReleaseInterface(m_pFFConstantBuffer);
+
+    ReleaseInterface(m_pD3DContext);
+    ReleaseInterface(m_pD3DDevice);
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Function:   CHwRenderStateManager::Init
 //
 //-----------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::Init(
-    __inout_ecount(1) IDirect3DDevice9 *pD3DDevice,
-    DWORD dwMaxBlendStages,
-    BOOL fCanHandleBlendFactor,
-    BOOL fSupportsScissorRect,
-    __range(1,UINT_MAX) DWORD dwMaxStream,
-    __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel
+    __inout_ecount(1) ID3D11Device *pD3DDevice,
+    __inout_ecount(1) ID3D11DeviceContext *pD3DContext,
+    __in_ecount(1) const MilDeviceCaps &caps
     )
 {
     HRESULT hr = S_OK;
 
-    Assert(pD3DDevice && !m_pID3DDevice);
+    Assert(pD3DDevice && !m_pD3DDevice);
 
-    m_pID3DDevice = pD3DDevice;
-    m_pID3DDevice->AddRef();
+    m_pD3DDevice = pD3DDevice;
+    m_pD3DDevice->AddRef();
 
-    IGNORE_HR(m_pID3DDevice->QueryInterface(IID_IDirect3DDevice9Ex, (void**)&m_pID3DDeviceEx));
+    m_pD3DContext = pD3DContext;
+    m_pD3DContext->AddRef();
 
-    m_nMaxTextureBlendStage = dwMaxBlendStages;
+    m_caps = caps;
 
-    IFC(m_renderStates.Init(
-        NUM_D3DRS
-        ));
+    IFC(m_fixedFunction.Init(pD3DDevice));
 
-    IFC(m_nonWorldTransforms.Init(
-        NUM_D3DNONWORLDTRANSFORMS
-        ));
+    IFC(CreateConstantBuffers());
 
-    IFC(m_worldTransform.Init(
-        1
-        ));
-
-    IFC(m_textureStageStates.Init(
-        NUM_D3DTSS*MIL_TEXTURE_STAGE_COUNT
-        ));
-
-    IFC(m_samplerStageStates.Init(
-        NUM_D3DTSAMPLERSTATES*MIL_SAMPLER_COUNT
-        ));
-
-    IFC(m_textures.Init(
-        MIL_TEXTURE_STAGE_COUNT
-        ));
-
-    IFC(m_stateFVF.Init(
-        1
-        ));
-
-    IFC(m_stateVertexShader.Init(
-        1
-        ));
-
-    IFC(m_statePixelShader.Init(
-        1
-        ));
-
-    //     Add adjustable state table support
-    //  Adding redundancy checking for the shader constants adds
-    //  about 4.5 KB working set per device. Most shaders won't get
-    //  close to using 256 vertex shader constants. The perf team
-    //  is fine with this... it's just a little sloppy.
-    
-    IFC(m_stateVertexShaderFloat4Constants.Init(
-        256
-        ));
-
-    IFC(m_statePixelShaderFloat4Constants.Init(
-        224         // ps_3_0 supports 224 float registers
-        ));
-
-    IFC(m_statePixelShaderInt4Constants.Init(
-        16         // ps_3_0 supports 16 int registers
-        ));
-
-    IFC(m_statePixelShaderBoolConstants.Init(
-        16         // ps_3_0 supports 16 bool registers
-        ));
-
-    IFC(m_depthStencilSurface.Init(
-        1
-        ));
-
-    IFC(m_indexStream.Init(
-        1
-        ));
-
-    IFC(m_streamSourceVertexBuffer.Init(
-        1
-        ));
-
-    IFC(m_streamSourceVertexStride.Init(
-        1
-        ));
-
-    IFC(SetDefaultState(
-        fCanHandleBlendFactor,
-        fSupportsScissorRect,
-        dwMaxStream,
-        dwAnisotropicFilterLevel
-        ));
-
-#if DBG
-    SetSupportedTable();
-#endif
+    IFC(SetDefaultState());
 
 Cleanup:
     RRETURN(hr);
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Function:   CHwRenderStateManager::CreateConstantBuffers
+//
+//-----------------------------------------------------------------------------
+HRESULT
+CHwRenderStateManager::CreateConstantBuffers()
+{
+    HRESULT hr = S_OK;
+
+    D3D11_BUFFER_DESC desc;
+
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    desc.ByteWidth = sizeof(m_rgVSFloat4);
+    IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateBuffer(&desc, NULL, &m_pVSConstantBuffer)));
+
+    desc.ByteWidth = sizeof(m_rgPSFloat4);
+    IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateBuffer(&desc, NULL, &m_pPSConstantBuffer)));
+
+    desc.ByteWidth = sizeof(m_rgPSInt4) + sizeof(m_rgPSBool4);
+    IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateBuffer(&desc, NULL, &m_pPSIntBoolConstantBuffer)));
+
+    desc.ByteWidth = sizeof(MilFixedFunctionVSConstants);
+    IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateBuffer(&desc, NULL, &m_pFFConstantBuffer)));
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Function:   CHwRenderStateManager::UploadConstantBuffer
+//
+//-----------------------------------------------------------------------------
+HRESULT
+CHwRenderStateManager::UploadConstantBuffer(
+    __in_ecount(1) ID3D11Buffer *pBuffer,
+    __in_bcount(cb) const void *pvData,
+    UINT cb
+    )
+{
+    HRESULT hr = S_OK;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+
+    IFC(MilTranslateD3D11Error(m_pD3DContext->Map(pBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)));
+
+    CopyMemory(mapped.pData, pvData, cb);
+
+    m_pD3DContext->Unmap(pBuffer, 0);
+
+Cleanup:
+    RRETURN(hr);
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Function:   CHwRenderStateManager::InvalidateAll
+//
+//  Synopsis:   외부가 컨텍스트 상태를 바꿨을 수 있을 때 모든 상태를 다시 올리게 한다.
+//
+//-----------------------------------------------------------------------------
+void
+CHwRenderStateManager::InvalidateAll()
+{
+    m_fBlendDirty = true;
+    m_fDepthStencilDirty = true;
+    m_fRasterizerDirty = true;
+    m_fAnySamplerDirty = true;
+    for (UINT i = 0; i < MIL_SAMPLER_COUNT; i++) { m_rgfSamplerDirty[i] = true; }
+    m_fTexturesDirty = true;
+    m_fStagesDirty = true;
+    m_fVertexShaderDirty = true;
+    m_fPixelShaderDirty = true;
+    m_pBoundVertexShader = NULL;
+    m_pBoundPixelShader = NULL;
+    m_fVSConstantsDirty = true;
+    m_fPSConstantsDirty = true;
+    m_fPSIntBoolConstantsDirty = true;
+    m_fFFTransformDirty = true;
+    m_fVertexFormatDirty = true;
+    m_fVertexBufferDirty = true;
+    m_fIndexBufferDirty = true;
+    m_fTopologyDirty = true;
+    m_fScissorDirty = true;
+    m_fViewportDirty = true;
+
+    if (m_pRTV || m_pDSV)
+    {
+        m_pD3DContext->OMSetRenderTargets(1, &m_pRTV, m_pDSV);
+    }
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Render targets
+//
+//-----------------------------------------------------------------------------
+
+HRESULT
+CHwRenderStateManager::SetRenderTargetView(
+    __in_ecount_opt(1) ID3D11RenderTargetView *pRTV,
+    UINT uWidth,
+    UINT uHeight
+    )
+{
+    if (pRTV != m_pRTV)
+    {
+        // 이 리소스가 SRV로 묶여 있을 수 있다. 먼저 전부 떼어낸다.
+        UnbindAllTextures();
+
+        m_pRTV = pRTV;
+        m_pD3DContext->OMSetRenderTargets(1, &m_pRTV, m_pDSV);
+    }
+
+    m_uRenderTargetWidth = uWidth;
+    m_uRenderTargetHeight = uHeight;
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetDepthStencilView(
+    __in_ecount_opt(1) ID3D11DepthStencilView *pDSV,
+    UINT uWidth,
+    UINT uHeight
+    )
+{
+    if (pDSV != m_pDSV)
+    {
+        m_pDSV = pDSV;
+        m_pD3DContext->OMSetRenderTargets(1, &m_pRTV, m_pDSV);
+    }
+
+    m_uDepthStencilSurfaceWidth = uWidth;
+    m_uDepthStencilSurfaceHeight = uHeight;
+
+    return S_OK;
+}
+
+bool
+CHwRenderStateManager::IsDepthStencilSurfaceSmallerThan(
+    UINT uWidth,
+    UINT uHeight
+    ) const
+{
+    if (m_pDSV == NULL)
+    {
+        // No surface is set and therefore not smaller
+        return false;
+    }
+
+    return (   (m_uDepthStencilSurfaceWidth < uWidth)
+            || (m_uDepthStencilSurfaceHeight < uHeight));
+}
+
+HRESULT
+CHwRenderStateManager::ReleaseUseOfDepthStencilBuffer(
+    __in_ecount(1) ID3D11DepthStencilView *pDSV
+    )
+{
+    if (m_pDSV == pDSV)
+    {
+        return SetDepthStencilView(NULL, 0, 0);
+    }
+
+    return S_OK;
+}
+
+void
+CHwRenderStateManager::UnbindAllTextures()
+{
+    bool fAnyBound = false;
+
+    for (UINT i = 0; i < MIL_TEXTURE_STAGE_COUNT; i++)
+    {
+        if (m_rgpTextures[i] != NULL)
+        {
+            fAnyBound = true;
+        }
+        m_rgpTextures[i] = NULL;
+        m_rgfTextureKnown[i] = false;
+    }
+
+    if (fAnyBound)
+    {
+        ID3D11ShaderResourceView *rgNull[MIL_TEXTURE_STAGE_COUNT] = { 0 };
+        m_pD3DContext->PSSetShaderResources(0, MIL_TEXTURE_STAGE_COUNT, rgNull);
+    }
+
+    m_fTexturesDirty = true;
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Blend
+//
+//-----------------------------------------------------------------------------
+
+HRESULT
+CHwRenderStateManager::SetAlphaBlend(BOOL fEnable, D3D11_BLEND src, D3D11_BLEND dest)
+{
+    if (m_blend.Enable != fEnable || m_blend.SrcBlend != src || m_blend.DestBlend != dest)
+    {
+        m_blend.Enable = fEnable;
+        m_blend.SrcBlend = src;
+        m_blend.DestBlend = dest;
+        m_fBlendDirty = true;
+    }
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetBlendFactor(D3DCOLOR color)
+{
+    if (m_blendFactor != color)
+    {
+        m_blendFactor = color;
+        m_fBlendDirty = true;
+    }
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetColorWriteMask(UINT8 mask)
+{
+    if (m_blend.WriteMask != mask)
+    {
+        m_blend.WriteMask = mask;
+        m_fBlendDirty = true;
+    }
+    return S_OK;
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Depth / stencil
+//
+//-----------------------------------------------------------------------------
+
+HRESULT CHwRenderStateManager::SetDepthEnable(BOOL fEnable)
+{
+    if (m_depthStencil.DepthEnable != fEnable) { m_depthStencil.DepthEnable = fEnable; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetDepthWriteEnable(BOOL fEnable)
+{
+    if (m_depthStencil.DepthWriteEnable != fEnable) { m_depthStencil.DepthWriteEnable = fEnable; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetDepthFunc(D3D11_COMPARISON_FUNC func)
+{
+    if (m_depthStencil.DepthFunc != func) { m_depthStencil.DepthFunc = func; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetStencilEnable(BOOL fEnable)
+{
+    if (m_depthStencil.StencilEnable != fEnable) { m_depthStencil.StencilEnable = fEnable; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetStencilFunc(D3D11_COMPARISON_FUNC func)
+{
+    if (m_depthStencil.StencilFunc != func) { m_depthStencil.StencilFunc = func; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetStencilRef(UINT uRef)
+{
+    if (m_uStencilRef != uRef) { m_uStencilRef = uRef; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetStencilWriteMask(UINT8 mask)
+{
+    if (m_depthStencil.StencilWriteMask != mask) { m_depthStencil.StencilWriteMask = mask; m_fDepthStencilDirty = true; }
+    return S_OK;
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Rasterizer
+//
+//-----------------------------------------------------------------------------
+
+HRESULT CHwRenderStateManager::SetFillMode(D3D11_FILL_MODE mode)
+{
+#if DBG
+    if (IsTagEnabled(tagWireframe))
+    {
+        mode = D3D11_FILL_WIREFRAME;
+    }
+#endif
+    if (m_rasterizer.FillMode != mode) { m_rasterizer.FillMode = mode; m_fRasterizerDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetCullMode(D3D11_CULL_MODE mode)
+{
+    if (m_rasterizer.CullMode != mode) { m_rasterizer.CullMode = mode; m_fRasterizerDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetMultisampleAntialias(BOOL fEnable)
+{
+    if (m_rasterizer.MultisampleEnable != fEnable) { m_rasterizer.MultisampleEnable = fEnable; m_fRasterizerDirty = true; }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetAntialiasedLineEnable(BOOL fEnable)
+{
+    if (m_rasterizer.AntialiasedLineEnable != fEnable) { m_rasterizer.AntialiasedLineEnable = fEnable; m_fRasterizerDirty = true; }
+    return S_OK;
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Samplers
+//
+//-----------------------------------------------------------------------------
+
+HRESULT CHwRenderStateManager::SetSamplerFilter(DWORD dwSampler, D3D11_FILTER filter, BOOL fUseMipMaps)
+{
+    Assert(dwSampler < MIL_SAMPLER_COUNT);
+    if (m_rgSamplers[dwSampler].Filter != filter || m_rgSamplers[dwSampler].UseMipMaps != fUseMipMaps)
+    {
+        m_rgSamplers[dwSampler].Filter = filter;
+        m_rgSamplers[dwSampler].UseMipMaps = fUseMipMaps;
+        m_rgfSamplerDirty[dwSampler] = true;
+        m_fAnySamplerDirty = true;
+    }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetSamplerAddressModes(DWORD dwSampler, D3D11_TEXTURE_ADDRESS_MODE u, D3D11_TEXTURE_ADDRESS_MODE v)
+{
+    Assert(dwSampler < MIL_SAMPLER_COUNT);
+    if (m_rgSamplers[dwSampler].AddressU != u || m_rgSamplers[dwSampler].AddressV != v)
+    {
+        m_rgSamplers[dwSampler].AddressU = u;
+        m_rgSamplers[dwSampler].AddressV = v;
+        m_rgfSamplerDirty[dwSampler] = true;
+        m_fAnySamplerDirty = true;
+    }
+    return S_OK;
+}
+
+HRESULT CHwRenderStateManager::SetSamplerBorderColor(DWORD dwSampler, D3DCOLOR color)
+{
+    Assert(dwSampler < MIL_SAMPLER_COUNT);
+    if (m_rgSamplers[dwSampler].BorderColor != color)
+    {
+        m_rgSamplers[dwSampler].BorderColor = color;
+        m_rgfSamplerDirty[dwSampler] = true;
+        m_fAnySamplerDirty = true;
+    }
+    return S_OK;
+}
+
+//+----------------------------------------------------------------------------
+//
+//  Fixed function texture stages
+//
+//-----------------------------------------------------------------------------
+
+HRESULT
+CHwRenderStateManager::SetTextureStageOperation(
+    DWORD dwStage,
+    __in_ecount(1) const MilTextureStageState &op
+    )
+{
+    Assert(dwStage < MIL_FF_STAGE_COUNT);
+    Assert(op.ColorOp != MilTexOp_Disable);
+
+    MilTextureStageState newState = op;
+    newState.TexCoordIndex = m_rgStages[dwStage].TexCoordIndex;
+
+    if (m_rgStages[dwStage] != newState)
+    {
+        m_rgStages[dwStage] = newState;
+        m_fStagesDirty = true;
+    }
+
+    if (dwStage >= m_cActiveStages)
+    {
+        m_cActiveStages = dwStage + 1;
+        m_fStagesDirty = true;
+    }
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::DisableTextureStage(DWORD dwStage)
+{
+    Assert(dwStage <= MIL_FF_STAGE_COUNT);
+
+    if (dwStage < m_cActiveStages)
+    {
+        m_cActiveStages = dwStage;
+        m_fStagesDirty = true;
+    }
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetTexCoordIndex(DWORD dwStage, UINT uTexCoordIndex)
+{
+    Assert(dwStage < MIL_FF_STAGE_COUNT);
+
+    if (m_rgStages[dwStage].TexCoordIndex != uTexCoordIndex)
+    {
+        m_rgStages[dwStage].TexCoordIndex = uTexCoordIndex;
+        m_fStagesDirty = true;
+    }
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetDefaultTexCoordIndices()
+{
+    for (UINT i = 0; i < MIL_FF_STAGE_COUNT; i++)
+    {
+        if (m_rgStages[i].TexCoordIndex != i)
+        {
+            m_rgStages[i].TexCoordIndex = i;
+            m_fStagesDirty = true;
+        }
+    }
+
+    return S_OK;
+}
+
+//+------------------------------------------------------------------------
+//
+//  Shader constants
+//
+//-------------------------------------------------------------------------
+
+void
+CHwRenderStateManager::MarkVSConstantsDirty(UINT nRegisterIndex, UINT nRegisterCount)
+{
+    UNREFERENCED_PARAMETER(nRegisterIndex);
+    UNREFERENCED_PARAMETER(nRegisterCount);
+    m_fVSConstantsDirty = true;
+}
+
+void
+CHwRenderStateManager::MarkPSConstantsDirty(UINT nRegisterIndex, UINT nRegisterCount)
+{
+    UNREFERENCED_PARAMETER(nRegisterIndex);
+    UNREFERENCED_PARAMETER(nRegisterCount);
+    m_fPSConstantsDirty = true;
 }
 
 //+----------------------------------------------------------------------------
@@ -221,642 +704,6 @@ CHwRenderStateManager::Check2DTransformInVertexShader(
     }
 }
 
-
-//+----------------------------------------------------------------------------
-//
-//  Function:   CHwRenderStateManager::ctor
-//
-//  Synopsis:   Initializes the memers.
-//
-//-----------------------------------------------------------------------------
-CHwRenderStateManager::CHwRenderStateManager()
-{
-    m_pID3DDevice = NULL;
-    m_pID3DDeviceEx = NULL;
-    m_f2DTransformsUsedForFixedFunction = FALSE;
-    m_f2DTransformUsedForVertexShader = FALSE;
-    m_u2DTransformVertexShaderStartRegister = 0;
-
-    m_nMaxTextureBlendStage = 0;
-
-    m_fClipSet = FALSE;
-
-    m_uDepthStencilSurfaceWidth  = 0;
-    m_uDepthStencilSurfaceHeight = 0;
-
-    m_fTexCoordIndicesDefault = false;
-
-    //
-    // No need to set m_rcClip since m_fClipSet is FALSE.
-    //
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::dtor
-//
-//  Synopsis:   Release Objects
-//
-//-------------------------------------------------------------------------
-CHwRenderStateManager::~CHwRenderStateManager()
-{
-    ReleaseInterface(m_pID3DDevice);
-    ReleaseInterface(m_pID3DDeviceEx);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::GetTransform
-//
-//  Synopsis:   Retrieves the transform set.  This function branches based on
-//              the transform state required, and will return only 1 type of
-//              WORLD transform, and that's D3DTS_WORLD.  It's the only world
-//              transform we use, and by avoiding the rest of the world
-//              transform table we avoid about 16k of memory.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::GetTransform(
-    D3DTRANSFORMSTATETYPE state,
-    __out_ecount(1) CMILMatrix * pMatrix
-    ) const
-{
-    HRESULT hr = S_OK;
-
-    if (state < 256)
-    {
-        IFC(m_nonWorldTransforms.GetState(
-            state,
-            pMatrix
-            ));
-    }
-    else
-    {
-        //
-        // There are 256 possible world transforms in D3D but since we only use
-        // 1, we only support getting the value of 1 of them.
-        //
-
-        Assert(state == D3DTS_WORLD);
-
-        IFC(m_worldTransform.GetState(
-            0,
-            pMatrix
-            ));
-    }
-
-Cleanup:
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetTexture
-//
-//  Synopsis:   Sets the texture on the D3D Device and then updates our state
-//              settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetTexture(
-    DWORD dwStage,
-    __in_ecount_opt(1) IDirect3DBaseTexture9 *pTexture
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetTexture(
-        dwStage,
-        pTexture
-        ));
-
-Cleanup:
-    m_textures.UpdateState(
-        hr,
-        dwStage,
-        pTexture
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetTextureStageState
-//
-//  Synopsis:   Sets the texture stage state on the D3D Device and then
-//              updates our state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetTextureStageState(
-    DWORD dwStage,
-    D3DTEXTURESTAGESTATETYPE state,
-    DWORD dwValue
-    )
-{
-    HRESULT hr = S_OK;
-
-    if (state == D3DTSS_TEXCOORDINDEX)
-    {
-        if (dwValue != dwStage)
-        {
-            m_fTexCoordIndicesDefault = false;
-        }
-    }
-
-    IFC(m_pID3DDevice->SetTextureStageState(
-        dwStage,
-        state,
-        dwValue
-        ));
-
-Cleanup:
-    m_textureStageStates.UpdateState(
-        hr,
-        CalcTextureStageStatePos(dwStage, state),
-        dwValue
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::SetDefaultTexCoordIndices
-//
-//  Synopsis:   Sets the values of D3DTSS_TEXCOORDINDEX for each stage
-//              to its default (same as the stage number.)
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::SetDefaultTexCoordIndices(
-    )
-{
-    HRESULT hr = S_OK;
-
-    if (!m_fTexCoordIndicesDefault)
-    {
-        for (DWORD dwStage = 0; dwStage < m_nMaxTextureBlendStage; ++dwStage)
-        {
-            IFC(SetTextureStageState(
-                dwStage,
-                D3DTSS_TEXCOORDINDEX,
-                dwStage
-                ));
-        }
-
-        m_fTexCoordIndicesDefault = true;
-    }
-
-Cleanup:
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetSamplerState
-//
-//  Synopsis:   Sets the sampler stage state on the D3D Device and then
-//              updates our state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetSamplerState(
-    DWORD dwSampler,
-    D3DSAMPLERSTATETYPE state,
-    DWORD dwValue
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetSamplerState(
-        dwSampler,
-        state,
-        dwValue
-        ));
-
-Cleanup:
-    m_samplerStageStates.UpdateState(
-        hr,
-        CalcSamplerStatePos(dwSampler, state),
-        dwValue
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetFVF
-//
-//  Synopsis:   Sets the FVF on the D3D Device and then updates our state
-//              settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetFVF(
-    DWORD dwFVF
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetFVF(
-        dwFVF
-        ));
-
-Cleanup:
-    m_stateFVF.UpdateState(
-        hr,
-        0,
-        dwFVF
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetVertexShader
-//
-//  Synopsis:   Sets the Vertex Shader on the D3D Device and then updates our
-//              state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetVertexShader(
-    __in_ecount_opt(1) IDirect3DVertexShader9 *pVertexShader
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetVertexShader(
-        pVertexShader
-        ));
-
-Cleanup:
-    m_stateVertexShader.UpdateState(
-        hr,
-        0,
-        pVertexShader
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetPixelShader
-//
-//  Synopsis:   Sets the Pixel Shader on the D3D Device and then updates our
-//              state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetPixelShader(
-    __in_ecount_opt(1) IDirect3DPixelShader9 *pPixelShader
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetPixelShader(
-        pPixelShader
-        ));
-
-Cleanup:
-    m_statePixelShader.UpdateState(
-        hr,
-        0,
-        pPixelShader
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetDepthStencilSurface
-//
-//  Synopsis:   Sets the depth/stencil buffer on the D3D Device and then updates
-//              our state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetDepthStencilSurface(
-    __in_ecount_opt(1) IDirect3DSurface9 *pDepthStencilSurface,
-    UINT uWidth,
-    UINT uHeight
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetDepthStencilSurface(
-        pDepthStencilSurface
-        ));
-
-    m_uDepthStencilSurfaceWidth = uWidth;
-    m_uDepthStencilSurfaceHeight = uHeight;
-
-Cleanup:
-    m_depthStencilSurface.UpdateState(
-        hr,
-        0,
-        pDepthStencilSurface
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetRenderState
-//
-//  Synopsis:   Sets the RenderState on the D3D Device and then updates our
-//              state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetRenderState(
-    D3DRENDERSTATETYPE state,
-    DWORD dwValue
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetRenderState(
-        state,
-        dwValue
-        ));
-
-Cleanup:
-    m_renderStates.UpdateState(
-        hr,
-        state,
-        dwValue
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetWorldTransform
-//
-//  Synopsis:   Sets the World transform on the D3D Device and then updates our
-//              state settings based on it's success.
-//
-//              Since we only use 1 world transform we don't store all 256
-//              possible world transforms.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetWorldTransform(
-    __in_ecount(1) const CBaseMatrix *pMatrix
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetTransform(
-        D3DTS_WORLD,
-        pMatrix
-        ));
-
-Cleanup:
-    m_worldTransform.UpdateState(
-        hr,
-        0,
-        *pMatrix
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::ForceSetNonWorldTransform
-//
-//  Synopsis:   Sets the Non World transform on the D3D Device and then updates
-//              our state settings based on it's success.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::ForceSetNonWorldTransform(
-    D3DTRANSFORMSTATETYPE state,
-    __in_ecount(1) const CBaseMatrix *pMatrix
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetTransform(
-        state,
-        pMatrix
-        ));
-
-Cleanup:
-    m_nonWorldTransforms.UpdateState(
-        hr,
-        state,
-        *pMatrix
-        );
-
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::SetPixelShaderConstantF
-//
-//  Synopsis:   Sets the shader constant on the device.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::SetPixelShaderConstantF(
-    UINT nRegisterIndex,
-    __in_ecount(4*nRegisterCount) const float * prConstantData,
-    UINT nRegisterCount
-    )
-{
-    HRESULT hr = S_OK;
-
-    // Shader constants are typically one register or a matrix (four). In the 
-    // matrix case, it's rare that only one line changes so to reduce calls to
-    // D3D we will set all four with one call as soon as we find a difference
-    bool fAnyDontMatch = false;
-    for (UINT i = 0; i < nRegisterCount; ++i)
-    {
-        const vector4 &pd3dVector4 = reinterpret_cast<const vector4 &>(prConstantData[4 * i]);
-        if (!m_statePixelShaderFloat4Constants.IsStateSet(nRegisterIndex + i, pd3dVector4))
-        {
-            fAnyDontMatch = true;
-            break;
-        }
-    }
-
-    if (fAnyDontMatch)
-    {
-        IFC(ForceSetPixelShaderConstantF(
-            nRegisterIndex,
-            prConstantData,
-            nRegisterCount
-            ));
-    }
-
-Cleanup:
-    RRETURN(hr);
-}
-
-HRESULT
-CHwRenderStateManager::ForceSetPixelShaderConstantF(
-    UINT nRegisterIndex,
-    __in_ecount(4*nRegisterCount) const float * prConstantData,
-    UINT nRegisterCount
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetPixelShaderConstantF(
-        nRegisterIndex,
-        prConstantData,
-        nRegisterCount
-        ));
-
-Cleanup:
-    for (UINT i = 0; i < nRegisterCount; ++i)
-    {
-        const vector4 &pd3dVector4 = reinterpret_cast<const vector4&>(prConstantData[4 * i]);
-        m_statePixelShaderFloat4Constants.UpdateState(
-            hr, 
-            nRegisterIndex + i, 
-            pd3dVector4
-            );
-    }
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::SetPixelShaderConstantI
-//
-//  Synopsis:   Sets the shader constant on the device.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::SetPixelShaderConstantI(
-    UINT nRegisterIndex,
-    __in_ecount(4) const int * pConstantData
-    )
-{
-    HRESULT hr = S_OK;
-
-    bool fDoesNotMatch = false;
-
-    // Even though there are 4 elements, they are all the same, so only cache the first one.
-    const int &int4 = reinterpret_cast<const int &>(pConstantData[0]);
-    if (!m_statePixelShaderInt4Constants.IsStateSet(nRegisterIndex, int4))
-    {
-        fDoesNotMatch = true;
-    }
-
-    if (fDoesNotMatch)
-    {
-        IFC(ForceSetPixelShaderConstantI(
-            nRegisterIndex,
-            pConstantData
-            ));
-    }
-
-Cleanup:
-    RRETURN(hr);
-}
-
-HRESULT
-CHwRenderStateManager::ForceSetPixelShaderConstantI(
-    UINT nRegisterIndex,
-    __in_ecount(4) const int * pConstantData
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetPixelShaderConstantI(
-        nRegisterIndex,
-        pConstantData,
-        1
-        ));
-
-Cleanup:
-    const int &int4 = reinterpret_cast<const int &>(pConstantData[0]);
-    m_statePixelShaderInt4Constants.UpdateState(
-        hr, 
-        nRegisterIndex, 
-        int4
-        );
-    RRETURN(hr);
-}
-
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::SetPixelShaderConstantB
-//
-//  Synopsis:   Sets the shader constant on the device.
-//
-//-------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::SetPixelShaderConstantB(
-    UINT nRegisterIndex,
-    BOOL constantData
-    )
-{
-    HRESULT hr = S_OK;
-
-    bool fDoesNotMatch = false;
-    if (!m_statePixelShaderBoolConstants.IsStateSet(nRegisterIndex, constantData))
-    {
-        fDoesNotMatch = true;
-    }
-
-    if (fDoesNotMatch)
-    {
-        IFC(ForceSetPixelShaderConstantB(
-            nRegisterIndex,
-            constantData
-            ));
-    }
-
-Cleanup:
-    RRETURN(hr);
-}
-
-HRESULT
-CHwRenderStateManager::ForceSetPixelShaderConstantB(
-    UINT nRegisterIndex,
-    BOOL constantData
-    )
-{
-    HRESULT hr = S_OK;
-
-    IFC(m_pID3DDevice->SetPixelShaderConstantB(
-        nRegisterIndex,
-        &constantData,
-        1
-        ));
-
-Cleanup:
-    m_statePixelShaderBoolConstants.UpdateState(
-        hr, 
-        nRegisterIndex, 
-        constantData
-        );
-    RRETURN(hr);
-}
-    
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::SetVertexShaderConstantF
-//
-//  Synopsis:   Sets the shader constant on the device.
-//
-//-------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::SetVertexShaderConstantF(
     UINT nRegisterIndex,
@@ -866,34 +713,22 @@ CHwRenderStateManager::SetVertexShaderConstantF(
 {
     HRESULT hr = S_OK;
 
-    //     Remove this
-    //  This was a trick to keep 2D from sending the transforms multiple
-    //  times. It should no longer be necessary but I don't want to break
-    //  something right now.
-    Check2DTransformInVertexShader(
-        nRegisterIndex,
-        nRegisterCount
-        );
-
-    // See comment is SetPixelShaderConstantF for fAnyDontMatch explanation
-    bool fAnyDontMatch = false;
-    for (UINT i = 0; i < nRegisterCount; ++i)
+    if (nRegisterIndex + nRegisterCount > MIL_VS_FLOAT4_CONSTANTS)
     {
-        const vector4 &pd3dVector4 = reinterpret_cast<const vector4 &>(prConstantData[4 * i]);
-        if (!m_stateVertexShaderFloat4Constants.IsStateSet(nRegisterIndex + i, pd3dVector4))
-        {
-            fAnyDontMatch = true;
-            break;
-        }
+        IFC(WGXERR_INVALIDPARAMETER);
     }
 
-    if (fAnyDontMatch)
+    Check2DTransformInVertexShader(nRegisterIndex, nRegisterCount);
+
     {
-        IFC(ForceSetVertexShaderConstantF(
-            nRegisterIndex,
-            prConstantData,
-            nRegisterCount
-            ));
+        float *pDest = &m_rgVSFloat4[nRegisterIndex * 4];
+        size_t cb = sizeof(float) * 4 * nRegisterCount;
+
+        if (memcmp(pDest, prConstantData, cb) != 0)
+        {
+            CopyMemory(pDest, prConstantData, cb);
+            MarkVSConstantsDirty(nRegisterIndex, nRegisterCount);
+        }
     }
 
 Cleanup:
@@ -901,7 +736,7 @@ Cleanup:
 }
 
 HRESULT
-CHwRenderStateManager::ForceSetVertexShaderConstantF(
+CHwRenderStateManager::SetPixelShaderConstantF(
     UINT nRegisterIndex,
     __in_ecount(4*nRegisterCount) const float * prConstantData,
     UINT nRegisterCount
@@ -909,198 +744,126 @@ CHwRenderStateManager::ForceSetVertexShaderConstantF(
 {
     HRESULT hr = S_OK;
 
-    IFC(m_pID3DDevice->SetVertexShaderConstantF(
-        nRegisterIndex,
-        prConstantData,
-        nRegisterCount
-        ));
+    if (nRegisterIndex + nRegisterCount > MIL_PS_FLOAT4_CONSTANTS)
+    {
+        IFC(WGXERR_INVALIDPARAMETER);
+    }
+
+    {
+        float *pDest = &m_rgPSFloat4[nRegisterIndex * 4];
+        size_t cb = sizeof(float) * 4 * nRegisterCount;
+
+        if (memcmp(pDest, prConstantData, cb) != 0)
+        {
+            CopyMemory(pDest, prConstantData, cb);
+            MarkPSConstantsDirty(nRegisterIndex, nRegisterCount);
+        }
+    }
 
 Cleanup:
-    for (UINT i = 0; i < nRegisterCount; ++i)
-    {
-        const vector4 &pd3dVector4 = reinterpret_cast<const vector4 &>(prConstantData[4 * i]);
-        m_stateVertexShaderFloat4Constants.UpdateState(
-            hr, 
-            nRegisterIndex + i, 
-            pd3dVector4
-            );
-    }
     RRETURN(hr);
 }
 
-//+-----------------------------------------------------------------------------
-//
-//  Member:     CD3DRenderState::InvalidateScissorRect
-//
-//  Synopsis:   Invalidates the current scissor rect so that next time
-//              SetScissorRect is called, the rect will actually be set
-//              in the device.
-//
-//      2004/05/21 chrisra
-//          Ported it from CD3DRenderStateManager
-//------------------------------------------------------------------------------
-void
-CHwRenderStateManager::InvalidateScissorRect()
-{
-    m_renderStates.SetToUnknown(D3DRS_SCISSORTESTENABLE);
-    ZeroMemory(&m_rcScissorRect, sizeof(m_rcScissorRect));
-}
-
-//+-----------------------------------------------------------------------------
-//
-//  Member:     CD3DRenderState::ScissorRectChanged
-//
-//  Synopsis:   Notifies the render state that the scissor rect has changed
-//              somehow (i.e. via SetRenderTarget) without SetScissorRect
-//              being called.
-//
-//      2004/05/21 chrisra
-//          Ported it from CD3DRenderStateManager
-//------------------------------------------------------------------------------
-void
-CHwRenderStateManager::ScissorRectChanged(
-    __in_ecount(1) const MilPointAndSizeL *prc
-    )
-{
-    RtlCopyMemory(&m_rcScissorRect, prc, sizeof(m_rcScissorRect));
-}
-
-//+-----------------------------------------------------------------------------
-//
-//  Member:     CD3DRenderState::SetScissorRect
-//
-//  Synopsis:   Sets the scissor rect on the device, or disables it if
-//              prc == NULL
-//
-//      2004/05/21 chrisra
-//          Ported it from CD3DRenderStateManager
-//------------------------------------------------------------------------------
 HRESULT
-CHwRenderStateManager::SetScissorRect(
-    __in_ecount_opt(1) const MilPointAndSizeL *prc
+CHwRenderStateManager::SetPixelShaderConstantI(
+    UINT nRegisterIndex,
+    __in_ecount(4) const int * pConstantData
     )
 {
     HRESULT hr = S_OK;
 
-    EnableStatus eEnable = (prc != NULL) ? ES_ENABLED : ES_DISABLED;
-    DWORD dwScissorStateFALSE = FALSE;
-
-    Assert(prc == NULL ||
-           prc->Width > 0 &&
-           prc->Height > 0);
-
-    // Set the scissor rect if we are enabling scissor rects
-    // for the first time or if we are changing the rectangle
-
-    //
-    // Note that we theoretically shouldn't have to call SetScissorRect
-    // again when re-enabling scissor rect if the rectangle doesn't
-    // change.  However, the NV35 (with driver 6.14.10.4480) resets the scissor
-    // rect in this case.  The 9700 doesn't reset the scissor rect.
-    //
-    // In any case, setting the scissor rect when we go from disabled to
-    // enabled certainly doesn't hurt.
-    //
-
-    if (eEnable == ES_ENABLED &&
-        (m_renderStates.IsStateSet(D3DRS_SCISSORTESTENABLE, dwScissorStateFALSE) ||
-          !RtlEqualMemory(prc, &m_rcScissorRect, sizeof(*prc))))
+    if (nRegisterIndex >= MIL_PS_INT4_CONSTANTS)
     {
-        RECT rcScissor;
-
-        rcScissor.left = prc->X;
-        rcScissor.top = prc->Y;
-        rcScissor.right = prc->X + prc->Width;
-        rcScissor.bottom = prc->Y + prc->Height;
-
-        Assert(rcScissor.left < rcScissor.right &&
-               rcScissor.top < rcScissor.bottom);
-
-        MIL_THR(m_pID3DDevice->SetScissorRect(&rcScissor));
-        if (SUCCEEDED(hr))
-        {
-            m_rcScissorRect = *prc;
-        }
-        else
-        {
-            IGNORE_HR(SetRenderState(
-                D3DRS_SCISSORTESTENABLE,
-                FALSE
-                ));
-
-            goto Cleanup;
-        }
+        IFC(WGXERR_INVALIDPARAMETER);
     }
 
-    IFC(SetRenderState(
-        D3DRS_SCISSORTESTENABLE,
-        eEnable
-        ));
+    {
+        int *pDest = &m_rgPSInt4[nRegisterIndex * 4];
+
+        if (memcmp(pDest, pConstantData, sizeof(int) * 4) != 0)
+        {
+            CopyMemory(pDest, pConstantData, sizeof(int) * 4);
+            m_fPSIntBoolConstantsDirty = true;
+        }
+    }
 
 Cleanup:
-    if (FAILED(hr))
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::SetPixelShaderConstantB(
+    UINT nRegisterIndex,
+    BOOL constantData
+    )
+{
+    HRESULT hr = S_OK;
+
+    if (nRegisterIndex >= MIL_PS_BOOL_CONSTANTS)
     {
-        InvalidateScissorRect();
+        IFC(WGXERR_INVALIDPARAMETER);
     }
+
+    {
+        int *pDest = &m_rgPSBool4[nRegisterIndex * 4];
+        int value = constantData ? 1 : 0;
+
+        if (pDest[0] != value)
+        {
+            pDest[0] = pDest[1] = pDest[2] = pDest[3] = value;
+            m_fPSIntBoolConstantsDirty = true;
+        }
+    }
+
+Cleanup:
     RRETURN(hr);
 }
 
 //+------------------------------------------------------------------------
 //
-//  Member:     CHwRenderStateManager::IsDepthStencilSurfaceSmallerThan
-//
-//  Synopsis:   Checks if we have a depth/stencil buffer set on the d3ddevice
-//              that has any dimension smaller than this given.
-//
-//              Note: returns true if the set state is unknown
+//  Transforms
 //
 //-------------------------------------------------------------------------
-bool
-CHwRenderStateManager::IsDepthStencilSurfaceSmallerThan(
-    UINT uWidth,
-    UINT uHeight
-    ) const
+
+HRESULT
+CHwRenderStateManager::SetTransform(
+    MilTransformState state,
+    __in_ecount(1) const CBaseMatrix *pMatrix
+    )
 {
-    IDirect3DSurface9 *pD3DSurface = NULL;
+    Assert(state < MilTransform_Count);
 
-    bool fIsSmaller;
+    CMILMatrix const &mat = *reinterpret_cast<CMILMatrix const *>(pMatrix);
 
-    if (FAILED(m_depthStencilSurface.GetStateNoAddRef(0, &pD3DSurface)))
+    if (!(m_rgTransforms[state] == mat))
     {
-        // Actual state is unknown - err on side of safety and return true
-        fIsSmaller = true;
-    }
-    else if (pD3DSurface == NULL)
-    {
-        // No surface is set and therefore not smaller
-        fIsSmaller = false;
-    }
-    else
-    {
-        // Check actual size
-        fIsSmaller = (   (m_uDepthStencilSurfaceWidth < uWidth)
-                      || (m_uDepthStencilSurfaceHeight < uHeight));
+        m_rgTransforms[state] = mat;
+        m_fFFTransformDirty = true;
+        m_f2DTransformsUsedForFixedFunction = FALSE;
+        m_f2DTransformUsedForVertexShader = FALSE;
     }
 
-    return fIsSmaller;
+    return S_OK;
 }
 
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::Define2DTransforms
-//
-//  Synopsis:   Caches the transforms that should be used for 2D rendering.
-//              Also sets the 2DTransformsUsed flag to FALSE so we know that
-//              we are not using the 2D transforms currently defined.
-//
-//-------------------------------------------------------------------------
+HRESULT
+CHwRenderStateManager::GetTransform(
+    MilTransformState state,
+    __out_ecount(1) CMILMatrix *pMatrix
+    ) const
+{
+    Assert(state < MilTransform_Count);
+
+    *pMatrix = m_rgTransforms[state];
+
+    return S_OK;
+}
+
 HRESULT
 CHwRenderStateManager::Define2DTransforms(
     __in_ecount(1) const CMatrix<CoordinateSpace::DeviceHPC,CoordinateSpace::D3DHomogeneousClipIPC> *pProjection
     )
 {
-    HRESULT hr = S_OK;
-
     m_mat2DProjectionTransform = *pProjection;
 
     m_f2DTransformsUsedForFixedFunction = FALSE;
@@ -1108,18 +871,9 @@ CHwRenderStateManager::Define2DTransforms(
 
     m_u2DTransformVertexShaderStartRegister = 0xffffffff;
 
-    RRETURN(hr);
+    return S_OK;
 }
 
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::Set2DTransformForFixedFunction
-//
-//  Synopsis:   Makes sure we are using the transforms defined to be 2D.
-//              This will be called eventually from ensurestate in the
-//              HardwareSurfaceRenderTarget.
-//
-//-------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::Set2DTransformForFixedFunction()
 {
@@ -1127,19 +881,9 @@ CHwRenderStateManager::Set2DTransformForFixedFunction()
 
     if (!m_f2DTransformsUsedForFixedFunction)
     {
-        IFC(ForceSetWorldTransform(
-            &IdentityMatrix
-            ));
-
-        IFC(ForceSetNonWorldTransform(
-            D3DTS_VIEW,
-            &IdentityMatrix
-            ));
-
-        IFC(ForceSetNonWorldTransform(
-            D3DTS_PROJECTION,
-            &m_mat2DProjectionTransform
-            ));
+        IFC(SetTransform(MilTransform_World, &IdentityMatrix));
+        IFC(SetTransform(MilTransform_View, &IdentityMatrix));
+        IFC(SetTransform(MilTransform_Projection, &m_mat2DProjectionTransform));
 
         m_f2DTransformsUsedForFixedFunction = TRUE;
     }
@@ -1148,14 +892,6 @@ Cleanup:
     RRETURN(hr);
 }
 
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::Set2DTransformForVertexShader
-//
-//  Synopsis:   Makes sure the transforms defined for 2D are properly set
-//              in the vertex shader at the appropriate register.
-//
-//-------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::Set2DTransformForVertexShader(
     UINT uStartRegister
@@ -1167,43 +903,15 @@ CHwRenderStateManager::Set2DTransformForVertexShader(
         || uStartRegister != m_u2DTransformVertexShaderStartRegister
            )
     {
-        CMILMatrix matWorldToProjection;
         CMILMatrix matShaderTransform;
-
-#if DBG
-        CMILMatrix matDbgWorld;
-        CMILMatrix matDbgView;
-
-        //
-        // We expect the world and view transform to be identity.
-        //
-
-        IFC(GetTransform(
-            D3DTS_WORLD,
-            &matDbgWorld
-            ));
-
-        IFC(GetTransform(
-            D3DTS_VIEW,
-            &matDbgView
-            ));
-
-        Assert(matDbgWorld.IsIdentity());
-        Assert(matDbgView.IsIdentity());
-#endif
-
-        IFC(GetTransform(
-            D3DTS_PROJECTION,
-            &matWorldToProjection
-            ));
 
         //
         // D3D HLSL interprets transforms differently then fixed function,
         // so we need to transpose the matrix.
         //
-        matShaderTransform = matWorldToProjection.transpose();
+        matShaderTransform = m_mat2DProjectionTransform.transpose();
 
-        IFC(ForceSetVertexShaderConstantF(
+        IFC(SetVertexShaderConstantF(
             uStartRegister,
             reinterpret_cast<const float *>(&matShaderTransform),
             4
@@ -1217,14 +925,6 @@ Cleanup:
     RRETURN(hr);
 }
 
-//+------------------------------------------------------------------------
-//
-//  Member:     CHwRenderStateManager::Set3DTransformForVertexShader
-//
-//  Synopsis:   Makes sure the transforms defined for 3D are properly set
-//              in the vertex shader at the appropriate register.
-//
-//-------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::Set3DTransformForVertexShader(
     UINT uStartRegister
@@ -1240,21 +940,7 @@ CHwRenderStateManager::Set3DTransformForVertexShader(
     UINT uRegisterIndex = uStartRegister;
 
     // Calculate WorldView
-    {
-        CMILMatrix matWorld, matView; 
-        
-        IFC(GetTransform(
-            D3DTS_WORLD,
-            &matWorld
-            ));
-
-        IFC(GetTransform(
-            D3DTS_VIEW,
-            &matView
-            ));    
-
-        matWorldView = matWorld * matView;
-    }
+    matWorldView = m_rgTransforms[MilTransform_World] * m_rgTransforms[MilTransform_View];
 
     // Send WorldView
     {
@@ -1264,27 +950,20 @@ CHwRenderStateManager::Set3DTransformForVertexShader(
             uRegisterIndex,
             reinterpret_cast<const float *>(&matResult),
             uNumRegisters
-            ));  
+            ));
 
         uRegisterIndex += uNumRegisters;
     }
 
     // Send WorldViewProj
     {
-        CMILMatrix matProj;
-        
-        IFC(GetTransform(
-            D3DTS_PROJECTION,
-            &matProj
-            ));
+        matResult = matWorldView.multiply_transpose(m_rgTransforms[MilTransform_Projection]);
 
-        matResult = matWorldView.multiply_transpose(matProj);
-        
         IFC(SetVertexShaderConstantF(
             uRegisterIndex,
             reinterpret_cast<const float *>(&matResult),
             uNumRegisters
-            )); 
+            ));
 
         uRegisterIndex += uNumRegisters;
     }
@@ -1309,165 +988,554 @@ Cleanup:
     RRETURN(hr);
 }
 
-//+-----------------------------------------------------------------------------
-//
-//  Member:    CD3DRenderState::DisableTextureStage
-//
-//  Synopsis:  Disable a given texture stage.
-//
-//------------------------------------------------------------------------------
-HRESULT
-CHwRenderStateManager::DisableTextureStage(
-    DWORD dwStage     // The stage to disable. Ranges from 0 up to *and
-                      // including* the maximum stage number. (This way, calling
-                      // code can always call DisableTextureStage, without
-                      // checking if it's actually using all available texture
-                      // stages).
-    )
-{
-    HRESULT hr = S_OK;
-
-    Assert(dwStage <= m_nMaxTextureBlendStage);
-
-    if (dwStage < m_nMaxTextureBlendStage)
-    {
-        IFC(SetTextureStageStateInline(dwStage, D3DTSS_COLOROP, D3DTOP_DISABLE));
-    }
-
-Cleanup:
-    RRETURN(hr);
-}
-
-// error C4995: 'D3DMATRIX': name was marked as #pragma deprecated
-//
-// Ignore deprecation of D3DMATRIX for this prototype because
-// it is defined in the interface this class is implementing
-#pragma warning (push)
-#pragma warning (disable : 4995)
 //+------------------------------------------------------------------------
 //
-//  Function:   CHwRenderStateManager::SetTransform
-//
-//  Synopsis:   Sets the transform, branching on whether it is a world
-//              transform.
+//  Input assembler
 //
 //-------------------------------------------------------------------------
+
 HRESULT
-CHwRenderStateManager::SetTransform(
-    D3DTRANSFORMSTATETYPE state,
-    __in_ecount(1) const D3DMATRIX *pMatrix
+CHwRenderStateManager::SetVertexFormat(MilVertexFormatId format)
+{
+    Assert(format < MilVertexFormat_Count);
+
+    if (!m_fVertexFormatKnown || m_vertexFormat != format)
+    {
+        m_vertexFormat = format;
+        m_fVertexFormatKnown = true;
+        m_fVertexFormatDirty = true;
+
+        // 고정 기능 VS는 형식에 따라 다르다
+        if (m_pVertexShader == NULL)
+        {
+            m_fVertexShaderDirty = true;
+        }
+    }
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::SetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY topology)
+{
+    if (m_topology != topology || m_fTopologyDirty)
+    {
+        m_topology = topology;
+        m_fTopologyDirty = true;
+    }
+
+    return S_OK;
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Scissor rect and viewport
+//
+//------------------------------------------------------------------------------
+
+void
+CHwRenderStateManager::InvalidateScissorRect()
+{
+    m_fScissorRectValid = false;
+    ZeroMemory(&m_rcScissorRect, sizeof(m_rcScissorRect));
+    m_fScissorDirty = true;
+}
+
+void
+CHwRenderStateManager::ScissorRectChanged(
+    __in_ecount(1) const MilPointAndSizeL *prc
     )
 {
-    HRESULT hr = S_OK;
+    RtlCopyMemory(&m_rcScissorRect, prc, sizeof(m_rcScissorRect));
+    m_fScissorRectValid = true;
+    m_fScissorDirty = true;
+}
 
-    if (state < 256)
+HRESULT
+CHwRenderStateManager::SetScissorRect(
+    __in_ecount_opt(1) const MilPointAndSizeL *prc
+    )
+{
+    Assert(prc == NULL ||
+           prc->Width > 0 &&
+           prc->Height > 0);
+
+    if (prc != NULL)
     {
-        CBaseMatrix baseMatrix(pMatrix);
-        IFC(SetNonWorldTransform(state, &baseMatrix));
+        if (!m_fScissorRectValid || !RtlEqualMemory(prc, &m_rcScissorRect, sizeof(*prc)))
+        {
+            m_rcScissorRect = *prc;
+            m_fScissorRectValid = true;
+            m_fScissorDirty = true;
+        }
+
+        if (!m_rasterizer.ScissorEnable)
+        {
+            m_rasterizer.ScissorEnable = TRUE;
+            m_fRasterizerDirty = true;
+        }
     }
     else
     {
-        //
-        // We only support 1 out of the 256 transforms D3D supports.
-        //
-        Assert(state == D3DTS_WORLD);
-
-        CBaseMatrix baseMatrix(pMatrix);
-        IFC(SetWorldTransform(&baseMatrix));
+        if (m_rasterizer.ScissorEnable)
+        {
+            m_rasterizer.ScissorEnable = FALSE;
+            m_fRasterizerDirty = true;
+        }
     }
 
-Cleanup:
-    RRETURN(hr);
+    return S_OK;
 }
-#pragma warning (pop)
 
-//+------------------------------------------------------------------------
-//
-//  Function:   CHwRenderStateManager::SetViewport
-//
-//  Synopsis:   Sets the viewport on the device.
-//
-//-------------------------------------------------------------------------
 HRESULT
 CHwRenderStateManager::SetViewport(
     __in_ecount(1) const MilPointAndSizeL *prcViewport
     )
 {
-    HRESULT hr = S_OK;
-    D3DVIEWPORT9 vp;
-
-    vp.X      = prcViewport->X;
-    vp.Y      = prcViewport->Y;
-    vp.Width  = prcViewport->Width;
-    vp.Height = prcViewport->Height;
-    vp.MinZ   = 0.0f;
-    vp.MaxZ   = 1.0f;
-
-    IFC(m_pID3DDevice->SetViewport(
-        &vp
-        ));
-
-Cleanup:
     m_rcViewport = *prcViewport;
+    m_fViewportDirty = true;
 
-    RRETURN(hr);
+    return S_OK;
 }
 
 //+------------------------------------------------------------------------
 //
-//  Function:   CHwRenderStateManager::ForceSetStreamSource
-//
-//  Synopsis:   Sets the stream on the device.
+//  Apply
 //
 //-------------------------------------------------------------------------
+
 HRESULT
-CHwRenderStateManager::ForceSetStreamSource(
-    __in_ecount_opt(1) IDirect3DVertexBuffer9 *pStream,
-    UINT uVertexStride
-    )
+CHwRenderStateManager::ApplyBlendState()
 {
     HRESULT hr = S_OK;
 
-    IFC(m_pID3DDevice->SetStreamSource(
-        0,
-        pStream,
-        0,
-        uVertexStride
-        ));
+    ID3D11BlendState *pState = m_blendCache.Find(m_blend);
+
+    if (pState == NULL)
+    {
+        D3D11_BLEND_DESC desc;
+
+        ZeroMemory(&desc, sizeof(desc));
+        desc.AlphaToCoverageEnable = FALSE;
+        desc.IndependentBlendEnable = FALSE;
+        desc.RenderTarget[0].BlendEnable = m_blend.Enable;
+        desc.RenderTarget[0].SrcBlend = m_blend.Enable ? m_blend.SrcBlend : D3D11_BLEND_ONE;
+        desc.RenderTarget[0].DestBlend = m_blend.Enable ? m_blend.DestBlend : D3D11_BLEND_ZERO;
+        desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        // D3D9의 단일 블렌드 모드는 알파 채널에도 같은 인자를 쓴다. 색 전용 인자는
+        // 알파에 맞는 것으로 바꾼다.
+        desc.RenderTarget[0].SrcBlendAlpha = desc.RenderTarget[0].SrcBlend;
+        desc.RenderTarget[0].DestBlendAlpha = desc.RenderTarget[0].DestBlend;
+        if (desc.RenderTarget[0].SrcBlendAlpha == D3D11_BLEND_SRC_COLOR) desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+        if (desc.RenderTarget[0].SrcBlendAlpha == D3D11_BLEND_INV_SRC_COLOR) desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        if (desc.RenderTarget[0].SrcBlendAlpha == D3D11_BLEND_DEST_COLOR) desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_DEST_ALPHA;
+        if (desc.RenderTarget[0].SrcBlendAlpha == D3D11_BLEND_INV_DEST_COLOR) desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_INV_DEST_ALPHA;
+        if (desc.RenderTarget[0].DestBlendAlpha == D3D11_BLEND_SRC_COLOR) desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+        if (desc.RenderTarget[0].DestBlendAlpha == D3D11_BLEND_INV_SRC_COLOR) desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        if (desc.RenderTarget[0].DestBlendAlpha == D3D11_BLEND_DEST_COLOR) desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_DEST_ALPHA;
+        if (desc.RenderTarget[0].DestBlendAlpha == D3D11_BLEND_INV_DEST_COLOR) desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_DEST_ALPHA;
+        desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        desc.RenderTarget[0].RenderTargetWriteMask = m_blend.WriteMask;
+
+        IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateBlendState(&desc, &pState)));
+
+        m_blendCache.Add(m_blend, pState);
+        pState->Release();  // cache holds the reference
+    }
+
+    {
+        float rgFactor[4];
+        rgFactor[0] = MIL_COLOR_GET_RED(m_blendFactor) / 255.0f;
+        rgFactor[1] = MIL_COLOR_GET_GREEN(m_blendFactor) / 255.0f;
+        rgFactor[2] = MIL_COLOR_GET_BLUE(m_blendFactor) / 255.0f;
+        rgFactor[3] = MIL_COLOR_GET_ALPHA(m_blendFactor) / 255.0f;
+
+        m_pD3DContext->OMSetBlendState(pState, rgFactor, 0xffffffff);
+    }
+
+    m_fBlendDirty = false;
 
 Cleanup:
-    m_streamSourceVertexBuffer.UpdateState(
-        hr,
-        0,
-        pStream
-        );
-
-    m_streamSourceVertexStride.UpdateState(
-        hr,
-        0,
-        uVertexStride
-        );
-
     RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyDepthStencilState()
+{
+    HRESULT hr = S_OK;
+
+    ID3D11DepthStencilState *pState = m_depthStencilCache.Find(m_depthStencil);
+
+    if (pState == NULL)
+    {
+        D3D11_DEPTH_STENCIL_DESC desc;
+
+        ZeroMemory(&desc, sizeof(desc));
+        desc.DepthEnable = m_depthStencil.DepthEnable;
+        desc.DepthWriteMask = m_depthStencil.DepthWriteEnable ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+        desc.DepthFunc = m_depthStencil.DepthFunc;
+        desc.StencilEnable = m_depthStencil.StencilEnable;
+        desc.StencilReadMask = m_depthStencil.StencilReadMask;
+        desc.StencilWriteMask = m_depthStencil.StencilWriteMask;
+        desc.FrontFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;
+        desc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
+        desc.FrontFace.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+        desc.FrontFace.StencilFunc = m_depthStencil.StencilFunc;
+        desc.BackFace = desc.FrontFace;
+
+        IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateDepthStencilState(&desc, &pState)));
+
+        m_depthStencilCache.Add(m_depthStencil, pState);
+        pState->Release();
+    }
+
+    m_pD3DContext->OMSetDepthStencilState(pState, m_uStencilRef);
+
+    m_fDepthStencilDirty = false;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyRasterizerState()
+{
+    HRESULT hr = S_OK;
+
+    ID3D11RasterizerState *pState = m_rasterizerCache.Find(m_rasterizer);
+
+    if (pState == NULL)
+    {
+        D3D11_RASTERIZER_DESC desc;
+
+        ZeroMemory(&desc, sizeof(desc));
+        desc.FillMode = m_rasterizer.FillMode;
+        desc.CullMode = m_rasterizer.CullMode;
+        // D3D9 D3DCULL_CW culls clockwise triangles; D3D11 with FrontCounterClockwise=FALSE
+        // treats clockwise as front. Keep the D3D9 meaning: CW == cull front faces.
+        desc.FrontCounterClockwise = FALSE;
+        desc.DepthBias = 0;
+        desc.DepthBiasClamp = 0.0f;
+        desc.SlopeScaledDepthBias = 0.0f;
+        desc.DepthClipEnable = TRUE;
+        desc.ScissorEnable = m_rasterizer.ScissorEnable;
+        desc.MultisampleEnable = m_rasterizer.MultisampleEnable;
+        desc.AntialiasedLineEnable = m_rasterizer.AntialiasedLineEnable;
+
+        IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateRasterizerState(&desc, &pState)));
+
+        m_rasterizerCache.Add(m_rasterizer, pState);
+        pState->Release();
+    }
+
+    m_pD3DContext->RSSetState(pState);
+
+    m_fRasterizerDirty = false;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplySamplers()
+{
+    HRESULT hr = S_OK;
+
+    ID3D11SamplerState *rgpSamplers[MIL_SAMPLER_COUNT];
+
+    for (UINT i = 0; i < MIL_SAMPLER_COUNT; i++)
+    {
+        MilSamplerState const &s = m_rgSamplers[i];
+
+        ID3D11SamplerState *pState = m_samplerCache.Find(s);
+
+        if (pState == NULL)
+        {
+            D3D11_SAMPLER_DESC desc;
+
+            ZeroMemory(&desc, sizeof(desc));
+            desc.Filter = s.Filter;
+            desc.AddressU = s.AddressU;
+            desc.AddressV = s.AddressV;
+            desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            desc.MipLODBias = 0.0f;
+            desc.MaxAnisotropy = max(1u, s.MaxAnisotropy);
+            desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            desc.BorderColor[0] = MIL_COLOR_GET_RED(s.BorderColor) / 255.0f;
+            desc.BorderColor[1] = MIL_COLOR_GET_GREEN(s.BorderColor) / 255.0f;
+            desc.BorderColor[2] = MIL_COLOR_GET_BLUE(s.BorderColor) / 255.0f;
+            desc.BorderColor[3] = MIL_COLOR_GET_ALPHA(s.BorderColor) / 255.0f;
+            desc.MinLOD = 0.0f;
+            desc.MaxLOD = s.UseMipMaps ? D3D11_FLOAT32_MAX : 0.0f;
+
+            IFC(MilTranslateD3D11Error(m_pD3DDevice->CreateSamplerState(&desc, &pState)));
+
+            m_samplerCache.Add(s, pState);
+            pState->Release();
+        }
+
+        rgpSamplers[i] = pState;
+        m_rgfSamplerDirty[i] = false;
+    }
+
+    m_pD3DContext->PSSetSamplers(0, MIL_SAMPLER_COUNT, rgpSamplers);
+
+    m_fAnySamplerDirty = false;
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyTextures()
+{
+    m_pD3DContext->PSSetShaderResources(0, MIL_TEXTURE_STAGE_COUNT, m_rgpTextures);
+
+    for (UINT i = 0; i < MIL_TEXTURE_STAGE_COUNT; i++)
+    {
+        m_rgfTextureKnown[i] = true;
+    }
+
+    m_fTexturesDirty = false;
+
+    return S_OK;
+}
+
+HRESULT
+CHwRenderStateManager::ApplyShaders()
+{
+    HRESULT hr = S_OK;
+
+    //
+    // Vertex shader (fixed function emulation when NULL)
+    //
+
+    if (m_fVertexShaderDirty)
+    {
+        ID3D11VertexShader *pVS = m_pVertexShader;
+
+        if (pVS == NULL)
+        {
+            IFC(m_fixedFunction.GetVertexShaderNoRef(m_vertexFormat, &pVS));
+        }
+
+        if (pVS != m_pBoundVertexShader)
+        {
+            m_pD3DContext->VSSetShader(pVS, NULL, 0);
+            m_pBoundVertexShader = pVS;
+        }
+
+        m_fVertexShaderDirty = false;
+    }
+
+    //
+    // Pixel shader (fixed function emulation when NULL)
+    //
+
+    if (m_fPixelShaderDirty || (m_pPixelShader == NULL && m_fStagesDirty))
+    {
+        ID3D11PixelShader *pPS = m_pPixelShader;
+
+        if (pPS == NULL)
+        {
+            IFC(m_fixedFunction.GetPixelShaderNoRef(m_rgStages, m_cActiveStages, &pPS));
+        }
+
+        if (pPS != m_pBoundPixelShader)
+        {
+            m_pD3DContext->PSSetShader(pPS, NULL, 0);
+            m_pBoundPixelShader = pPS;
+        }
+
+        m_fPixelShaderDirty = false;
+        m_fStagesDirty = false;
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyInputAssembler()
+{
+    HRESULT hr = S_OK;
+
+    if (m_fVertexFormatDirty)
+    {
+        ID3D11InputLayout *pLayout = NULL;
+
+        IFC(m_fixedFunction.GetInputLayoutNoRef(m_vertexFormat, &pLayout));
+
+        m_pD3DContext->IASetInputLayout(pLayout);
+        m_fVertexFormatDirty = false;
+    }
+
+    if (m_fVertexBufferDirty)
+    {
+        UINT uOffset = 0;
+        m_pD3DContext->IASetVertexBuffers(0, 1, &m_pVertexBuffer, &m_uVertexStride, &uOffset);
+        m_fVertexBufferDirty = false;
+    }
+
+    if (m_fIndexBufferDirty)
+    {
+        m_pD3DContext->IASetIndexBuffer(m_pIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+        m_fIndexBufferDirty = false;
+    }
+
+    if (m_fTopologyDirty)
+    {
+        m_pD3DContext->IASetPrimitiveTopology(m_topology);
+        m_fTopologyDirty = false;
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyConstants()
+{
+    HRESULT hr = S_OK;
+
+    if (m_fVSConstantsDirty)
+    {
+        IFC(UploadConstantBuffer(m_pVSConstantBuffer, m_rgVSFloat4, sizeof(m_rgVSFloat4)));
+        m_fVSConstantsDirty = false;
+    }
+
+    if (m_fPSConstantsDirty)
+    {
+        IFC(UploadConstantBuffer(m_pPSConstantBuffer, m_rgPSFloat4, sizeof(m_rgPSFloat4)));
+        m_fPSConstantsDirty = false;
+    }
+
+    if (m_fPSIntBoolConstantsDirty)
+    {
+        BYTE rgData[sizeof(m_rgPSInt4) + sizeof(m_rgPSBool4)];
+        CopyMemory(rgData, m_rgPSInt4, sizeof(m_rgPSInt4));
+        CopyMemory(rgData + sizeof(m_rgPSInt4), m_rgPSBool4, sizeof(m_rgPSBool4));
+
+        IFC(UploadConstantBuffer(m_pPSIntBoolConstantBuffer, rgData, sizeof(rgData)));
+        m_fPSIntBoolConstantsDirty = false;
+    }
+
+    if (m_fFFTransformDirty && m_pVertexShader == NULL)
+    {
+        MilFixedFunctionVSConstants ff;
+
+        CMILMatrix matWVP =
+            (m_rgTransforms[MilTransform_World] * m_rgTransforms[MilTransform_View])
+            * m_rgTransforms[MilTransform_Projection];
+
+        CMILMatrix matT = matWVP.transpose();
+
+        CopyMemory(ff.WorldViewProj, &matT, sizeof(ff.WorldViewProj));
+
+        IFC(UploadConstantBuffer(m_pFFConstantBuffer, &ff, sizeof(ff)));
+        m_fFFTransformDirty = false;
+    }
+
+    {
+        ID3D11Buffer *rgVS[2] = { m_pVSConstantBuffer, m_pFFConstantBuffer };
+        ID3D11Buffer *rgPS[2] = { m_pPSConstantBuffer, m_pPSIntBoolConstantBuffer };
+
+        m_pD3DContext->VSSetConstantBuffers(0, 2, rgVS);
+        m_pD3DContext->PSSetConstantBuffers(0, 2, rgPS);
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
+
+HRESULT
+CHwRenderStateManager::ApplyViewportAndScissor()
+{
+    if (m_fViewportDirty)
+    {
+        D3D11_VIEWPORT vp;
+
+        vp.TopLeftX = static_cast<float>(m_rcViewport.X);
+        vp.TopLeftY = static_cast<float>(m_rcViewport.Y);
+        vp.Width = static_cast<float>(m_rcViewport.Width);
+        vp.Height = static_cast<float>(m_rcViewport.Height);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+
+        m_pD3DContext->RSSetViewports(1, &vp);
+        m_fViewportDirty = false;
+    }
+
+    if (m_fScissorDirty)
+    {
+        D3D11_RECT rc;
+
+        if (m_fScissorRectValid)
+        {
+            rc.left = m_rcScissorRect.X;
+            rc.top = m_rcScissorRect.Y;
+            rc.right = m_rcScissorRect.X + m_rcScissorRect.Width;
+            rc.bottom = m_rcScissorRect.Y + m_rcScissorRect.Height;
+        }
+        else
+        {
+            rc.left = 0;
+            rc.top = 0;
+            rc.right = static_cast<LONG>(m_uRenderTargetWidth);
+            rc.bottom = static_cast<LONG>(m_uRenderTargetHeight);
+        }
+
+        m_pD3DContext->RSSetScissorRects(1, &rc);
+        m_fScissorDirty = false;
+    }
+
+    return S_OK;
 }
 
 //+------------------------------------------------------------------------
 //
-//  Function:   CHwRenderStateManager::ForceSetIndices
+//  Function:   CHwRenderStateManager::ApplyStateForDraw
 //
-//  Synopsis:   Sets the index stream on the device.
+//  Synopsis:   Bind every dirty piece of state. Called before each draw.
 //
 //-------------------------------------------------------------------------
 HRESULT
-CHwRenderStateManager::ForceSetIndices(
-    __in_ecount_opt(1) IDirect3DIndexBuffer9 *pStream
-    )
+CHwRenderStateManager::ApplyStateForDraw()
 {
     HRESULT hr = S_OK;
 
-    IFC(m_pID3DDevice->SetIndices(
-        pStream
-        ));
+    if (m_fBlendDirty)
+    {
+        IFC(ApplyBlendState());
+    }
+
+    if (m_fDepthStencilDirty)
+    {
+        IFC(ApplyDepthStencilState());
+    }
+
+    if (m_fRasterizerDirty)
+    {
+        IFC(ApplyRasterizerState());
+    }
+
+    if (m_fAnySamplerDirty)
+    {
+        IFC(ApplySamplers());
+    }
+
+    if (m_fTexturesDirty)
+    {
+        IFC(ApplyTextures());
+    }
+
+    IFC(ApplyShaders());
+
+    IFC(ApplyInputAssembler());
+
+    IFC(ApplyConstants());
+
+    IFC(ApplyViewportAndScissor());
 
 Cleanup:
     RRETURN(hr);
@@ -1477,611 +1545,144 @@ Cleanup:
 //
 //  Function:   CHwRenderStateManager::SetDefaultState
 //
-//  Synopsis:   Sets the default values for all the state on the D3D Device.
+//  Synopsis:   Sets the default values for all the state. D3D9 시절 기본값과
+//              같은 의미를 유지한다.
 //
 //-------------------------------------------------------------------------
 HRESULT
-CHwRenderStateManager::SetDefaultState(
-    BOOL fCanHandleBlendFactor,
-    BOOL fSupportsScissorRect,
-    __range(1,UINT_MAX) DWORD dwMaxStream,
-    __range(1,UINT_MAX) DWORD dwAnisotropicFilterLevel
-    )
+CHwRenderStateManager::SetDefaultState()
 {
-    HRESULT hr = S_OK;
-    DWORD dwStage;
-
-    // Set blend factor into any known state
-    //    m_rgdwD3DRenderStates[D3DRS_BLENDFACTOR] = 1; // to appease assertion
-
-    if (fCanHandleBlendFactor)
-    {
-        IFC(ForceSetRenderState(D3DRS_BLENDFACTOR,0));
-    }
+    //
+    // Blend: no blending, write all channels, blend factor 0
+    //
+    m_blend.Enable = FALSE;
+    m_blend.SrcBlend = D3D11_BLEND_ONE;
+    m_blend.DestBlend = D3D11_BLEND_ZERO;
+    m_blend.WriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    m_blendFactor = 0;
+    m_fBlendDirty = true;
 
     //
-    // RENDER STATES
+    // Depth / stencil: both off. Stencil clipping uses ref 0, NOTEQUAL, write mask 0.
     //
+    m_depthStencil.DepthEnable = FALSE;
+    m_depthStencil.DepthWriteEnable = FALSE;
+    m_depthStencil.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    m_depthStencil.StencilEnable = FALSE;
+    m_depthStencil.StencilFunc = D3D11_COMPARISON_NOT_EQUAL;
+    m_depthStencil.StencilReadMask = 0xff;
+    m_depthStencil.StencilWriteMask = 0x00;
+    m_uStencilRef = 0;
+    m_fDepthStencilDirty = true;
 
-    // Keep these in enumeration order. (This makes it easier to check if we've
-    // missed something).
-
-    IFC(ForceSetRenderState(D3DRS_ZENABLE, D3DZB_FALSE));
-    IFC(ForceSetRenderState(D3DRS_ZWRITEENABLE, FALSE));
-
+    //
+    // Rasterizer: solid, no culling (negative scales are valid 2D transforms),
+    // scissor off until a rectangular clip is set, multisample on.
+    //
+    m_rasterizer.FillMode = D3D11_FILL_SOLID;
+#if DBG
     if (IsTagEnabled(tagWireframe))
     {
-        IFC(ForceSetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME));
+        m_rasterizer.FillMode = D3D11_FILL_WIREFRAME;
     }
-    else
-    {
-        IFC(ForceSetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID));
-    }
-
-
-    IFC(ForceSetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD));
-
-    // D3D default: TRUE
-
-    IFC(ForceSetRenderState(D3DRS_ALPHATESTENABLE, FALSE));
-
-    IFC(ForceSetRenderState(D3DRS_LASTPIXEL, FALSE));
-
-    IFC(ForceSetRenderState(D3DRS_ANTIALIASEDLINEENABLE, FALSE));
-
-    // Managed by SetAlphaBlendMode: D3DRS_SRCBLEND, D3DRS_DESTBLEND
-
-    // D3D default: D3DCULL_CCW
-    //   We need to disable culling, because e.g. scaling by a negative
-    //   number is a valid GDI+ transform, and this would invert the
-    //   vertex order.
-
-    IFC(ForceSetRenderState(D3DRS_CULLMODE, D3DCULL_NONE));
-
-    IFC(ForceSetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL));
-
-    // Ignored: D3DRS_ALPHAREF, D3DRS_ALPHAFUNC (D3DRS_ALPHATESTENABLE
-    // defaults to FALSE).
-
-    //   Enable dithering?
-    //  We don't enable dithering yet.
-
-    IFC(ForceSetRenderState(D3DRS_DITHERENABLE, FALSE));
-
-    // Managed by SetAlphaBlendMode: D3DRS_ALPHABLENDENABLE
-
-    IFC(ForceSetRenderState(D3DRS_FOGENABLE, FALSE));
-
-    // Ignored: D3DRS_ZVISIBLE.
-    // Reason: "Not supported" (MSDN).
-
-    // Ignored: D3DRS_FOGCOLOR, D3DRS_FOGTABLEMODE, D3DRS_FOGSTART,
-    //   D3DRS_FOGEND, D3DRS_FOGDENSITY.
-    // Reason: D3DRS_FOGENABLE defaults to FALSE.
-
-    IFC(ForceSetRenderState(D3DRS_DEPTHBIAS, 0));
-
-    // Ignored: D3DRS_RANGEFOGENABLE
-    // Reason: D3DRS_FOGENABLE defaults to FALSE.
-
-    IFC(ForceSetRenderState(D3DRS_STENCILENABLE, FALSE));
-
-    IFC(ForceSetRenderState(D3DRS_STENCILREF, 0));
-
-    // RenderState: D3DRS_STENCILFUNC
-    // D3D Default: D3DCMP_ALWAYS
-    // Reason: When we use the stencil buffer for clipping our reference
-    //         value is 0, and we fill the stencil with 1 wherever we want
-    //         to render.  So we use NOTEQUAL as our comparison function
-    //         since we want to render when 0 != 1.
-
-    IFC(ForceSetRenderState(D3DRS_STENCILFUNC,  D3DCMP_NOTEQUAL));
-    IFC(ForceSetRenderState(D3DRS_STENCILFAIL,  D3DSTENCILOP_KEEP));
-    IFC(ForceSetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP));
-    IFC(ForceSetRenderState(D3DRS_STENCILPASS,  D3DSTENCILOP_KEEP));
-    IFC(ForceSetRenderState(D3DRS_STENCILMASK,  0xffffffff));
-
-    // RenderState: D3DRS_STENCILWRITEMASK
-    // D3D Default: 0xffffffff
-    // Reason: We currently use the software rasterizer to output spans
-    //         for clipping using the stencil buffer.  We never use HW to
-    //         write to the stencil buffer.
-
-    IFC(ForceSetRenderState(D3DRS_STENCILWRITEMASK, 0x0));
-
-    IFC(ForceSetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE));
-
-    // Ignored: D3DRS_CCW_STENCILFAIL, D3DRS_CCW_STENCILZFAIL,
-    //          D3DRS_CCW_STENCILPASS, D3DRS_CCW_STENCILFUNC
-    // Reason: D3DRS_TWOSIDEDSTENCILMODE is FALSE
-
-    // Ignored: D3DRS_TEXTUREFACTOR
-    // Reason: Our pipelines don't use a texture factor.
-
-    // D3DRS_WRAP0: Dunno. Default, volatile, or ignorable?
-
-    IFC(ForceSetRenderState(D3DRS_CLIPPING, TRUE));
-
-    // Changed: 2/14/2003 chrisra from FALSE to member variable
-    // Reason:  Now that we have lighting of 3D objects we need to always
-    //          remember what the lighting value is set to in D3D.
-    //
-    // Note (jordanpa): We do all of our own lighting now so these need to
-    //                  be off
-
-    IFC(ForceSetRenderState(D3DRS_LIGHTING, FALSE));
-    IFC(ForceSetRenderState(D3DRS_SPECULARENABLE, FALSE));
-
-    // Ignored: D3DRS_FOGVERTEXMODE.
-    // Reason: D3DRS_FOGENABLE defaults to FALSE.
-
-    IFC(ForceSetRenderState(D3DRS_COLORVERTEX, TRUE));
-
-    // Ignored: D3DRS_LOCALVIEWER.
-    // Reason: We do our own specular lighting
-
-    // D3DRS_NORMALIZENORMALS
-    // Changed: 2/14/2003 jordanpa from TRUE to FALSE
-    // Reason:  We aren't doing lighting in HW any more but perhaps this
-    //          may be a perf boost in some drivers?
-
-    IFC(ForceSetRenderState(D3DRS_NORMALIZENORMALS, FALSE));
-
-    IFC(ForceSetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1));
-
-    IFC(ForceSetRenderState(D3DRS_SPECULARMATERIALSOURCE, D3DMCS_COLOR1));
-
-    // D3DRS_AMBIENTMATERIALSOURCE
-    // Changed: 2003/05/14 chrisra From IGNORED to D3DMCS_MATERIAL
-    // Reason: Now that we are using ambient lighting for 3D, we explicitly set it to retrieve
-    //         from the ambient light source from the material.
-
-    IFC(ForceSetRenderState(D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_MATERIAL));
-
-    IFC(ForceSetDepthStencilSurface(
-        NULL,
-        0,
-        0
-        ));
-
-    // D3DRS_AMBIENT
-    // Changed: 2003/05/14 chrisra From IGNORED to 0x0
-    // Reason: Now that we are using ambient lighting for 3D, we explicitly set the global
-    //         ambient light to 0 because we want to only pull ambient light from the
-    //         lights in the scene.
-
-    IFC(ForceSetRenderState(D3DRS_AMBIENT, 0x0));
-    IFC(ForceSetRenderState(D3DRS_VERTEXBLEND, D3DVBF_DISABLE));
-    IFC(ForceSetRenderState(D3DRS_CLIPPLANEENABLE, 0));
-
-    // Ignored: D3DRS_SOFTWAREVERTEXPROCESSING
-    //
-    //   Enforce our software vertex processing state.
-    //  There's a remote possibility that the caller would change it during
-    //  interop, and we'd care about the setting (e.g. bad hardware,
-    //  bad driver, or precision differences).
-
-    // Ignored: D3DRS_POINTSIZE, D3DRS_POINTSIZE_MIN, D3DRS_POINTSPRITEENABLE,
-    //   D3DRS_POINTSCALEENABLE, D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B,
-    //   D3DRS_POINTSCALE_C.
-    // Reason: We don't draw point primitives (D3DPT_POINTLIST).
-
-    IFC(ForceSetRenderState(D3DRS_MULTISAMPLEANTIALIAS, TRUE));
-
-    IFC(ForceSetRenderState(D3DRS_MULTISAMPLEMASK, 0xffffffff));
-
-    // Ignored: D3DRS_PATCHEDGESTYLE, D3DRS_PATCHSEGMENTS.
-    // Reason: We don't use patches.
-
-    // Ignored: D3DRS_DEBUGMONITORTOKEN.
-    // Reason: Doesn't seem to affect us.
-
-    // Ignored: D3DRS_POINTSIZE_MAX.
-    // Reason: We don't draw point primitives.
-
-    // Ignored: D3DRS_INDEXEDVERTEXBLENDENABLE.
-    // Reason: D3DRS_VERTEXBLEND defaults to D3DVBF_DISABLED. We think that
-    //   means this state has no effect, but MSDN isn't very clear.
-
-    IFC(ForceSetRenderState(D3DRS_COLORWRITEENABLE, 0x0000000f));
-
-    // Ignored: D3DRS_TWEENFACTOR.
-    // Reason: We don't use tweening.
-
-    IFC(ForceSetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD));
-
-    // Ignored: D3DRS_POSITIONDEGREE, D3DRS_NORMALDEGREE.
-    // Reason: We don't use patches.
-
-    //   Handle the new D3D9 render states
-    //  There are a bunch of new D3D9 state - D3DRS_SCISSORTESTENABLE (174)
-    //  through D3DRS_COLORWRITEENABLE3 (192) as of this writing. Find out
-    //  more about them, and classify them as default/volatile/ignored.
-
-    // D3D default: FALSE
-    // Scissor rect clipping should be turned off until we get a rectangular clip
-
-    if (fSupportsScissorRect)
-    {
-        IFC(ForceSetRenderState(D3DRS_SCISSORTESTENABLE, FALSE));
-    }
-
-    for (dwStage=0; dwStage<MIL_SAMPLER_COUNT; dwStage++)
-    {
-        IFC(ForceSetTextureStageState(dwStage, D3DTSS_COLOROP, D3DTOP_DISABLE));
-    }
-
-
-
-    // If there are any stages above MIL_MAX_SAMPLER, they must default to
-    // disabled. We rely on this for stage MIL_MAX_SAMPLER+1 (and hence don't
-    // really care about the rest).
-
-    for (dwStage=MIL_SAMPLER_COUNT+1; dwStage< m_nMaxTextureBlendStage; dwStage++)
-    {
-        IFC(ForceSetTextureStageState(
-            dwStage,
-            D3DTSS_COLOROP,
-            D3DTOP_DISABLE
-            ));
-    }
+#endif
+    m_rasterizer.CullMode = D3D11_CULL_NONE;
+    m_rasterizer.ScissorEnable = FALSE;
+    m_rasterizer.MultisampleEnable = TRUE;
+    m_rasterizer.AntialiasedLineEnable = FALSE;
+    m_fRasterizerDirty = true;
 
     //
-    // We set the max anisotropic level on all the samplers.  This shouldn't
-    // affect our performance when we're not using anisotropic filtering. Since
-    // we're only using one level of quality right now, once we set it here we
-    // don't have to worry about it again.
+    // Samplers: point filtering, clamp, max anisotropy from caps
     //
-
-    for (dwStage = 0; dwStage < m_nMaxTextureBlendStage; dwStage++)
+    for (UINT i = 0; i < MIL_SAMPLER_COUNT; i++)
     {
-        IFC(ForceSetSamplerState(
-            dwStage,
-            D3DSAMP_MAXANISOTROPY,
-            dwAnisotropicFilterLevel
-            ));
+        m_rgSamplers[i].Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        m_rgSamplers[i].AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        m_rgSamplers[i].AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        m_rgSamplers[i].BorderColor = 0;
+        m_rgSamplers[i].MaxAnisotropy = min(4u, max(1u, m_caps.MaxAnisotropy));
+        m_rgSamplers[i].UseMipMaps = FALSE;
+        m_rgfSamplerDirty[i] = true;
     }
+    m_fAnySamplerDirty = true;
 
-    // TEXTURE STAGE STATES
-
-    // Managed by SetTextureStageOperation: D3DTSS_COLOROP, D3DTSS_COLORARG1,
-    // D3DTSS_COLORARG2, D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2
-
-    // Ignored: D3DTSS_BUMPENVMAT00, D3DTSS_BUMPENVMAT01, D3DTSS_BUMPENVMAT10,
-    //   D3DTSS_BUMPENVMAT11.
-    // Reason: We don't use bump mapping.
-
-    for (dwStage=0; dwStage< m_nMaxTextureBlendStage; dwStage++)
+    //
+    // Textures: none
+    //
+    for (UINT i = 0; i < MIL_TEXTURE_STAGE_COUNT; i++)
     {
-        IFC(ForceSetTextureStageState(
-            dwStage,
-            D3DTSS_TEXCOORDINDEX,
-            dwStage
-            ));
+        m_rgpTextures[i] = NULL;
+        m_rgfTextureKnown[i] = true;
     }
+    m_fTexturesDirty = true;
 
-    // Ignored: D3DTSS_BUMPENVLSCALE, D3DTSS_BUMPENVLOFFSET.
-    // Reason: We don't use bump mapping.
-
-    // D3D default: D3DTTFF_DISABLE
-
-    for (dwStage=0; dwStage< m_nMaxTextureBlendStage; dwStage++)
+    //
+    // Fixed function stages: all disabled, default texcoord indices
+    //
+    for (UINT i = 0; i < MIL_FF_STAGE_COUNT; i++)
     {
-        IFC(ForceSetTextureStageState(
-            dwStage,
-            D3DTSS_TEXTURETRANSFORMFLAGS,
-            D3DTTFF_DISABLE
-            ));
+        m_rgStages[i].ColorOp = MilTexOp_Disable;
+        m_rgStages[i].ColorArg1 = MilTexArg_Texture;
+        m_rgStages[i].ColorArg2 = MilTexArg_Current;
+        m_rgStages[i].AlphaOp = MilTexOp_Disable;
+        m_rgStages[i].AlphaArg1 = MilTexArg_Texture;
+        m_rgStages[i].AlphaArg2 = MilTexArg_Current;
+        m_rgStages[i].TexCoordIndex = i;
     }
-
+    m_cActiveStages = 0;
+    m_fStagesDirty = true;
 
     //
-    // Initialize the transforms to identity
+    // Shaders: fixed function emulation
     //
+    m_pVertexShader = NULL;
+    m_fVertexShaderKnown = true;
+    m_fVertexShaderDirty = true;
+    m_pPixelShader = NULL;
+    m_fPixelShaderKnown = true;
+    m_fPixelShaderDirty = true;
+
+    //
+    // Transforms: identity
+    //
+    for (UINT i = 0; i < MilTransform_Count; i++)
     {
-        IFC(ForceSetWorldTransform(
-            &IdentityMatrix
-            ));
-
-        IFC(ForceSetNonWorldTransform(
-            D3DTS_VIEW,
-            &IdentityMatrix
-            ));
-
-        IFC(ForceSetNonWorldTransform(
-            D3DTS_PROJECTION,
-            &IdentityMatrix
-            ));
+        m_rgTransforms[i] = IdentityMatrix;
     }
-
-    //
-    // Because we use ForceSetXXXTransform instead of SetXXXTransform
-    // the render state manager must invalidate the 2D transforms with this
-    // switch. This method is called by CD3DRenderState::ResetState
-    // so we get here after our state has valid values.
-    //
+    m_fFFTransformDirty = true;
     m_f2DTransformsUsedForFixedFunction = FALSE;
     m_f2DTransformUsedForVertexShader = FALSE;
 
     //
-    // Material
-    //
-    {
-        D3DMATERIAL9 material;
-
-        material.Diffuse.r = 1.0f;
-        material.Diffuse.g = 1.0f;
-        material.Diffuse.b = 1.0f;
-        material.Diffuse.a = 1.0f;
-
-        material.Specular.r = 0.0f;
-        material.Specular.g = 0.0f;
-        material.Specular.b = 0.0f;
-        material.Specular.a = 0.0f;
-
-        material.Ambient.r = 0.0f;
-        material.Ambient.g = 0.0f;
-        material.Ambient.b = 0.0f;
-        material.Ambient.a = 0.0f;
-
-        material.Emissive.r = 0.0f;
-        material.Emissive.g = 0.0f;
-        material.Emissive.b = 0.0f;
-        material.Emissive.a = 0.0f;
-
-        //
-        // I don't think this statement is correct anymore.
-        //
-        // Material power is currently the only component in the material that
-        // should change rendering.
-        //
-        material.Power = 40.0f;
-
-        IFC(m_pID3DDevice->SetMaterial(&material));
-    }
-
-    // Textures
-
-    // The textures are volatile - but we need a better solution, so that we
-    // won't hold references to unused textures for longer than needed.
-    // (Workitem #1743).
-    //
-    // (MSDN also claims a 'resource leak' would be possible, but we can't see
-    // how. Maybe it just means the above. Either way, this would avoid it.)
-
-    for (dwStage = 0; dwStage < m_nMaxTextureBlendStage; dwStage++)
-    {
-        IFC(ForceSetTexture(
-            dwStage,
-            NULL
-            ));
-    }
-
-    //
-    // Pixel Shader
-    //
-    IFC(ForceSetPixelShader(NULL));
-
-    //
     // Streams
     //
+    m_pVertexBuffer = NULL;
+    m_uVertexStride = 0;
+    m_fVertexBufferKnown = true;
+    m_fVertexBufferDirty = true;
 
-    IFC(ForceSetStreamSource(
-        0,
-        NULL
-        ));
+    m_pIndexBuffer = NULL;
+    m_fIndexBufferKnown = true;
+    m_fIndexBufferDirty = true;
 
-    for (UINT uStreamNum = 1; uStreamNum < dwMaxStream; uStreamNum++)
-    {
-        IFC(m_pID3DDevice->SetStreamSource(
-            uStreamNum,
-            NULL,
-            0,
-            0
-            ));
-    }
-
-    IFC(ForceSetIndices(NULL));
+    m_fVertexFormatDirty = true;
+    m_fTopologyDirty = true;
 
     //
     // Scissor Rect
     //
     ZeroMemory(&m_rcScissorRect, sizeof(m_rcScissorRect));
+    m_fScissorRectValid = false;
+    m_fScissorDirty = true;
 
     m_fClipSet = FALSE;
 
-Cleanup:
-    RRETURN(hr);
+    m_fViewportDirty = true;
+
+    m_fVSConstantsDirty = true;
+    m_fPSConstantsDirty = true;
+    m_fPSIntBoolConstantsDirty = true;
+
+    return S_OK;
 }
-
-#if DBG
-//+------------------------------------------------------------------------
-//
-//  Function:   CHwRenderStateManager::SetSupportedTable
-//
-//  Synopsis:   Sets the which states are supported for changing.
-//
-//-------------------------------------------------------------------------
-void
-CHwRenderStateManager::SetSupportedTable()
-{
-    /* RENDER STATES */
-
-    //
-    // Material States
-    //
-
-    m_renderStates.SetSupported(D3DRS_DIFFUSEMATERIALSOURCE);
-    m_renderStates.SetSupported(D3DRS_SPECULARMATERIALSOURCE);
-
-    //
-    // Fillmode - not sure why this gets called in non-debug
-    //
-
-    m_renderStates.SetSupported(D3DRS_FILLMODE);
-
-    //
-    // Blend Mode States
-    //
-
-    m_renderStates.SetSupported(D3DRS_ALPHABLENDENABLE);
-    m_renderStates.SetSupported(D3DRS_SRCBLEND);
-    m_renderStates.SetSupported(D3DRS_DESTBLEND);
-
-    //
-    // Text
-    //
-
-    m_renderStates.SetSupported(D3DRS_BLENDFACTOR);
-    m_renderStates.SetSupported(D3DRS_COLORWRITEENABLE);
-
-    //
-    // Misc
-    //
-
-    m_renderStates.SetSupported(D3DRS_SCISSORTESTENABLE);
-    m_depthStencilSurface.SetSupported(0);
-
-    //
-    // EnsureState
-    //
-
-    m_renderStates.SetSupported(D3DRS_ZENABLE);
-    m_renderStates.SetSupported(D3DRS_STENCILENABLE);
-    m_renderStates.SetSupported(D3DRS_ZWRITEENABLE);
-    m_renderStates.SetSupported(D3DRS_CULLMODE);
-    m_renderStates.SetSupported(D3DRS_ZFUNC);
-    m_renderStates.SetSupported(D3DRS_MULTISAMPLEANTIALIAS);
-
-
-    /* TEXTURE STAGE STATES */
-
-    //
-    // Texture Stage Operation
-    //
-
-    for (UINT uTextureStage = 0;
-              uTextureStage < MIL_TEXTURE_STAGE_COUNT;
-              uTextureStage++)
-    {
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_COLOROP));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_COLORARG1));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_COLORARG2));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_ALPHAOP));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_ALPHAARG1));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_ALPHAARG2));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_TEXTURETRANSFORMFLAGS));
-
-        m_textureStageStates.SetSupported(
-            CalcTextureStageStatePos(uTextureStage,D3DTSS_TEXCOORDINDEX));
-    }
-
-    /* TEXTURE SAMPLER STATES */
-
-    //
-    // FilterMode
-    //
-
-    for (UINT uSamplerState = 0;
-              uSamplerState < MIL_SAMPLER_COUNT;
-              uSamplerState++)
-    {
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_MAGFILTER));
-
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_MINFILTER));
-
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_MIPFILTER));
-
-        /* NEW SETTINGS */
-
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_ADDRESSU));
-
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_ADDRESSV));
-
-        m_samplerStageStates.SetSupported(
-            CalcSamplerStatePos(uSamplerState,D3DSAMP_BORDERCOLOR));
-    }
-
-    /* TEXTURES */
-
-    for (UINT uTextureStage = 0; uTextureStage < MIL_TEXTURE_STAGE_COUNT; uTextureStage++)
-    {
-        m_textures.SetSupported(uTextureStage);
-    }
-
-    /* TRANSFORM STATES */
-
-    m_worldTransform.SetSupported(0);
-
-    m_nonWorldTransforms.SetSupported(D3DTS_VIEW);
-    m_nonWorldTransforms.SetSupported(D3DTS_PROJECTION);
-
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE0);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE1);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE2);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE3);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE4);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE5);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE6);
-    m_nonWorldTransforms.SetSupported(D3DTS_TEXTURE7);
-
-    //
-    // FVF
-    //
-    m_stateFVF.SetSupported(0);
-
-    //
-    // Shaders
-    //
-    m_stateVertexShader.SetSupported(0);
-    m_statePixelShader.SetSupported(0);
-
-    for (UINT i = 0; i < 256; ++i)
-    {
-        m_stateVertexShaderFloat4Constants.SetSupported(i);
-    }
-    
-    for (UINT i = 0; i < 224; ++i)
-    {
-        m_statePixelShaderFloat4Constants.SetSupported(i);
-    }
-    
-    for (UINT i = 0; i < 16; ++i)
-    {
-        m_statePixelShaderInt4Constants.SetSupported(i);
-        m_statePixelShaderBoolConstants.SetSupported(i);
-    }
-    
-    //
-    // Streams
-    //
-
-    m_indexStream.SetSupported(0);
-    m_streamSourceVertexBuffer.SetSupported(0);
-    m_streamSourceVertexStride.SetSupported(0);
-}
-#endif
-
-
-
-
-
-

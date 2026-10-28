@@ -5,12 +5,10 @@
 
 //------------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DVidMemOnlyTexture implementation
 //
-//      Abstract a POOL_DEFAULT D3D texture and track it
+//      Abstract a D3D11_USAGE_DEFAULT texture and track it
 //       as a D3D resource.
 //
 
@@ -26,9 +24,9 @@ MtDefine(D3DResource_VidMemOnlyTexture, MILHwMetrics, "Approximate vid-mem-only 
 //  Synopsis:  Create the CD3DVidMemOnlyTexture
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DVidMemOnlyTexture::Create(
-    __in_ecount(1) const D3DSURFACE_DESC *pSurfDesc,
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC *pSurfDesc,
     UINT uLevels,
     bool fIsEvictable,
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
@@ -38,17 +36,20 @@ CD3DVidMemOnlyTexture::Create(
 {
     HRESULT hr = S_OK;
 
-    IDirect3DTexture9 *pD3DTexture = NULL;
-    
-    Assert(pSurfDesc->Pool == D3DPOOL_DEFAULT);
+    ID3D11Texture2D *pD3DTexture = NULL;
+
+    Assert(pSurfDesc->Usage == D3D11_USAGE_DEFAULT);
 
     //
     // Allocate the D3D texture
     //
 
+    D3D11_TEXTURE2D_DESC desc = *pSurfDesc;
+    desc.MipLevels = uLevels;
+
     IFC(pDevice->CreateTexture(
-        pSurfDesc,
-        uLevels,
+        &desc,
+        NULL,
         OUT &pD3DTexture,
         IN OUT pSharedHandle
         ));
@@ -82,7 +83,7 @@ Cleanup:
 
 HRESULT
 CD3DVidMemOnlyTexture::Create(
-    __inout_ecount(1) IDirect3DTexture9 *pD3DExistingTexture,
+    __inout_ecount(1) ID3D11Texture2D *pD3DExistingTexture,
     bool fIsEvictable,
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
     __deref_out_ecount(1) CD3DVidMemOnlyTexture **ppVidMemOnlyTexture
@@ -105,8 +106,8 @@ CD3DVidMemOnlyTexture::Create(
     //
 
     IFC(pVidMemOnlyTexture->Init(pDevice->GetResourceManager(), pD3DExistingTexture));
-    
-    Assert(pVidMemOnlyTexture->m_sdLevel0.Pool == D3DPOOL_DEFAULT);
+
+    Assert(pVidMemOnlyTexture->m_sdLevel0.Usage == D3D11_USAGE_DEFAULT);
 
     if (fIsEvictable)
     {
@@ -143,8 +144,6 @@ CD3DVidMemOnlyTexture::CD3DVidMemOnlyTexture()
 //-------------------------------------------------------------------------
 CD3DVidMemOnlyTexture::~CD3DVidMemOnlyTexture()
 {
-    // InternalDestroy will be called by CD3DTexture destructor.
-    //IGNORE_HR(InternalDestroy());
 }
 
 //+------------------------------------------------------------------------
@@ -154,10 +153,10 @@ CD3DVidMemOnlyTexture::~CD3DVidMemOnlyTexture()
 //  Synopsis:  Inits the texture
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DVidMemOnlyTexture::Init(
     __inout_ecount(1) CD3DResourceManager *pResourceManager,
-    __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+    __inout_ecount(1) ID3D11Texture2D *pD3DTexture
     )
 {
     HRESULT hr = S_OK;
@@ -174,5 +173,3 @@ CD3DVidMemOnlyTexture::Init(
 Cleanup:
     RRETURN(hr);
 }
-
-

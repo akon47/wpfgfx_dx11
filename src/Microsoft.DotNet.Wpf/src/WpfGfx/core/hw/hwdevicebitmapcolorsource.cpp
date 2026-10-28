@@ -111,7 +111,7 @@ CHwDeviceBitmapColorSource::CreateCommon(
     __in_ecount(1) const CMilRectU &rcBoundsRequired,
     __in_ecount_opt(1) const CD3DVidMemOnlyTexture *pVidMemTexture,
     __out_ecount(1) CacheParameters &oRealizationDesc,
-    __out_ecount(1) D3DSURFACE_DESC &d3dsd,
+    __out_ecount(1) D3D11_TEXTURE2D_DESC &d3dsd,
     __out_ecount(1) UINT &uLevels
     )
 {
@@ -131,11 +131,11 @@ CHwDeviceBitmapColorSource::CreateCommon(
 
     oRealizationDesc.dlU.uLength = oRealizationDesc.rcSourceContained.Width<UINT>();
     oRealizationDesc.dlU.eLayout = NaturalTexelLayout;
-    oRealizationDesc.dlU.d3dta   = D3DTADDRESS_CLAMP;
+    oRealizationDesc.dlU.d3dta   = D3D11_TEXTURE_ADDRESS_CLAMP;
 
     oRealizationDesc.dlV.uLength = oRealizationDesc.rcSourceContained.Height<UINT>();
     oRealizationDesc.dlV.eLayout = NaturalTexelLayout;
-    oRealizationDesc.dlV.d3dta   = D3DTADDRESS_CLAMP;
+    oRealizationDesc.dlV.d3dta   = D3D11_TEXTURE_ADDRESS_CLAMP;
 
     oRealizationDesc.fOnlyContainsSubRectOfSource =
            (oRealizationDesc.dlU.uLength != oRealizationDesc.uWidth)
@@ -161,8 +161,8 @@ CHwDeviceBitmapColorSource::CreateCommon(
             );
 
         // Shared texture is read-only source for this module, but requestor will
-        // update it with StretchRect; so make it a render target.
-        d3dsd.Usage |= D3DUSAGE_RENDERTARGET;
+        // update it with a copy; so make it a render target.
+        d3dsd.BindFlags |= D3D11_BIND_RENDER_TARGET;
     }
 
     if (   d3dsd.Width > pDevice->GetMaxTextureWidth()
@@ -221,7 +221,7 @@ CHwDeviceBitmapColorSource::CreateInternal(
     HRESULT hr = S_OK;
     CHwDeviceBitmapColorSource *pbcs = NULL;
     CacheParameters oRealizationDesc;
-    D3DSURFACE_DESC d3dsd;
+    D3D11_TEXTURE2D_DESC d3dsd;
     UINT uLevels;
 
     IFC(CHwDeviceBitmapColorSource::CreateCommon(
@@ -276,7 +276,7 @@ CHwDeviceBitmapColorSource::CHwDeviceBitmapColorSource(
     __in_ecount(1) CD3DDeviceLevel1 *pDevice,
     __in_opt IWGXBitmap *pBitmap,
     MilPixelFormat::Enum fmt,
-    __in_ecount(1) const D3DSURFACE_DESC &d3dsd,
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC &d3dsd,
     UINT uLevels
     ) :
     CHwBitmapColorSource(pDevice, pBitmap, fmt, d3dsd, uLevels),
@@ -614,71 +614,6 @@ Cleanup:
 //+-----------------------------------------------------------------------------
 //
 //  Member:
-//      CHwDeviceBitmapColorSource::Flush
-//
-//  Synopsis:
-//      Reads a single pixel from pID3DSurface in order to cause a flush. We
-//      must first copy to something small that we can read back from.
-//
-//------------------------------------------------------------------------------
-HRESULT
-CHwDeviceBitmapColorSource::Flush(
-    __in_ecount(1) IDirect3DDevice9 *pID3DDevice,
-    __in_ecount(1) IDirect3DSurface9 *pID3DSurface,
-    __in_ecount(1) const D3DSURFACE_DESC &desc
-    )
-{
-    HRESULT hr = S_OK;
-    // The surface that we will read back from will be 16x16 unless
-    // the source is smaller than that. We don't do 1x1 because D3D
-    // tells us that some drivers have issues with ultra small surfaces.
-    const UINT uFlushWidth = min(16u, desc.Width);
-    const UINT uFlushHeight = min(16u, desc.Height);
-    const RECT rcCopy = { 0, 0, uFlushWidth, uFlushHeight };
-    const RECT rcFlush = { 0, 0, 1, 1 };
-
-    IDirect3DSurface9 *pIFlushSurface = NULL;
-    
-    IFC(pID3DDevice->CreateRenderTarget(
-        uFlushWidth,
-        uFlushHeight,
-        desc.Format,
-        D3DMULTISAMPLE_NONE,
-        0,      // multisample quality
-        TRUE,   // lockable
-        &pIFlushSurface,
-        NULL
-        ));
-
-    IFC(pID3DDevice->StretchRect(
-        pID3DSurface,
-        &rcCopy,
-        pIFlushSurface,
-        &rcCopy,
-        D3DTEXF_NONE
-        ));
-
-    D3DLOCKED_RECT dontCare;
-    IFC(pIFlushSurface->LockRect(
-        &dontCare,
-        &rcFlush,
-        D3DLOCK_READONLY
-        ));
-
-Cleanup:
-    if (pIFlushSurface)
-    {
-        IGNORE_HR(pIFlushSurface->UnlockRect());
-    }
-        
-    ReleaseInterface(pIFlushSurface);
-    
-    RRETURN(hr);
-}
-
-//+-----------------------------------------------------------------------------
-//
-//  Member:
 //      CHwDeviceBitmapColorSource::UpdateSurfaceSharedHandle
 //
 //  Synopsis:
@@ -695,58 +630,15 @@ CHwDeviceBitmapColorSource::UpdateSurfaceSharedHandle(
     __in_ecount(1) IDirect3DSurface9 *pISrcSurface
     )
 {
-    HRESULT hr = S_OK;
+    UNREFERENCED_PARAMETER(cDirtyRects);
+    UNREFERENCED_PARAMETER(prgDirtyRects);
+    UNREFERENCED_PARAMETER(pISrcSurface);
 
-    Assert(m_hSharedHandle);
-    
-    IDirect3DDevice9 *pID3DSrcDevice = NULL;
-    IDirect3DTexture9 *pIDestTexture = NULL;
-    IDirect3DSurface9 *pIDestSurface = NULL;
-    
-    IFC(pISrcSurface->GetDevice(&pID3DSrcDevice));
-
-    const D3DSURFACE_DESC &desc = m_pVidMemOnlyTexture->D3DSurface0Desc();
-
-    IFC(pID3DSrcDevice->CreateTexture(
-        desc.Width,
-        desc.Height,
-        m_pVidMemOnlyTexture->Levels(),
-        desc.Usage,
-        desc.Format,
-        desc.Pool,
-        &pIDestTexture,
-        &m_hSharedHandle
-        ));
-    
-    IFC(pIDestTexture->GetSurfaceLevel(0, &pIDestSurface));
-    
-    for (UINT i = 0; i < cDirtyRects; ++i)
-    {
-        // There is an unsigned -> signed cast going on here, but our texture can't be
-        // bigger than INT_MAX and the dirty rect has been checked to be in bounds
-        const RECT *prc = reinterpret_cast<const RECT *>(&prgDirtyRects[i]);
-        
-        IFC(pID3DSrcDevice->StretchRect(
-            pISrcSurface, 
-            prc, 
-            pIDestSurface, 
-            prc, 
-            D3DTEXF_NONE
-            ));
-    }
-
-    // Read back from the shared surface on the users device to force
-    // a flush of his commands. If we do it on our device or our version
-    // of the shared surface, the flush won't happen because D3D doesn't
-    // have cross-device object dependency tracking.
-    IFC(Flush(pID3DSrcDevice, pIDestSurface, desc));
-
-Cleanup:
-    ReleaseInterface(pIDestSurface);
-    ReleaseInterface(pIDestTexture);
-    ReleaseInterface(pID3DSrcDevice);
-
-    RRETURN(hr);
+    //
+    // 공유 핸들 경로(사용자의 D3D9Ex 디바이스가 우리의 공유 텍스처를 여는 D7)는
+    // M9 에서 구현한다. 그때까지는 CInteropDeviceBitmap 이 소프트웨어 복사만 쓴다.
+    //
+    RRETURN(E_NOTIMPL);
 }
 
 //+-----------------------------------------------------------------------------
@@ -773,29 +665,31 @@ CHwDeviceBitmapColorSource::UpdateSurfaceSoftware(
 
     bool fUnlockNeeded = false;
 
-    // Create and cache a system memory texture if we don't have one already
+    // Create and cache a lockable (staging + GPU) texture if we don't have one already
     if (!m_pSysMemTexture)
     {
-        D3DSURFACE_DESC descSrc;
-        IFC(pISrcSurface->GetDesc(&descSrc));
+        D3D11_TEXTURE2D_DESC descSrc = m_pVidMemOnlyTexture->D3DSurface0Desc();
 
-        // Modify the description for system memory use
-        descSrc.Usage = 0;
-        descSrc.Pool = D3DPOOL_SYSTEMMEM;
-        descSrc.MultiSampleType = D3DMULTISAMPLE_NONE;
-        descSrc.MultiSampleQuality = 0;
-        
+        descSrc.MipLevels = 1;
+        descSrc.ArraySize = 1;
+        descSrc.SampleDesc.Count = 1;
+        descSrc.SampleDesc.Quality = 0;
+        descSrc.Usage = D3D11_USAGE_DEFAULT;
+        descSrc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        descSrc.CPUAccessFlags = 0;
+        descSrc.MiscFlags = 0;
+
         IFC(m_pDevice->CreateLockableTexture(&descSrc, &m_pSysMemTexture));
     }
 
     // Lock the entire surface with manual dirty rect addition. LockRect assumes a write lock.
-    D3DLOCKED_RECT rcLock;
+    MilLockedRect rcLock;
     IFC(m_pSysMemTexture->LockRect(&rcLock, NULL, D3DLOCK_NO_DIRTY_UPDATE));
     fUnlockNeeded = true;
 
     for (UINT i = 0; i < cDirtyRects; ++i)
     {
-        IFC(ReadRenderTargetIntoSysMemBuffer(
+        IFC(ReadD3D9SurfaceIntoSysMemBuffer(
             pISrcSurface,
             prgDirtyRects[i],
             m_fmtTexture,
@@ -815,9 +709,11 @@ CHwDeviceBitmapColorSource::UpdateSurfaceSoftware(
         fUnlockNeeded = false;
     }
 
-    // This sends the accumlated dirty rects from m_pSysMemTexture to m_pVidMemOnlyTexture
+    // This sends the accumlated dirty rects from the staging copy to the GPU copy
+    IFC(m_pSysMemTexture->EnsureGpuContents());
+
     IFC(m_pDevice->UpdateTexture(
-        m_pSysMemTexture->GetD3DTextureNoRef(), 
+        m_pSysMemTexture->GetD3DTextureNoRef(),
         m_pVidMemOnlyTexture->GetD3DTextureNoRef()
         ));
 

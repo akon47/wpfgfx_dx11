@@ -5,8 +5,6 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains vid mem only texture class declaration
 //
@@ -25,7 +23,7 @@ public:
     DEFINE_RESOURCE_REF_COUNT_BASE
 
     static HRESULT Create(
-        __in_ecount(1) const D3DSURFACE_DESC *pSurfDesc,
+        __in_ecount(1) const D3D11_TEXTURE2D_DESC *pSurfDesc,
         UINT uLevels,
         bool fIsEvictable,
         __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
@@ -34,7 +32,7 @@ public:
         );
 
     static HRESULT Create(
-        __inout_ecount(1) IDirect3DTexture9 *pD3DExistingTexture,
+        __inout_ecount(1) ID3D11Texture2D *pD3DExistingTexture,
         bool fIsEvictable,
         __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
         __deref_out_ecount(1) CD3DVidMemOnlyTexture **ppVidMemOnlyTexture
@@ -46,7 +44,7 @@ protected:
 
     HRESULT Init(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DTexture9 *pD3DTexture
+        __inout_ecount(1) ID3D11Texture2D *pD3DTexture
         );
 
 #if PERFMETER
@@ -56,6 +54,3 @@ protected:
     }
 #endif
 };
-
-
-

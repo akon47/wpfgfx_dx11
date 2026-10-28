@@ -94,7 +94,7 @@ HRESULT CDesktopRenderTarget::Create(
     // available.
     //
     if (   (!(RenderOptions::IsHardwareAccelerationInRdpEnabled()) && pDisplaySet->IsNonLocalDisplayPresent())
-        || !pDisplaySet->D3DObject())
+        || !pDisplaySet->IsD3DAvailable())
     {
         // If possible, just revert to Sw.  This simply prevents trying Hw and
         // later falling back.
@@ -312,16 +312,16 @@ HRESULT CDesktopRenderTarget::Init(
         // Is HW allowed?
         if (!(dwFlags & MilRTInitialization::SoftwareOnly))
         {
-            D3DDEVTYPE d3dDeviceType = D3DDEVTYPE_HAL;
+            MilDeviceKind d3dDeviceType = MilDeviceKind_Hardware;
 
             if ((dwFlags & MilRTInitialization::UseRefRast))
             {
-                d3dDeviceType = D3DDEVTYPE_REF;
+                d3dDeviceType = MilDeviceKind_Reference;
             }
             else if ((dwFlags & MilRTInitialization::UseRgbRast) ||
                      IsTagEnabled(tagUseRgbRasterizer))
             {
-                d3dDeviceType = D3DDEVTYPE_SW;
+                d3dDeviceType = MilDeviceKind_Warp;
             }
 
             //

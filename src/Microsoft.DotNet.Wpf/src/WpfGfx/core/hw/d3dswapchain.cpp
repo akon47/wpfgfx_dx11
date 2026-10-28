@@ -5,14 +5,12 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains CD3DSwapChain implementation
 //
-//      Abstracts the core D3D swapchain.  The main reason to wrap this d3d
-//      object is so that we can respond to mode changes, i.e.,   respond to
-//      D3DERR_DEVICELOST on the Present.
+//      Abstracts the DXGI swapchain.  The main reason to wrap this object is
+//      so that we can respond to mode changes, i.e., respond to device
+//      removal on the Present.
 //
 
 #include "precomp.hpp"
@@ -28,7 +26,7 @@ MtExtern(CD3DSwapChainWithSwDC);
 //      CD3DSwapChain::Create
 //
 //  Synopsis:
-//      Create the CD3DSwapChain wrapper from an IDirect3DSwapChain9
+//      Create the CD3DSwapChain wrapper from an IDXGISwapChain1
 //
 //  Notes:
 //      This class behaves very differently depending on whether a present
@@ -38,12 +36,12 @@ MtExtern(CD3DSwapChainWithSwDC);
 //      created.
 //
 
-HRESULT 
+HRESULT
 CD3DSwapChain::Create(
     __inout_ecount(1) CD3DResourceManager *pResourceManager,
-    __inout_ecount(1) IDirect3DSwapChain9 *pID3DSwapChain,
+    __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain,
     UINT BackBufferCount,
-    __in_ecount_opt(1) CMILDeviceContext const *pPresentContext,    
+    __in_ecount_opt(1) CMILDeviceContext const *pPresentContext,
     __deref_out_ecount(1) CD3DSwapChain **ppSwapChain
     )
 {
@@ -53,16 +51,15 @@ CD3DSwapChain::Create(
 
     //
     // Look up back buffer count if not given
-    //      code is also in CD3DSwapChainWithSwDC  
     //
 
     if (BackBufferCount == 0)
     {
-        D3DPRESENT_PARAMETERS d3dpp;
+        DXGI_SWAP_CHAIN_DESC1 desc;
 
-        IFC(pID3DSwapChain->GetPresentParameters(&d3dpp));
+        IFC(pDXGISwapChain->GetDesc1(&desc));
 
-        BackBufferCount = d3dpp.BackBufferCount;
+        BackBufferCount = desc.BufferCount;
     }
 
     //
@@ -80,7 +77,7 @@ CD3DSwapChain::Create(
         *ppSwapChain = new(BackBufferCount) CD3DSwapChainWithSwDC(
             hdcPresentVia,
             BackBufferCount,
-            pID3DSwapChain
+            pDXGISwapChain
             );
 
         //
@@ -96,7 +93,7 @@ CD3DSwapChain::Create(
     else
     {
         *ppSwapChain = new(BackBufferCount) CD3DSwapChain(
-            pID3DSwapChain,
+            pDXGISwapChain,
             BackBufferCount,
             NULL // prgBackBuffers
             );
@@ -124,7 +121,7 @@ Cleanup:
 //
 //  Synopsis:  Allocate memory for a CD3DSwapChain with cBackBuffers number of
 //             back buffer surface.  Extra space is allocated for back buffer
-//             pointer array. 
+//             pointer array.
 //
 //-----------------------------------------------------------------------------
 
@@ -170,13 +167,12 @@ void * __cdecl CD3DSwapChain::operator new(
 #pragma warning( disable : 4355 )
 
 CD3DSwapChain::CD3DSwapChain(
-    __inout_ecount(1) IDirect3DSwapChain9 *pD3DSwapChain,
+    __inout_ecount(1) IDXGISwapChain1 *pDXGISwapChain,
     __in_range(>, 0) __out_range(==, this->m_cBackBuffers) UINT cBackBuffers,
     __out_ecount_full_opt(cBackBuffers) CD3DSurface * * const prgBackBuffers
         // required for subclasses
     )
-    : m_pD3DSwapChain(pD3DSwapChain),
-      m_pD3DSwapChainEx(NULL),
+    : m_pDXGISwapChain(pDXGISwapChain),
       m_cBackBuffers(cBackBuffers),
       m_rgBackBuffers(
             prgBackBuffers
@@ -185,11 +181,7 @@ CD3DSwapChain::CD3DSwapChain(
             )
 {
     RtlZeroMemory(m_rgBackBuffers, m_cBackBuffers * sizeof(*m_rgBackBuffers));
-    m_pD3DSwapChain->AddRef();
-    
-    IGNORE_HR(m_pD3DSwapChain->QueryInterface(IID_IDirect3DSwapChain9Ex,
-                                              reinterpret_cast<void **>(&m_pD3DSwapChainEx)));
-
+    m_pDXGISwapChain->AddRef();
 }
 
 #pragma warning( pop )
@@ -208,8 +200,7 @@ CD3DSwapChain::~CD3DSwapChain()
         ReleaseInterfaceNoNULL(m_rgBackBuffers[i]);
     }
 
-    ReleaseInterfaceNoNULL(m_pD3DSwapChain);
-    ReleaseInterfaceNoNULL(m_pD3DSwapChainEx);
+    ReleaseInterfaceNoNULL(m_pDXGISwapChain);
 }
 
 //+----------------------------------------------------------------------------
@@ -219,7 +210,7 @@ CD3DSwapChain::~CD3DSwapChain()
 //  Synopsis:  Inits the swap chain
 //
 //-----------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DSwapChain::Init(
     __inout_ecount(1) CD3DResourceManager *pResourceManager
     )
@@ -240,11 +231,15 @@ CD3DSwapChain::Init(
 
     for (UINT i = 0; i < m_cBackBuffers; i++)
     {
-        IDirect3DSurface9 *pD3DBackBuffer = NULL;
+        ID3D11Texture2D *pD3DBackBuffer = NULL;
 
-        IFC(m_pD3DSwapChain->GetBackBuffer(i,  D3DBACKBUFFER_TYPE_MONO, &pD3DBackBuffer));
+        IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetBuffer(
+            i,
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void **>(&pD3DBackBuffer)
+            )));
 
-        MIL_THR(CD3DSurface::Create(pResourceManager, pD3DBackBuffer, &m_rgBackBuffers[i]));
+        MIL_THR(CD3DSurface::Create(pResourceManager, pD3DBackBuffer, 0, &m_rgBackBuffers[i]));
 
         ReleaseInterfaceNoNULL(pD3DBackBuffer);
 
@@ -265,7 +260,7 @@ Cleanup:
 //  Synopsis:  Get indexed back buffer from array
 //
 //-------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DSwapChain::GetBackBuffer(
     __in_range(<, this->m_cBackBuffers) UINT iBackBuffer,
     __deref_out_ecount(1) CD3DSurface **ppBackBuffer
@@ -300,7 +295,7 @@ Cleanup:
 //             is okay.
 //
 //-----------------------------------------------------------------------------
-void 
+void
 CD3DSwapChain::ReleaseD3DResources()
 {
     // This resource should have been marked invalid already or at least be out
@@ -308,15 +303,16 @@ CD3DSwapChain::ReleaseD3DResources()
     Assert(!m_fResourceValid || (m_cRef == 0));
     Assert(IsValid() == m_fResourceValid);
 
-    // This context is protected so it is safe to release the D3D resource
-    ReleaseInterface((*const_cast<IDirect3DSwapChain9 **>(&m_pD3DSwapChain)));
-    ReleaseInterface((*const_cast<IDirect3DSwapChain9Ex **>(&m_pD3DSwapChainEx)));
-
-    // Also release reference to wrapper resources for each of the back buffers.
+    // Release reference to wrapper resources for each of the back buffers
+    // first: DXGI requires all buffer references to be gone before the swap
+    // chain can be destroyed or resized.
     for (UINT i = 0; i < m_cBackBuffers; i++)
     {
         ReleaseInterface(m_rgBackBuffers[i]);
     }
+
+    // This context is protected so it is safe to release the DXGI resource
+    ReleaseInterface((*const_cast<IDXGISwapChain1 **>(&m_pDXGISwapChain)));
 
     return;
 }
@@ -325,7 +321,7 @@ CD3DSwapChain::ReleaseD3DResources()
 //
 //  Member:
 //      CD3DSwapChain::GetDC
-// 
+//
 //  Synopsis:
 //      Gets the DC for the specified backbuffer
 //
@@ -371,7 +367,3 @@ CD3DSwapChain::ReleaseDC(
         hdcBackBuffer
         ));
 }
-
-
-
-

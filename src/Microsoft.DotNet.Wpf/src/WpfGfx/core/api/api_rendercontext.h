@@ -66,8 +66,8 @@ public:
     CMultiSpaceRectF<CoordinateSpace::PageInPixels, CoordinateSpace::Device> UnclippedProjectedMeshBounds;
 
     bool In3D;
-    D3DCMPFUNC DepthBufferFunction3D;
-    D3DCULL CullMode3D;
+    D3D11_COMPARISON_FUNC DepthBufferFunction3D;
+    D3D11_CULL_MODE CullMode3D;
     
     //
     // This is the clip state of the current context.
@@ -135,8 +135,8 @@ public:
                 >();
 
             // Cull mode and zfunc defaults
-            CullMode3D = D3DCULL_NONE;
-            DepthBufferFunction3D = D3DCMP_LESSEQUAL;
+            CullMode3D = D3D11_CULL_NONE;
+            DepthBufferFunction3D = D3D11_COMPARISON_LESS_EQUAL;
         }
 
         CurrentTime = 0;

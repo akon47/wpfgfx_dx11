@@ -7,63 +7,50 @@
 // File: HorizontalBlur.fx
 //
 // Desc: Effect file for image post-processing sample.  This effect contains
-//       a single technique with a pixel shader that blurs an image
-//       using a weighted sampling kernel.
+//       a single pixel shader that blurs an image using a weighted sampling
+//       kernel.
 //
-
 //-----------------------------------------------------------------------------
 
 // Size is the height of the source texture for vertical shaders, and the width
-// for horizontal shaders.
-float size : register(C0);
-float sampleStart : register(c1);
-float numSamples : register(c2);
-float4x4 weights : register(c3);
+// for horizontal shaders. 픽셀 셰이더 상수는 b0 의 c# 레지스터 번호를 그대로 쓴다.
+cbuffer MilPixelShaderConstants : register(b0)
+{
+    float    size        : packoffset(c0);
+    float    sampleStart : packoffset(c1);
+    float    numSamples  : packoffset(c2);
+    float4x4 weights     : packoffset(c3);
+};
 
-sampler2D g_samSrcColor : register(s0);
+Texture2D    g_texSrcColor : register(t0);
+SamplerState g_samSrcColor : register(s0);
 
-static const float maxSamples = 15; // max samples in ps_2_0 is 16, but we can do 15 at
-                                    // most to stay under the instruction limit
+static const int maxSamples = 15; // 한 패스에 15 샘플 (ps_2_0 시절 한계를 유지해 가중치 상수 배치를 바꾸지 않는다)
 
 //--------------------------------------------------------------------------------------
 struct VS_OUTPUT
 {
-    float4 Pos  : POSITION;
+    float4 Pos  : SV_POSITION;
     float4 Color: COLOR0;
     float2 TexCoord : TEXCOORD0;
 };
-
-//--------------------------------------------------------------------------------------
-// Vertex Shader
-//--------------------------------------------------------------------------------------
-VS_OUTPUT VS( float4 position : POSITION, float4 color : COLOR0, float2 texcoord : TEXCOORD0)
-{
-    VS_OUTPUT output = (VS_OUTPUT)0;
-#pragma warning(disable:3206)
-    output.Pos.x = position;
-#pragma warning(default)
-    output.Color = color;
-    output.TexCoord = texcoord;
-    return output;
-}
 
 //-----------------------------------------------------------------------------
 // Pixel Shader: HorizontalBlur
 // Desc: Blurs the image horizontally
 //-----------------------------------------------------------------------------
-float4 PS( VS_OUTPUT input ) : COLOR0
+float4 PS( VS_OUTPUT input ) : SV_TARGET
 {
     float2 Tex = input.TexCoord;
     float4 Color = 0;
     float2 sampleTex;
     sampleTex.y = Tex.y;
+    [unroll]
     for (int i = 0; i < maxSamples; i++)
     {
-	sampleTex.x = Tex.x + ((sampleStart + i) / size);
-        Color += (tex2D( g_samSrcColor, sampleTex ) * weights[i%4][i/4]); // matrices are column-major by default
+        sampleTex.x = Tex.x + ((sampleStart + i) / size);
+        Color += (g_texSrcColor.Sample(g_samSrcColor, sampleTex) * weights[i%4][i/4]); // matrices are column-major by default
     }
-    
+
     return Color;
 }
-
-

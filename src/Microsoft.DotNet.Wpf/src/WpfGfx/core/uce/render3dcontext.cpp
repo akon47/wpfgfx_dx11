@@ -113,7 +113,7 @@ CRender3DContext::Render(
     det *= pContextState->ProjectionTransform3D.GetDeterminant3D();
     det *= pContextState->ViewTransform3D.GetDeterminant3D();
     
-    pContextState->CullMode3D = det < 0 ? D3DCULL_CCW : D3DCULL_CW;
+    pContextState->CullMode3D = det < 0 ? D3D11_CULL_BACK : D3D11_CULL_FRONT;
     
     // Initialize the stack
     m_transformStack.Clear();

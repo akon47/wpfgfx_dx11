@@ -1,4 +1,4 @@
-<Project ToolsVersion="14.0" InitialTargets="D3DXUsageWarning;CopyGeneratedIncludeFilesToIntermediateFolder" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+﻿<Project ToolsVersion="14.0" InitialTargets="D3DXUsageWarning;CopyGeneratedIncludeFilesToIntermediateFolder" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="Graphics.Paths.props"/>
   
   <PropertyGroup>
@@ -23,7 +23,6 @@
       $(WpfGraphicsPath)common\DirectXLayer;
       $(WpfGraphicsPath)common\DirectXLayer\interfaces;
       $(WpfGraphicsPath)common\DirectXLayer\factories;
-      $(WpfGraphicsPath)common\DirectXLayer\D3DX9;
       $(WpfGraphicsSharedPath)util\utillib;
       $(GraphicsIncludeProcessedFilesFolder);
       $(IntermediateOutputPath);
@@ -72,10 +71,10 @@
     </ClCompile>
     <!-- DirectX Math routines do not need a static library - they  -->
     <!-- come from inlined routines in header files.                -->
-    <!-- d3d9.lib is needed for core DirectX 9 routines             -->
+    <!-- d3d11.lib and dxgi.lib provide the Direct3D 11 / DXGI entry points -->
     <!-- d3dcompiler.lib is needed for D3DCompile API               -->
     <Link Condition="'$(ConfigurationType)'!='StaticLibrary'">
-      <AdditionalDependencies>%(AdditionalDependencies);d3d9.lib;$(D3DCompilerDllBaseName).lib</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies);d3d11.lib;dxgi.lib;$(D3DCompilerDllBaseName).lib</AdditionalDependencies>
       <AdditionalOptions Condition="'$(Architecture)'!='arm64'">%(AdditionalOptions) /dllrename:$(D3DCompilerDllBaseName)$(D3DCompilerVersion)=$(D3DCompilerDllBaseName)$(D3DCompilerVersion)$(WpfVersionSuffix)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>

@@ -43,7 +43,7 @@
 
 | M | 내용 | 상태 |
 |---|---|---|
-| M1 | D3D9 없이 컴파일, 소프트웨어 렌더링(Tier 0) | ⏳ |
+| M1 | D3D9 없이 컴파일, 소프트웨어 렌더링(Tier 0) | ✅ 2026-10-28. 스모크 .NET 8/10 Tier 0, 3D 셀(11번)만 빈 칸(소프트웨어 3D도 WARP 디바이스가 필요, M7) |
 | M2 | 디바이스·스왑체인·클리어·프레젠트 | ⏳ |
 | M3 | 셰이더 파이프라인: 단색·그라데이션·경로 | ⏳ |
 | M4 | 텍스처·비트맵·타일 브러시 | ⏳ |
@@ -58,6 +58,15 @@
 ## Phase 4 — 검증과 정리 ⏳
 
 - 스모크 앱 확장(각 단계 전용 케이스), 스톡 대비 스크린샷 자동 비교.
+- 성능 벤치마크: 드로우 콜이 많은 장면·텍스트·투명 창(`AllowsTransparency`)을 스톡 DLL과 프레임 시간으로 비교한다.
+  기대: 기본 2D는 비슷(병목은 CPU 쪽 WPF 자체), D3D9On12 환경(인텔 Arc·ARM)과 메모리는 개선. 큰 이득은 아래 두 항목.
+- 투명 창을 DirectComposition + 프리멀티플라이드 알파 스왑체인으로 프레젠트한다(현재는 GPU→CPU 리드백 후 `UpdateLayeredWindow`).
+- 플립 모델 스왑체인 전환(D10의 성능 후속 작업).
 - dotnet/wpf-test의 DRT 중 렌더링 관련 테스트를 교체 DLL로 실행.
 - x86·arm64 빌드.
 - D3D9 흔적 제거 확인(프로세스에 `d3d9.dll`이 D3DImage interop 외에는 로드되지 않음).
+- `RenderTargetBitmap`의 하드웨어 경로(D8 옵트인). 지금은 `CMILFactory::CreateBitmapRenderTarget`이 항상 소프트웨어
+  `CSwRenderTargetBitmap`을 만들고, `CMilPixelShaderDuce::GetSwPixelShader`의 fxjit은 ps_2_0만 처리해 ps_3_0 `ShaderEffect`는
+  통과 셰이더로 대체된다(dotnet/wpf#7856). D3D11 텍스처 RT + 스테이징 리드백으로 효과를 적용한 비트맵을 만든다. M4 이후.
+- 사용자 D3D11 렌더 루프용 "프레임 큐" 이미지 소스(D19). MediaElement의 샘플 큐 구조를 D3DImage에 열어 Lock/Unlock 없이
+  `Acquire`/`Present`만으로 컴포지션에 잇는다. M9(D3DImage) 다음.

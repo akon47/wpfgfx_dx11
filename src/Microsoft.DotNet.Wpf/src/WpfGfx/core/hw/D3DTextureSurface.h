@@ -5,8 +5,6 @@
 
 //-----------------------------------------------------------------------------
 //
-
-//
 //  Description:
 //      Contains D3D texture surface level wrapper class declaration
 //
@@ -23,13 +21,17 @@ private:
 public:
     static HRESULT Create(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __inout_ecount(1) IDirect3DSurface9 *pID3DSurface,
+        __inout_ecount(1) ID3D11Texture2D *pD3DTexture,
+        UINT uLevel,
         __deref_out_ecount(1) CD3DSurface **ppSurface
         );
 
 protected:
 
-    CD3DTextureSurface(__inout_ecount(1) IDirect3DSurface9 * pD3DSurface);
+    CD3DTextureSurface(
+        __inout_ecount(1) ID3D11Texture2D * pD3DTexture,
+        UINT uLevel
+        );
 
     HRESULT Init(
         __inout_ecount(1) CD3DResourceManager *pResourceManager
@@ -43,12 +45,10 @@ protected:
 #endif
 
 private:
-    // 
+    //
     // CD3DResource methods
     //
 
     override void ReleaseD3DResources();
 
 };
-
-

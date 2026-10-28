@@ -46,7 +46,7 @@ CHwTextureRenderTarget::Create(
     //
 
     IFC(pDevice->CheckRenderTargetFormat(
-        D3DFMT_A8R8G8B8
+        DXGI_FORMAT_B8G8R8A8_UNORM
         ));
 
     //
@@ -58,7 +58,7 @@ CHwTextureRenderTarget::Create(
         // Right now we always use 32bppPBGRA - we ignore fForBlending and
         // don't support scRGB.
         MilPixelFormat::PBGRA32bpp,
-        D3DFMT_A8R8G8B8,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
         associatedDisplay
         );
     IFCOOM(*ppTextureRT);
@@ -94,22 +94,20 @@ HRESULT
 CHwTextureRenderTarget::GetSurfaceDescription(
     UINT uWidth,
     UINT uHeight,
-    __out_ecount(1) D3DSURFACE_DESC &sdLevel0
+    __out_ecount(1) D3D11_TEXTURE2D_DESC &sdLevel0
     ) const
 {
     HRESULT hr = S_OK;
 
-    sdLevel0.Format = m_d3dfmtTargetSurface;
-    sdLevel0.Type = D3DRTYPE_TEXTURE;
-    sdLevel0.Usage = D3DUSAGE_RENDERTARGET;
-    // We have to use default pool since we don't have drivers
-    // that supported DDI management features needed for MANAGED
-    // render targets.
-    sdLevel0.Pool = D3DPOOL_DEFAULT;
-    sdLevel0.MultiSampleType = D3DMULTISAMPLE_NONE;
-    sdLevel0.MultiSampleQuality = 0;
-    sdLevel0.Width = uWidth;
-    sdLevel0.Height = uHeight;
+    PopulateSurfaceDesc(
+        m_d3dfmtTargetSurface,
+        D3D11_USAGE_DEFAULT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        0,
+        uWidth,
+        uHeight,
+        &sdLevel0
+        );
 
     //
     // Get the required texture characteristics
@@ -151,7 +149,7 @@ Cleanup:
 CHwTextureRenderTarget::CHwTextureRenderTarget(
     __inout_ecount(1) CD3DDeviceLevel1 *pD3DDevice,
     MilPixelFormat::Enum fmtTarget,
-    D3DFORMAT d3dfmtTarget,
+    DXGI_FORMAT d3dfmtTarget,
     DisplayId associatedDisplay
     ) :
     CHwSurfaceRenderTarget(
@@ -288,7 +286,7 @@ CHwTextureRenderTarget::Init(
     // Create the texture
     //
 
-    D3DSURFACE_DESC sdLevel0;
+    D3D11_TEXTURE2D_DESC sdLevel0;
 
     IFC(GetSurfaceDescription(
         uWidth,

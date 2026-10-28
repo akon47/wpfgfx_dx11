@@ -5,10 +5,8 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics_text
 //      $Keywords:
 //
@@ -38,10 +36,11 @@ MtDefine(D3DResource_LockableTexture, MILHwMetrics, "Approximate lockable textur
 //      Create the CD3DLockableTexture
 //
 //------------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DLockableTexture::Create(
-    __inout_ecount(1) CD3DResourceManager *pResourceManager, 
-    __in_ecount(1) IDirect3DTexture9 *pD3DTexture,
+    __inout_ecount(1) CD3DResourceManager *pResourceManager,
+    __in_ecount(1) ID3D11Texture2D *pD3DGpuTexture,
+    __in_ecount(1) ID3D11Texture2D *pD3DStagingTexture,
     __deref_out_ecount(1) CD3DLockableTexture **ppLockableTexture)
 {
     HRESULT hr = S_OK;
@@ -60,7 +59,7 @@ CD3DLockableTexture::Create(
     // Call Init
     //
 
-    IFC((*ppLockableTexture)->Init(pResourceManager, pD3DTexture));
+    IFC((*ppLockableTexture)->Init(pResourceManager, pD3DGpuTexture, pD3DStagingTexture));
 
 Cleanup:
     if (FAILED(hr))
@@ -80,6 +79,9 @@ Cleanup:
 //
 //------------------------------------------------------------------------------
 CD3DLockableTexture::CD3DLockableTexture()
+    : m_pD3DStagingTexture(NULL),
+      m_fLocked(false),
+      m_cDirtyRects(0)
 {
 }
 
@@ -94,8 +96,7 @@ CD3DLockableTexture::CD3DLockableTexture()
 //------------------------------------------------------------------------------
 CD3DLockableTexture::~CD3DLockableTexture()
 {
-    // InternalDestroy will be called by CD3DTexture destructor.
-    //IGNORE_HR(InternalDestroy());
+    ReleaseInterfaceNoNULL(m_pD3DStagingTexture);
 }
 
 //+-----------------------------------------------------------------------------
@@ -104,27 +105,46 @@ CD3DLockableTexture::~CD3DLockableTexture()
 //      CD3DLockableTexture::Init
 //
 //  Synopsis:
-//      Inits the cached bitmap
+//      Inits the texture pair
 //
 //------------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DLockableTexture::Init(
     __inout_ecount(1) CD3DResourceManager *pResourceManager,
-    __in_ecount(1) IDirect3DTexture9 *pD3DTexture
+    __in_ecount(1) ID3D11Texture2D *pD3DGpuTexture,
+    __in_ecount(1) ID3D11Texture2D *pD3DStagingTexture
     )
 {
     HRESULT hr = S_OK;
 
     //
-    // Let CD3DTexture handle the init
+    // Let CD3DTexture handle the init of the GPU texture
     //
 
-    IFC(CD3DTexture::Init(pResourceManager, pD3DTexture));
+    IFC(CD3DTexture::Init(pResourceManager, pD3DGpuTexture));
+
+    m_pD3DStagingTexture = pD3DStagingTexture;
+    m_pD3DStagingTexture->AddRef();
 
 Cleanup:
     RRETURN(hr);
 }
 
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DLockableTexture::ReleaseD3DResources
+//
+//  Synopsis:
+//      Release both textures.
+//
+//------------------------------------------------------------------------------
+void
+CD3DLockableTexture::ReleaseD3DResources()
+{
+    ReleaseInterface(m_pD3DStagingTexture);
+    CD3DTexture::ReleaseD3DResources();
+}
 
 //+-----------------------------------------------------------------------------
 //
@@ -132,22 +152,54 @@ Cleanup:
 //      CD3DLockableTexture::LockRect
 //
 //  Synopsis:
-//      Delegate to IDirect3DTexture9::LockRect
+//      Map the staging texture. The whole level is mapped; the returned
+//      pointer is offset to pRect.
 //
 //------------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DLockableTexture::LockRect(
-    __out_ecount(1) D3DLOCKED_RECT* pLockedRect, 
+    __out_ecount(1) MilLockedRect* pLockedRect,
     __in_ecount(1) CONST RECT* pRect,
     DWORD dwFlags
     )
 {
     HRESULT hr = S_OK;
 
-    Assert((m_sdLevel0.Pool == Device().GetManagedPool()) ||
-           (m_sdLevel0.Pool == D3DPOOL_SYSTEMMEM));
+    D3D11_MAPPED_SUBRESOURCE mapped;
 
-    IFC(m_pD3DTexture->LockRect(0, pLockedRect, pRect, dwFlags));
+    Assert(!m_fLocked);
+    Assert(IsValid());
+
+    IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
+        m_pD3DStagingTexture,
+        0,
+        (dwFlags & D3DLOCK_READONLY) ? D3D11_MAP_READ : D3D11_MAP_READ_WRITE,
+        0,
+        &mapped
+        )));
+
+    m_fLocked = true;
+
+    pLockedRect->Pitch = static_cast<INT>(mapped.RowPitch);
+    pLockedRect->pBits = mapped.pData;
+
+    if (pRect)
+    {
+        pLockedRect->pBits =
+              static_cast<BYTE *>(mapped.pData)
+            + static_cast<SIZE_T>(pRect->top) * mapped.RowPitch
+            + static_cast<SIZE_T>(pRect->left) * D3DFormatSize(m_sdLevel0.Format);
+
+        if (!(dwFlags & (D3DLOCK_NO_DIRTY_UPDATE | D3DLOCK_READONLY)))
+        {
+            IFC(AddDirtyRect(*pRect));
+        }
+    }
+    else if (!(dwFlags & (D3DLOCK_NO_DIRTY_UPDATE | D3DLOCK_READONLY)))
+    {
+        RECT rcAll = { 0, 0, static_cast<LONG>(m_sdLevel0.Width), static_cast<LONG>(m_sdLevel0.Height) };
+        IFC(AddDirtyRect(rcAll));
+    }
 
 Cleanup:
     RRETURN(hr);
@@ -159,18 +211,18 @@ Cleanup:
 //      CD3DLockableTexture::UnlockRect
 //
 //  Synopsis:
-//      Delegate to IDirect3DTexture9::UnlockRect
+//      Unmap the staging texture.
 //
 //------------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DLockableTexture::UnlockRect()
 {
-    HRESULT hr = S_OK;
+    Assert(m_fLocked);
 
-    IFC(m_pD3DTexture->UnlockRect(0));
+    Device().GetD3DContextNoRef()->Unmap(m_pD3DStagingTexture, 0);
+    m_fLocked = false;
 
-Cleanup:
-    RRETURN(hr);
+    return S_OK;
 }
 
 //+-----------------------------------------------------------------------------
@@ -179,20 +231,89 @@ Cleanup:
 //      CD3DLockableTexture::AddDirtyRect
 //
 //  Synopsis:
-//      Delegate to IDirect3DTexture9::AddDirtyRect
+//      Remember a region that must be copied to the GPU texture.
 //
 //------------------------------------------------------------------------------
-HRESULT 
+HRESULT
 CD3DLockableTexture::AddDirtyRect(
     __in_ecount(1) const RECT &rc
     )
 {
-    HRESULT hr = S_OK;
+    if (m_cDirtyRects < c_cMaxDirtyRects)
+    {
+        m_rgDirtyRects[m_cDirtyRects++] = rc;
+    }
+    else
+    {
+        // Too many rectangles: collapse everything into one bounding box.
+        RECT rcUnion = m_rgDirtyRects[0];
 
-    IFC(m_pD3DTexture->AddDirtyRect(&rc));
+        for (UINT i = 1; i < m_cDirtyRects; i++)
+        {
+            UnionRect(&rcUnion, &rcUnion, &m_rgDirtyRects[i]);
+        }
 
-Cleanup:
-    RRETURN(hr);
+        UnionRect(&rcUnion, &rcUnion, &rc);
+
+        m_rgDirtyRects[0] = rcUnion;
+        m_cDirtyRects = 1;
+    }
+
+    return S_OK;
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DLockableTexture::EnsureGpuContents
+//
+//  Synopsis:
+//      Copy dirty regions from the staging texture to the GPU texture.
+//
+//------------------------------------------------------------------------------
+HRESULT
+CD3DLockableTexture::EnsureGpuContents()
+{
+    Assert(!m_fLocked);
+
+    if (m_cDirtyRects > 0 && IsValid())
+    {
+        ID3D11DeviceContext *pContext = Device().GetD3DContextNoRef();
+
+        for (UINT i = 0; i < m_cDirtyRects; i++)
+        {
+            RECT const &rc = m_rgDirtyRects[i];
+
+            if (rc.right <= rc.left || rc.bottom <= rc.top)
+            {
+                continue;
+            }
+
+            D3D11_BOX box;
+
+            box.left = rc.left;
+            box.top = rc.top;
+            box.front = 0;
+            box.right = rc.right;
+            box.bottom = rc.bottom;
+            box.back = 1;
+
+            pContext->CopySubresourceRegion(
+                m_pD3DTexture,
+                0,
+                rc.left,
+                rc.top,
+                0,
+                m_pD3DStagingTexture,
+                0,
+                &box
+                );
+        }
+
+        m_cDirtyRects = 0;
+    }
+
+    return S_OK;
 }
 
 
@@ -297,7 +418,7 @@ CD3DLockableTexturePair::Draw(
             ));
 
         IFC(pDevice->RenderTexture(
-            m_pTextureMain, 
+            m_pTextureMain,
             rc,
             TBM_ADD_COLORS
             ));
@@ -306,7 +427,7 @@ CD3DLockableTexturePair::Draw(
     {
         // regular case, just draw main texture
         IFC(pDevice->RenderTexture(
-            m_pTextureMain, 
+            m_pTextureMain,
             rc,
             TBM_DEFAULT
             ));
@@ -353,7 +474,7 @@ HRESULT CD3DLockableTexturePairLock::Lock(
             Assert(uWidthMain == uWidthAux);
             Assert(uHeightMain == uHeightAux);
         }
-    
+
         // We never attempt to lock outside of texture.
         Assert(uWidth <= uWidthMain);
         Assert(uHeight <= uHeightMain);
@@ -363,7 +484,7 @@ HRESULT CD3DLockableTexturePairLock::Lock(
     }
 #endif
 
-    D3DLOCKED_RECT lockedRect;
+    MilLockedRect lockedRect;
 
     // Prepare main texture
     {
@@ -409,7 +530,7 @@ CD3DLockableTexturePairLock::LockOne(
     __in_ecount(1) CD3DLockableTexture* pTexture,
     UINT uWidth,
     UINT uHeight,
-    __out_ecount(1) D3DLOCKED_RECT* pD3DLockedRect
+    __out_ecount(1) MilLockedRect* pLockedRect
     )
 {
     HRESULT hr = S_OK;
@@ -419,23 +540,21 @@ CD3DLockableTexturePairLock::LockOne(
     //
 
     CMilRectL rcLock(0, 0, uWidth, uHeight, XYWH_Parameters);
-    IFC(pTexture->LockRect(pD3DLockedRect, &rcLock, D3DLOCK_NO_DIRTY_UPDATE));
+    IFC(pTexture->LockRect(pLockedRect, &rcLock, D3DLOCK_NO_DIRTY_UPDATE));
 
     IFC(pTexture->AddDirtyRect(rcLock));
 
     //
     // Clear the rect
-    //    
+    //
 
-    BYTE *pScanline = (BYTE *)pD3DLockedRect->pBits;
+    BYTE *pScanline = (BYTE *)pLockedRect->pBits;
     for (UINT i = 0; i < uHeight; i++)
     {
         ZeroMemory(pScanline, uWidth*sizeof(ARGB));
-        pScanline += pD3DLockedRect->Pitch;
+        pScanline += pLockedRect->Pitch;
     }
 
 Cleanup:
     RRETURN(hr);
 }
-
-

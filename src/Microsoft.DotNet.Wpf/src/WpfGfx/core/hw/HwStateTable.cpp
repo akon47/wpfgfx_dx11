@@ -25,14 +25,12 @@ MtDefine(StateTableMemory, MILRawMemory, "StateTableMemory");
 
 // Explicit template instantiation
 
-template class CStateTable<IDirect3DBaseTexture9 *>;
+template class CStateTable<ID3D11ShaderResourceView *>;
 
-template class CStateTable<IDirect3DVertexShader9 *>;
-template class CStateTable<IDirect3DPixelShader9 *>;
+template class CStateTable<ID3D11VertexShader *>;
+template class CStateTable<ID3D11PixelShader *>;
 
-template class CStateTable<IDirect3DIndexBuffer9 *>;
-template class CStateTable<IDirect3DVertexBuffer9 *>;
-template class CStateTable<IDirect3DSurface9 *>;
+template class CStateTable<ID3D11Buffer *>;
 
 
 

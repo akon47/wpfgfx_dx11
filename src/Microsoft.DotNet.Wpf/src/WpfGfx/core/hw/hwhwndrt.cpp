@@ -44,7 +44,7 @@ MtDefine(CHwHWNDRenderTarget, MILRender, "CHwHWNDRenderTarget");
 
 CHwHWNDRenderTarget::CHwHWNDRenderTarget(
     __inout_ecount(1) CD3DDeviceLevel1 *pD3DDevice,
-    __in_ecount(1) D3DPRESENT_PARAMETERS const &D3DPresentParams,
+    __in_ecount(1) MilSwapChainParams const &D3DPresentParams,
     UINT AdapterOrdinalInGroup,
     DisplayId associatedDisplay,
     MilWindowLayerType::Enum eWindowLayerType
@@ -69,7 +69,7 @@ HRESULT
 CHwHWNDRenderTarget::Init(
     __in_ecount_opt(1) HWND hwnd,
     __in_ecount(1) CDisplay const *pDisplay,
-    D3DDEVTYPE type, 
+    MilDeviceKind type,
     MilRTInitialization::Flags dwFlags
     )
 {
@@ -95,23 +95,17 @@ CHwHWNDRenderTarget::Init(
     // display format
     //
 
-    if (m_D3DPresentParams.BackBufferFormat == D3DFMT_A2R10G10B10)
+    if (m_D3DPresentParams.BackBufferFormat == DXGI_FORMAT_R10G10B10A2_UNORM)
     {
-        D3DDISPLAYMODE d3ddm;
+        MilDisplayMode mode;
 
-        IFC(pDisplay->D3DObject()->GetAdapterDisplayMode(
-                pDisplay->GetDisplayIndex(),
-                &d3ddm
-                ));
+        IFC(pDisplay->GetMode(&mode));
 
-        if (d3ddm.Format != D3DFMT_A2R10G10B10)
+        if (mode.Format != DXGI_FORMAT_R10G10B10A2_UNORM)
         {
-            if (!m_pD3DDevice->SupportsLinearTosRGBPresentation())
-            {
-                IFC(WGXERR_DISPLAYFORMATNOTSUPPORTED);
-            }
-
-            m_dwPresentFlags |= D3DPRESENT_LINEAR_CONTENT;
+            // DXGI has no D3DPRESENT_LINEAR_CONTENT; 10 bit back buffers are
+            // only presented to 10 bit display modes.
+            IFC(WGXERR_DISPLAYFORMATNOTSUPPORTED);
         }
         else
         {

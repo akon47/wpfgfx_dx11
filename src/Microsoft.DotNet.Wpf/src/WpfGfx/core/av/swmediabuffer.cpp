@@ -185,10 +185,16 @@ Init(
 
     GetUnderlyingDevice(m_pRenderDevice, &pIDevice);
 
+    if (pIDevice == NULL)
+    {
+        // No D3D9 device behind the D3D11 engine device until M11.
+        IFC(WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE);
+    }
+
     IFC(pIDevice->CreateRenderTarget(
             m_uiWidth,
             m_uiHeight,
-            PixelFormatToD3DFormat(MilPixelFormat::BGR32bpp),
+            D3DFMT_X8R8G8B8,
             D3DMULTISAMPLE_NONE,
             0,                      // Multisample quality is irrelevant
             TRUE,                   // This surface must be lockable

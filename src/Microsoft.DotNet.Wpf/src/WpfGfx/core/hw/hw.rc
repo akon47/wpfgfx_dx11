@@ -5,8 +5,6 @@
 
 #include <windows.h>
 
-#include "Shaders.h"
-#include "Shaders.rc"
 #include "ShaderAssemblies\Shaders.h"
 #include "ShaderAssemblies\EmbeddedShaders.RC"
 

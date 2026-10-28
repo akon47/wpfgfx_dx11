@@ -130,7 +130,7 @@ CModelRenderWalker::RenderGeometryModel3D(
 
     BOOL fPopTransform = FALSE;
 
-    Assert(m_pCtxState->CullMode3D == D3DCULL_CW || m_pCtxState->CullMode3D == D3DCULL_CCW);
+    Assert(m_pCtxState->CullMode3D == D3D11_CULL_FRONT || m_pCtxState->CullMode3D == D3D11_CULL_BACK);
     
     // Early exit with S_OK if the primitive has no viable materials or no geometry
     if (!pModel->m_data.m_pGeometry || 
@@ -227,7 +227,7 @@ CModelRenderWalker::ProcessMaterialAndRender(
     HRESULT hr = S_OK;
 
     // Cache the original cull mode so we can restore it on cleanup.
-    D3DCULL originalCullMode = m_pCtxState->CullMode3D;
+    D3D11_CULL_MODE originalCullMode = m_pCtxState->CullMode3D;
 
     if (pMaterial && pMaterial->ShouldRender())
     {
@@ -279,11 +279,11 @@ CModelRenderWalker::ProcessMaterialAndRender(
         // restored in Cleanup:
         {
             bool fCullIsCW = 
-                (m_pCtxState->CullMode3D == D3DCULL_CW) ^ 
+                (m_pCtxState->CullMode3D == D3D11_CULL_FRONT) ^ 
                 (m_pCtxState->WorldTransform3D.GetDeterminant3D() < 0) ^ 
                 fFlipCullMode;
             
-            m_pCtxState->CullMode3D = fCullIsCW ? D3DCULL_CW : D3DCULL_CCW;
+            m_pCtxState->CullMode3D = fCullIsCW ? D3D11_CULL_FRONT : D3D11_CULL_BACK;
 
             // CMILMesh3D & CMILLightData handle the transforms (including flipping if necessary)
             // But they do need to know if we're flipping which side of the mesh we're rendering

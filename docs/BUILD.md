@@ -14,7 +14,7 @@
 
 ```powershell
 $env:CL = "/wd4819"
-.\build.cmd -configuration Release -platform x64 -nodeReuse $false
+.\build.cmd -configuration Release -platform x64 -nodeReuse 0
 ```
 
 - 소요 시간은 네이티브 프로젝트 28개 기준 수 분. 이후 증분 빌드는 더 짧다.
@@ -26,7 +26,7 @@ $env:CL = "/wd4819"
 시스템 로캘이 한국어(CP949) 등 비-UTF-8 코드 페이지이면 Windows SDK의 `wtypesbase.idl` 같은 파일의
 비-ASCII 문자 때문에 경고 C4819가 나고, 저장소가 경고를 오류로 취급해 빌드가 실패한다.
 `CL=/wd4819` 환경 변수로 모든 `cl.exe` 호출(midl이 부르는 전처리기 포함)에서 끈다.
-MSBuild 노드가 환경 변수를 물려받으므로, 이전 빌드의 노드가 살아 있으면 먼저 끝내야 한다(`-nodeReuse $false`).
+MSBuild 노드가 환경 변수를 물려받으므로, 이전 빌드의 노드가 살아 있으면 먼저 끝내야 한다(`-nodeReuse 0`. PowerShell에서 `$false`를 쓰면 문자열 "False"로 전달되어 `Build.ps1`의 `[bool]` 매개변수 바인딩이 실패한다. cmd.exe에서는 `$false`도 된다).
 시스템 로캘을 UTF-8(베타)로 바꾼 경우에는 필요 없다.
 
 ## 산출물

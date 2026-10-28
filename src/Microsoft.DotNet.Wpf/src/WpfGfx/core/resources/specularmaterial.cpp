@@ -66,7 +66,7 @@ override HRESULT CMilSpecularMaterialDuce::Realize(
     CBrushRealizer *pBrush = NULL;
     CMILShaderSpecular *pShaderSpecular = NULL;
 
-    Assert(pContextState->CullMode3D == D3DCULL_CW || pContextState->CullMode3D == D3DCULL_CCW);
+    Assert(pContextState->CullMode3D == D3D11_CULL_FRONT || pContextState->CullMode3D == D3D11_CULL_BACK);
 
     //
     // We should be executing this code only if we will be rendered.

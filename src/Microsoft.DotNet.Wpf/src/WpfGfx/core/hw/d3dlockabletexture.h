@@ -5,10 +5,8 @@
 
 //+-----------------------------------------------------------------------------
 //
-
-//
 //  $TAG ENGR
-
+//
 //      $Module:    win_mil_graphics_text
 //      $Keywords:
 //
@@ -18,6 +16,10 @@
 //
 //      Contains also CD3DLockableTexturePair class declaration and stack based
 //      lock helper class for it.
+//
+//      D3D9의 D3DPOOL_MANAGED 텍스처를 대체한다: CPU가 쓰는 STAGING 텍스처와 GPU가
+//      읽는 DEFAULT 텍스처 한 쌍이며, LockRect로 더럽힌 영역을 EnsureGpuContents에서
+//      CopySubresourceRegion으로 올린다.
 //
 //  $ENDTAG
 //
@@ -38,14 +40,13 @@ public:
 
     static HRESULT Create(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __in_ecount(1) IDirect3DTexture9 *pD3DTexture,
+        __in_ecount(1) ID3D11Texture2D *pD3DGpuTexture,
+        __in_ecount(1) ID3D11Texture2D *pD3DStagingTexture,
         __deref_out_ecount(1) CD3DLockableTexture **ppD3DLockableTexture
         );
 
-    // Only call this method if you are certain that we have a system memory
-    // texture.
     HRESULT LockRect(
-        __out_ecount(1) D3DLOCKED_RECT* pLockedRect, 
+        __out_ecount(1) MilLockedRect* pLockedRect,
         __in_ecount(1) CONST RECT* pRect,
         DWORD dwFlags
         );
@@ -56,13 +57,16 @@ public:
         __in_ecount(1) const RECT &rc
         );
 
+    override HRESULT EnsureGpuContents();
+
 protected:
     CD3DLockableTexture();
     ~CD3DLockableTexture();
 
     HRESULT Init(
         __inout_ecount(1) CD3DResourceManager *pResourceManager,
-        __in_ecount(1) IDirect3DTexture9 *pD3DTexture
+        __in_ecount(1) ID3D11Texture2D *pD3DGpuTexture,
+        __in_ecount(1) ID3D11Texture2D *pD3DStagingTexture
         );
 
 #if PERFMETER
@@ -71,6 +75,25 @@ protected:
         return Mt(D3DResource_LockableTexture);
     }
 #endif
+
+private:
+
+    //
+    // CD3DResource methods
+    //
+
+    void ReleaseD3DResources();
+
+private:
+    ID3D11Texture2D *m_pD3DStagingTexture;
+
+    bool m_fLocked;
+
+    // Dirty region waiting to be copied to the GPU texture. Rectangles are
+    // merged into one bounding box once the small list fills up.
+    enum { c_cMaxDirtyRects = 8 };
+    RECT m_rgDirtyRects[c_cMaxDirtyRects];
+    UINT m_cDirtyRects;
 };
 
 //+-----------------------------------------------------------------------------
@@ -80,7 +103,7 @@ protected:
 //
 //  Synopsis:
 //      Holds one or two lockable textures. Normally, only the main one is used;
-//      the second is involved only for text rendering in clear type mode. 
+//      the second is involved only for text rendering in clear type mode.
 //      Clear type requires 6 components per texel: three colors and three
 //      alphas (separate alpha for each color component). As far as DX allows
 //      only four components, we store alphas separately in m_pAuxTexture, while
@@ -171,7 +194,7 @@ private:
         __in_ecount(1) CD3DLockableTexture* pTexture,
         UINT uWidth,
         UINT uHeight,
-        __out_ecount(1) D3DLOCKED_RECT* pD3DLockedRect
+        __out_ecount(1) MilLockedRect* pLockedRect
         );
 
 private:
@@ -179,5 +202,3 @@ private:
     bool m_fMainLocked;
     bool m_fAuxLocked;
 };
-
-
