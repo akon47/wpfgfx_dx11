@@ -74,6 +74,10 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - `--transparent <png>`: `AllowsTransparency` 창을 주 창 위에 띄우고 `PrintWindow`로 캡처한다(레이어드 윈도우 프레젠트 경로).
   다른 창에 가려지지 않았으면 화면 복사본(`*-screen.png`)도 남긴다.
 - `--media <file> --media-shot <png>`: `MediaElement` 창을 띄워 재생하고 캡처한다(`core/av` EVR 프레젠터 경로, D25).
+- `--rtb <png> [--rtb-hw]`: 그라데이션·텍스트·ps_2_0·ps_3_0 효과·그림자를 `RenderTargetBitmap` 으로 그려 저장한다. `--rtb-hw` 는
+  `Dx11Engine.HardwareRenderTargetBitmap = true`(GPU 경로, D27; 스톡 엔진에서는 예외).
+- `--fq <png> [--fq-queues N] [--fq-seconds S] [--fq-block]`: 프레임 큐(D19) 시나리오. 워커 스레드가 N개 큐에 60 fps 로 그리고
+  `--fq-block` 이면 UI 스레드를 0.5초마다 100 ms 막는다. 결과 줄 `fq: ...` 에 카운터와 250 ms 간격 두 캡처의 변화율이 나온다.
   `tests/assets/smptebars.mp4`는 정지 SMPTE 막대(H.264 160×120, 4초)라 캡처 시점에 무관하다.
   재생성: `ffmpeg -f lavfi -i smptebars=size=160x120:rate=10 -t 4 -pix_fmt yuv420p -c:v libx264 -profile:v baseline -g 10 smptebars.mp4`.
 
@@ -106,7 +110,11 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 .\tests\run-smoke.ps1 -Dll <폴더> -Tfm net8.0-windows   # 다른 DLL, 한 런타임만
 .\tests\run-smoke.ps1 -Bench -BenchSeconds 8            # 처리량 벤치마크 행 추가(아래)
 .\tests\run-smoke.ps1 -StraddleLeft 2110                # 창을 두 모니터에 걸치는 시나리오 추가(모니터 배치에 맞춰 x 지정)
+.\tests\run-smoke.ps1 -Rid win-x86 -Tfm net8.0-windows   # x86: 먼저 .\build.cmd -configuration Release -platform x86
 ```
+
+행: engine, standard, transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in), frame queues(8, UI blocked),
+frame queues on stock(폴백), 선택 straddling, bench.
 
 의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로
 클라이언트 영역만 뜬다(제목 표시줄은 포커스에 따라 색이 달라진다).

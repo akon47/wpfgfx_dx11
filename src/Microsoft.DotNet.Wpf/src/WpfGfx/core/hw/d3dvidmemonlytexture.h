@@ -28,7 +28,8 @@ public:
         bool fIsEvictable,
         __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
         __deref_out_ecount(1) CD3DVidMemOnlyTexture **ppVidMemOnlyTexture,
-        __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle
+        __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle,
+        bool fAllowLargerFromPool = false   // D26: intermediate render targets
         );
 
     static HRESULT Create(

@@ -18,7 +18,7 @@
 
 #include "precomp.hpp"
 
-#define WPFGFX_DX11_ABI_VERSION 1
+#define WPFGFX_DX11_ABI_VERSION 2
 
 struct WpfGfxDx11Info
 {
@@ -31,7 +31,7 @@ struct WpfGfxDx11Info
 
 //+-----------------------------------------------------------------------------
 //
-//  Function:  GetEngineDevice
+//  Function:  MilDx11GetEngineDevice
 //
 //  Synopsis:  Returns (AddRef'd) the engine's hardware device wrapper for a
 //             display, creating it when no window has needed it yet. Mirrors
@@ -39,8 +39,8 @@ struct WpfGfxDx11Info
 //
 //------------------------------------------------------------------------------
 
-static HRESULT
-GetEngineDevice(
+HRESULT
+MilDx11GetEngineDevice(
     UINT uDisplayIndex,
     __deref_out CD3DDeviceLevel1 **ppDevice,
     __deref_opt_out CDisplaySet const **ppDisplaySet
@@ -124,7 +124,7 @@ WpfGfxDx11_GetInfo(
         IFC(E_INVALIDARG);
     }
 
-    IFC(GetEngineDevice(0, &pDevice, &pDisplaySet));
+    IFC(MilDx11GetEngineDevice(0, &pDevice, &pDisplaySet));
 
     pInfo->uAbiVersion = WPFGFX_DX11_ABI_VERSION;
     pInfo->uFeatureLevel = pDevice->GetD3DDeviceNoRef()->GetFeatureLevel();
@@ -162,12 +162,207 @@ WpfGfxDx11_GetDevice(
     CHECKPTRARG(ppD3DDevice);
     *ppD3DDevice = NULL;
 
-    IFC(GetEngineDevice(uDisplayIndex, &pDevice, NULL));
+    IFC(MilDx11GetEngineDevice(uDisplayIndex, &pDevice, NULL));
 
     *ppD3DDevice = pDevice->GetD3DDeviceNoRef();
     (*ppD3DDevice)->AddRef();
 
 Cleanup:
+    ReleaseInterface(pDevice);
+    RRETURN(hr);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Function:  WpfGfxDx11_SetOption
+//
+//  Synopsis:  Turns an opt-in engine option on or off (ABI 2). Options:
+//             1 = RenderTargetBitmap renders on the GPU (effects included)
+//                 instead of the software rasterizer.
+//
+//------------------------------------------------------------------------------
+
+HRESULT WINAPI
+WpfGfxDx11_SetOption(
+    UINT uOption,
+    UINT uValue
+    )
+{
+    if (uOption == MilDx11Option_None || uOption >= MilDx11Option_Count)
+    {
+        RRETURN(E_INVALIDARG);
+    }
+
+    MilDx11SetOption(uOption, uValue != 0);
+
+    return S_OK;
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Frame queue exports (D19, ABI 2). pQueue is the IUnknown returned by
+//  WpfGfxDx11_FrameQueue_Create; hand the same pointer to D3DImage.SetBackBuffer
+//  (through WpfGfx.Dx11's D3D11Image) to show it.
+//
+//------------------------------------------------------------------------------
+
+static HRESULT
+GetFrameQueue(
+    __in_opt IUnknown *pUnknown,
+    __deref_out CMilFrameQueue **ppQueue
+    )
+{
+    *ppQueue = NULL;
+
+    if (pUnknown == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    return pUnknown->QueryInterface(IID_IMilFrameQueue, reinterpret_cast<void **>(ppQueue));
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_Create(
+    __in_ecount(1) const WpfGfxFrameQueueDesc *pDesc,
+    __deref_out IUnknown **ppQueue
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+    CFloatFPU oGuard;
+
+    CHECKPTRARG(ppQueue);
+    *ppQueue = NULL;
+
+    IFC(CMilFrameQueue::Create(pDesc, &pQueue));
+
+    *ppQueue = static_cast<IUnknown *>(pQueue);
+    pQueue = NULL;
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    RRETURN(hr);
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_GetSharedHandles(
+    __in IUnknown *pUnknown,
+    __out_ecount(cHandles) HANDLE *pHandles,
+    UINT cHandles
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+
+    CHECKPTRARG(pHandles);
+    IFC(GetFrameQueue(pUnknown, &pQueue));
+    IFC(pQueue->GetSharedHandles(pHandles, cHandles));
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    RRETURN(hr);
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_TryAcquire(
+    __in IUnknown *pUnknown,
+    __out_ecount(1) UINT *puIndex
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+
+    CHECKPTRARG(puIndex);
+    IFC(GetFrameQueue(pUnknown, &pQueue));
+    hr = pQueue->TryAcquire(puIndex);
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    return hr;
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_Present(
+    __in IUnknown *pUnknown,
+    UINT uIndex
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+
+    IFC(GetFrameQueue(pUnknown, &pQueue));
+    hr = pQueue->Present(uIndex);
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    return hr;
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_Discard(
+    __in IUnknown *pUnknown,
+    UINT uIndex
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+
+    IFC(GetFrameQueue(pUnknown, &pQueue));
+    hr = pQueue->Discard(uIndex);
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    return hr;
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_GetStats(
+    __in IUnknown *pUnknown,
+    __inout_ecount(1) WpfGfxFrameQueueStats *pStats
+    )
+{
+    HRESULT hr = S_OK;
+    CMilFrameQueue *pQueue = NULL;
+
+    CHECKPTRARG(pStats);
+
+    if (pStats->cbSize < sizeof(WpfGfxFrameQueueStats))
+    {
+        IFC(E_INVALIDARG);
+    }
+
+    IFC(GetFrameQueue(pUnknown, &pQueue));
+    pQueue->GetStats(pStats);
+
+Cleanup:
+    ReleaseInterface(pQueue);
+    RRETURN(hr);
+}
+
+HRESULT WINAPI
+WpfGfxDx11_FrameQueue_QueryCapability(
+    UINT uDisplayIndex,
+    __out_ecount(1) BOOL *pfHardware
+    )
+{
+    HRESULT hr = S_OK;
+    CD3DDeviceLevel1 *pDevice = NULL;
+    ID3D11Device1 *pDevice1 = NULL;
+
+    CHECKPTRARG(pfHardware);
+    *pfHardware = FALSE;
+
+    // A hardware device on that display that can open NT shared handles.
+    if (SUCCEEDED(MilDx11GetEngineDevice(uDisplayIndex, &pDevice, NULL))
+        && pDevice->GetDeviceKind() == MilDeviceKind_Hardware
+        && SUCCEEDED(pDevice->GetD3DDeviceNoRef()->QueryInterface(__uuidof(ID3D11Device1), reinterpret_cast<void **>(&pDevice1))))
+    {
+        *pfHardware = TRUE;
+    }
+
+Cleanup:
+    ReleaseInterface(pDevice1);
     ReleaseInterface(pDevice);
     RRETURN(hr);
 }

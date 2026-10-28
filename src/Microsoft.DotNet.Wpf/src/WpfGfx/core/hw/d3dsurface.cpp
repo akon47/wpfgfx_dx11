@@ -13,6 +13,7 @@
 //
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 MtDefine(CD3DSurface, MILRender, "CD3DSurface");
 MtDefine(D3DResource_Surface, MILHwMetrics, "Approximate surface sizes");
@@ -650,6 +651,7 @@ CD3DSurface::ReadIntoSysMemBuffer(
         descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         descStaging.MiscFlags = 0;
 
+        MilDx11CountCreate(MilDx11Site_Readback);
         IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descStaging, NULL, &pStagingTexture)));
 
         ID3D11Texture2D *pCopySource = m_pD3DTexture;

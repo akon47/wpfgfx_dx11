@@ -44,8 +44,12 @@ public:
         );
 
     HRESULT AddUserDirtyRect(__in const CMilRectU &rc);
-
     HRESULT Present();
+
+    // Frame queue mode (D19): the composition pass calls this when the queue
+    // has a frame pending. S_FALSE when nothing was copied.
+    HRESULT PresentFromFrameQueue();
+    __out_opt CMilFrameQueue *GetFrameQueueNoRef() const { return m_pFrameQueue; }
 
     void Detach();
 
@@ -74,7 +78,9 @@ protected:
         // User texture is D3D11: copied on our device (same device or shared handle)
         D3D11Copy,
         // Back buffer will be copied to front buffer through software
-        Software
+        Software,
+        // D19: frames come from a CMilFrameQueue filled by an app render thread
+        FrameQueue
     };
     
     CInteropDeviceBitmap(
@@ -98,6 +104,16 @@ private:
         __in IDirect3DSurface9 *pID3DSurface
         );
     
+    static HRESULT CreateForFrameQueue(
+        __in CMilFrameQueue *pFrameQueue,
+        __in_range(0, DBL_MAX) double dpiX,
+        __in_range(0, DBL_MAX) double dpiY,
+        UINT uVersion,
+        __in FrontBufferAvailableCallbackPtr pfnAvailable,
+        bool isSoftwareFallbackEnabled,
+        __deref_out CInteropDeviceBitmap **ppInteropDeviceBitmap
+        );
+
     static HRESULT CreateForD3D11Texture(
         __in ID3D11Texture2D *pUserTexture,
         __in_range(0, DBL_MAX) double dpiX,
@@ -129,6 +145,7 @@ private:
     ID3D11Texture2D *m_pIUserTexture11;
 
     FrontBufferAvailableCallbackPtr m_pfnAvailable;
+    CMilFrameQueue *m_pFrameQueue;                  // D19: set by CreateForFrameQueue
     UINT m_uVersion;
     
     //

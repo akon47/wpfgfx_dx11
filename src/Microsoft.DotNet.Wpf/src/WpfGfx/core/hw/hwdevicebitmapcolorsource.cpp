@@ -931,6 +931,10 @@ CHwDeviceBitmapColorSource::UpdateSurfaceThroughSystemMemory(
     )
 {
     HRESULT hr = S_OK;
+
+    // The engine device may also be in use by the UI thread (GPU RenderTargetBitmap
+    // readback), so every immediate-context use takes the device lock.
+    ENTER_DEVICE_FOR_SCOPE(*m_pDevice);
     bool fUnlockNeeded = false;
 
     if (!m_pSysMemTexture)

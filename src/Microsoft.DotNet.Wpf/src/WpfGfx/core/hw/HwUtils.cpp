@@ -18,6 +18,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 
 //+----------------------------------------------------------------------------
@@ -231,6 +232,7 @@ ReadRenderTargetIntoSysMemBuffer(
         descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         descStaging.MiscFlags = 0;
 
+        MilDx11CountCreate(MilDx11Site_Readback);
         IFC(MilTranslateD3D11Error(pIDevice->CreateTexture2D(&descStaging, NULL, &pD3DStagingTexture)));
     }
 
@@ -406,6 +408,7 @@ ReadD3D11TextureIntoSysMemBuffer(
         descStaging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         descStaging.MiscFlags = 0;
 
+        MilDx11CountCreate(MilDx11Site_Readback);
         IFC(MilTranslateD3D11Error(pDevice->CreateTexture2D(&descStaging, NULL, &pStaging)));
 
         D3D11_BOX box;

@@ -90,6 +90,7 @@
 #include "hwrasterizer.h"
 #include "hwsurfrt.h"
 #include "hwtexturert.h"
+#include "FrameQueue.h"
 #include "hwdisplayrt.h"
 #include "hwhwndrt.h"
 

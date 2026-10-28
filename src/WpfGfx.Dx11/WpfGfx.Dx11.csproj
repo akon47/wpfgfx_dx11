@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Companion assembly for the D3D11 WpfGfx engine (D8). It binds to the wpfgfx_cor3.dll that
        WPF has already loaded, so it works no matter how the app replaced the engine. On the stock
@@ -15,5 +15,9 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WpfGfx.Dx11.Interop\WpfGfx.Dx11.Interop.csproj" />
+  </ItemGroup>
 
 </Project>

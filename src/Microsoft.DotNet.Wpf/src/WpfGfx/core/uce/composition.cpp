@@ -630,6 +630,9 @@ HRESULT CComposition::ProcessComposition(
     //
     IFC(OnBeginComposition());
 
+    // D19: frames presented by app render threads since the last pass.
+    ProcessPendingFrameQueueImages();
+
     //
     // If the display state is invalid, then we report a software tier,
     // the DWM will turn off compositing in this case, WPF should invalidate
@@ -1105,6 +1108,39 @@ Cleanup:
 //      Removes a video resource from the list of currently playing videos.
 // 
 //------------------------------------------------------------------------------
+
+HRESULT
+CComposition::RegisterFrameQueueImage(
+    __in_ecount(1) CMilD3DImageDuce *pImage
+    )
+{
+    HRESULT hr = S_OK;
+
+    IFC(m_rgpFrameQueueImages.Add(pImage));
+
+Cleanup:
+    RRETURN(hr);
+}
+
+void
+CComposition::UnregisterFrameQueueImage(
+    __in_ecount(1) CMilD3DImageDuce *pImage
+    )
+{
+    m_rgpFrameQueueImages.Remove(pImage);
+}
+
+void
+CComposition::ProcessPendingFrameQueueImages()
+{
+    for (UINT i = 0; i < m_rgpFrameQueueImages.GetCount(); i++)
+    {
+        if (m_rgpFrameQueueImages[i]->HasPendingFrame())
+        {
+            m_rgpFrameQueueImages[i]->PresentPendingFrame();
+        }
+    }
+}
 
 void
 CComposition::UnregisterVideo(

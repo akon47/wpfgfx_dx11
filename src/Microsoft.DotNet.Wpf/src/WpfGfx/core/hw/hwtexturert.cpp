@@ -162,6 +162,62 @@ CHwTextureRenderTarget::CHwTextureRenderTarget(
     m_pVidMemOnlyTexture = NULL;
     m_pDeviceBitmap = NULL;
     m_fInvalidContents = false;
+    m_dpiX = 96.0f;
+    m_dpiY = 96.0f;
+}
+
+//+------------------------------------------------------------------------
+//
+//  Member:    CHwTextureRenderTarget::CreateForBitmap
+//
+//  Synopsis:  RenderTargetBitmap backed by a GPU texture (opt-in).
+//
+//-------------------------------------------------------------------------
+HRESULT
+CHwTextureRenderTarget::CreateForBitmap(
+    UINT uWidth,
+    UINT uHeight,
+    FLOAT dpiX,
+    FLOAT dpiY,
+    __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
+    DisplayId associatedDisplay,
+    __deref_out_ecount(1) IMILRenderTargetBitmap **ppIRenderTargetBitmap
+    )
+{
+    HRESULT hr = S_OK;
+    CHwTextureRenderTarget *pRT = NULL;
+
+    *ppIRenderTargetBitmap = NULL;
+
+    {
+        ENTER_DEVICE_FOR_SCOPE(*pDevice);
+
+        IFC(Create(
+            uWidth,
+            uHeight,
+            pDevice,
+            associatedDisplay,
+            TRUE,           // fForBlending
+            &pRT
+            DBG_STEP_RENDERING_COMMA_PARAM(NULL)
+            ));
+
+        pRT->m_dpiX = dpiX;
+        pRT->m_dpiY = dpiY;
+        pRT->m_DeviceTransform.SetToIdentity();
+        pRT->m_DeviceTransform.Scale(dpiX / 96.0f, dpiY / 96.0f);
+
+        // RenderTargetBitmap starts out transparent black, like the software one.
+        MilColorF colorClear = { 0.0f, 0.0f, 0.0f, 0.0f };
+        IFC(pRT->Clear(&colorClear, NULL));
+    }
+
+    IFC(pRT->QueryInterface(IID_IMILRenderTargetBitmap, reinterpret_cast<void **>(ppIRenderTargetBitmap)));
+
+Cleanup:
+    ReleaseInterface(pRT);
+
+    RRETURN(hr);
 }
 
 //+------------------------------------------------------------------------
@@ -304,7 +360,8 @@ CHwTextureRenderTarget::Init(
         false,			// fIsEvictable
         m_pD3DDevice,
         &m_pVidMemOnlyTexture,
-        NULL			// pSharedHandle
+        NULL,			// pSharedHandle
+        false			// fAllowLargerFromPool: effects sample the texture by its real size (D26)
         ));
 
     //
@@ -451,6 +508,8 @@ CHwTextureRenderTarget::GetBitmap(
             m_fmtTarget,
             OUT pDeviceBitmap
             ));
+
+        IFC(pDeviceBitmap->SetResolution(m_dpiX, m_dpiY));
     
         //
         // Check for a bitmap cache.  Create and store one if it doesn't exist.

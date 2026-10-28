@@ -32,6 +32,7 @@ class CVisualCacheManager;
 class CSlaveEtwEventResource;
 class CDrawingContext;
 class CMilSlaveVideo;
+class CMilD3DImageDuce;
 class CSlaveHWndRenderTarget;
 class CMilSlaveGlyphCache;
 
@@ -170,6 +171,12 @@ public:
     HRESULT RegisterVideo(__in_ecount(1) CMilSlaveVideo *pVideo);
 
     void UnregisterVideo(__in_ecount(1) CMilSlaveVideo *pVideo);
+
+    // D19: D3DImages bound to a frame queue; their pending frames are
+    // presented at the start of every pass (ProcessPendingFrameQueueImages).
+    HRESULT RegisterFrameQueueImage(__in_ecount(1) CMilD3DImageDuce *pImage);
+
+    void UnregisterFrameQueueImage(__in_ecount(1) CMilD3DImageDuce *pImage);
 
     //+-------------------------------------------------------------------------
     //
@@ -496,6 +503,11 @@ private:
 
     // List of all video resources currently registered with this composition device.
     DynArray<CMilSlaveVideo *, TRUE> m_rgpVideo;
+
+    // D19: D3DImages with a frame queue.
+    DynArray<CMilD3DImageDuce *, TRUE> m_rgpFrameQueueImages;
+
+    void ProcessPendingFrameQueueImages();
 
     // Array of ETW Event resources for performance tracing.
     DynArray<CSlaveEtwEventResource*, TRUE> m_rgpEtwEvent;

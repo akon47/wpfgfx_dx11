@@ -151,7 +151,7 @@ D3D11에는 고정 기능(FF) 정점 변환·텍스처 스테이지 결합기가
 항상 셰이더 파이프라인을 택하므로 선택되지 않는다). 파이프라인 조립기의 D3D9 문법 HLSL은 M3까지
 `D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY`로 컴파일한다.
 
-## D19. 사용자 D3D11 렌더 루프는 MediaElement 방식의 프레임 큐로 컴포지션에 잇는다 (2026-10-28, 방향)
+## D19. 사용자 D3D11 렌더 루프는 MediaElement 방식의 프레임 큐로 컴포지션에 잇는다 (2026-10-28, 방향 → 구현은 docs/FRAME_QUEUE.md)
 
 MediaElement가 빠른 이유는 (1) 컴포지션 엔진과 같은 멀티스레드 디바이스의 텍스처에 다른 스레드가 바로 그리고, (2) 컴포지션 스레드가
 패스마다 가장 최근에 완성된 프레임 하나만 집어 그리며, (3) 새 프레임이 `CMilSlaveVideo::NewFrame` → `ScheduleCompositionPass`로
@@ -239,3 +239,31 @@ WPF의 미디어 스택은 WMP OCX + DirectShow EVR 필터에 **표준 믹서 + 
   미디어는 `WGXERR_AV_VIDEOACCELERATIONNOTAVAILABLE`로 실패한다(Windows 8 이후 기본 렌더 드라이버가 D3D9도 제공하므로 드물다).
 - 장기: WMP OCX를 `IMFMediaEngine`(DXGI 디바이스 매니저)으로 바꾸면 D3D9 의존이 없어지지만 `wmpstateengine` 등 재작성이 필요해
   Phase 4 이후 별도 결정으로 둔다.
+
+## D26. 중간 텍스처를 디바이스 풀에서 재사용한다 (2026-10-28)
+
+WPF 는 효과·브러시 중간 렌더타깃과 글리프·비트맵 업로드용 락 가능 텍스처(기본+스테이징 쌍)를 **프레임마다 만들고 버린다**.
+D3D9 드라이버는 이 패턴을 싸게 처리했지만 D3D11(NVIDIA)에서는 `CreateTexture2D`/파괴가 비싸고 지연 파괴 풀이 커져 프라이빗
+메모리가 수십 MB 요동했다(`WPFGFX_DX11_LOG` 의 생성 카운터로 프레임당 약 5개 확인). 그래서 `CD3DDeviceLevel1` 에 텍스처 풀을 둔다.
+
+- 반납: `CD3DTexture::ReleaseD3DResources`(리소스 매니저가 디바이스 락 아래서 호출)와 소멸자에서 `ReturnTextureToPool`. 자기 서피스
+  래퍼가 아직 쥔 참조만 남은 텍스처만 받는다(래퍼는 곧 같이 사라진다). 대상: `USAGE_DEFAULT` + RT/SRV 바인드, 또는 `STAGING`.
+  공유·밉맵·배열·4096 초과·디바이스 손실 중은 제외. 48개·96 MB 상한, 가득 차면 가장 오래된 항목을 버린다(LRU), 300 프레젠트
+  동안 안 쓰인 항목도 버린다.
+- 대여: `CreateTexture` 가 **같은 서술자**를 먼저 풀에서 찾는다. 스테이징 텍스처는 복사가 진행 중일 수 있어 한 프레젠트 쉬고 재사용한다.
+  회전하는 요소의 효과용 중간 렌더타깃은 크기가 매 프레임 1~2픽셀씩 달라져 정확 일치로는 재사용이 안 된다. "각 변 64픽셀 이내로 더 큰
+  텍스처 재사용 + 16픽셀 올림"을 시도했으나 효과 파이프라인이 중간 텍스처를 실제 크기 기준 UV 로 샘플링해 그림자가 프레임마다
+  떨렸으므로 뺐다(`fAllowLargerFromPool` 은 남겨 두되 모든 호출이 false). 이 패턴의 생성 비용은 남는다.
+- 풀은 D3D11 객체 수명을 바꾸지 않는다(참조 하나를 풀이 보유). 디바이스 손실 때 전부 비운다.
+
+## D27. RenderTargetBitmap 하드웨어 경로는 옵트인이고, 즉시 컨텍스트는 런타임 멀티스레드 보호를 켠다 (2026-10-28)
+
+`RenderTargetBitmap` 은 스톡에서 항상 소프트웨어 래스터라이저로 그려져 ps_3_0 `ShaderEffect` 가 통과 셰이더로 대체된다(dotnet/wpf#7856).
+D3D11 엔진은 `CMILFactory::CreateBitmapRenderTarget` 에서 `CHwTextureRenderTarget::CreateForBitmap`(GPU 텍스처 타깃, 요청 DPI, 투명 클리어)을
+쓸 수 있다. 출력이 소프트웨어 경로와 픽셀 단위로 다르므로(AA·텍스트) **기본은 꺼짐**이고 `WpfGfxDx11_SetOption(1, 1)` /
+`Dx11Engine.HardwareRenderTargetBitmap = true` / 환경 변수 `WPFGFX_DX11_HW_RTB=1` 로 켠다(ABI 2). 비트맵은 `CDeviceBitmap` 이라 UI 스레드의
+`CopyPixels` 가 GPU 리드백을 하고, 같은 디바이스의 이미지로 쓰면 복사 없이 텍스처를 샘플링한다.
+
+UI 스레드가 렌더 스레드와 같은 즉시 컨텍스트를 쓰게 되므로(RTB 렌더는 동기 채널, 리드백은 `CDeviceBitmap::Lock`) 디바이스 생성 때
+`ID3D11Multithread::SetMultithreadProtected(TRUE)` 를 켠다. D3D9 의 `D3DCREATE_MULTITHREADED` 에 해당하며 엔진의 디바이스 락은 그 위에 그대로 있다.
+`WpfGfxDx11_GetDevice` 로 디바이스를 받은 앱 코드도 같은 보호를 받는다.

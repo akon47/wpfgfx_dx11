@@ -10,6 +10,8 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include <psapi.h>
+#include <dxgi1_4.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <d3d11sdklayers.h>
@@ -129,6 +131,101 @@ void MilDx11LogD3DMessages(__in_opt IUnknown *pD3DDevice, __in_z const char *psz
 
     pInfoQueue->ClearStoredMessages();
     pInfoQueue->Release();
+}
+
+static LONG s_rgCreateCounts[MilDx11Site_Count] = {};
+
+static LONG s_rgOptions[MilDx11Option_Count] = {};      // 0 = unresolved, 1 = off, 2 = on
+
+bool MilDx11OptionEnabled(UINT uOption)
+{
+    if (uOption == MilDx11Option_None || uOption >= MilDx11Option_Count)
+    {
+        return false;
+    }
+
+    if (s_rgOptions[uOption] == 0)
+    {
+        const char *pszEnv = (uOption == MilDx11Option_HardwareRenderTargetBitmap) ? "WPFGFX_DX11_HW_RTB" : NULL;
+        char szValue[8] = {};
+        bool fOn = pszEnv != NULL
+            && GetEnvironmentVariableA(pszEnv, szValue, ARRAYSIZE(szValue)) > 0
+            && szValue[0] == '1';
+        InterlockedCompareExchange(&s_rgOptions[uOption], fOn ? 2 : 1, 0);
+    }
+
+    return s_rgOptions[uOption] == 2;
+}
+
+void MilDx11SetOption(UINT uOption, bool fEnabled)
+{
+    if (uOption != MilDx11Option_None && uOption < MilDx11Option_Count)
+    {
+        InterlockedExchange(&s_rgOptions[uOption], fEnabled ? 2 : 1);
+        MIL_DX11_LOG("option %u set to %d", uOption, fEnabled ? 1 : 0);
+    }
+}
+
+
+void MilDx11CountCreate(MilDx11CreateSite site)
+{
+    InterlockedIncrement(&s_rgCreateCounts[site]);
+}
+
+void MilDx11LogLiveObjects(__in_opt IUnknown *pD3DDevice, __in_z const char *pszContext)
+{
+    if (!MilDx11LogEnabled() || pD3DDevice == NULL)
+    {
+        return;
+    }
+
+    //
+    // Memory split: process private bytes (CPU heaps + driver) and the GPU
+    // memory this process holds on the adapter (local = VRAM, non-local =
+    // shared system memory). A leak in our code shows up in private bytes
+    // only; driver pools show up in the DXGI numbers too.
+    //
+    {
+        PROCESS_MEMORY_COUNTERS_EX pmc = { sizeof(pmc) };
+        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc), sizeof(pmc));
+
+        UINT64 uLocal = 0, uNonLocal = 0;
+        IDXGIDevice *pDXGIDevice = NULL;
+        IDXGIAdapter *pAdapter = NULL;
+        IDXGIAdapter3 *pAdapter3 = NULL;
+
+        if (   SUCCEEDED(pD3DDevice->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&pDXGIDevice)))
+            && SUCCEEDED(pDXGIDevice->GetAdapter(&pAdapter))
+            && SUCCEEDED(pAdapter->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void **>(&pAdapter3))))
+        {
+            DXGI_QUERY_VIDEO_MEMORY_INFO info;
+            if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) uLocal = info.CurrentUsage;
+            if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &info))) uNonLocal = info.CurrentUsage;
+        }
+
+        if (pAdapter3) pAdapter3->Release();
+        if (pAdapter) pAdapter->Release();
+        if (pDXGIDevice) pDXGIDevice->Release();
+
+        MilDx11Log("memory [%s]: private=%u MB workingSet=%u MB gpuLocal=%u MB gpuNonLocal=%u MB; created so far: rt=%ld tex=%ld ds=%ld msaa=%ld readback=%ld swapchain=%ld poolhit=%ld",
+                   pszContext,
+                   static_cast<UINT>(pmc.PrivateUsage >> 20), static_cast<UINT>(pmc.WorkingSetSize >> 20),
+                   static_cast<UINT>(uLocal >> 20), static_cast<UINT>(uNonLocal >> 20),
+                   s_rgCreateCounts[MilDx11Site_RenderTarget], s_rgCreateCounts[MilDx11Site_Texture],
+                   s_rgCreateCounts[MilDx11Site_DepthStencil], s_rgCreateCounts[MilDx11Site_MsaaScratch],
+                   s_rgCreateCounts[MilDx11Site_Readback], s_rgCreateCounts[MilDx11Site_SwapChain],
+                   s_rgCreateCounts[MilDx11Site_PoolHit]);
+    }
+
+    ID3D11Debug *pDebug = NULL;
+
+    if (SUCCEEDED(pD3DDevice->QueryInterface(__uuidof(ID3D11Debug), reinterpret_cast<void **>(&pDebug))))
+    {
+        MilDx11Log("live objects [%s]:", pszContext);
+        pDebug->ReportLiveDeviceObjects(D3D11_RLDO_SUMMARY);
+        MilDx11LogD3DMessages(pD3DDevice, "live");
+        pDebug->Release();
+    }
 }
 
 void MilDx11LogText(__in_z const char *pszTitle, __in_bcount(cb) const char *pText, size_t cb)

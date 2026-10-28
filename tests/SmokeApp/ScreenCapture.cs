@@ -41,6 +41,21 @@ internal static class ScreenCapture
         return method;
     }
 
+    /// <summary>Client-area capture through DWM, returned as a bitmap (caller disposes).</summary>
+    public static System.Drawing.Bitmap CaptureBitmap(Window window)
+    {
+        IntPtr hwnd = new WindowInteropHelper(window).Handle;
+        GetClientRect(hwnd, out RECT c);
+        var bmp = new System.Drawing.Bitmap(c.Right - c.Left, c.Bottom - c.Top, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            IntPtr hdc = g.GetHdc();
+            try { PrintWindow(hwnd, hdc, PW_CLIENTONLY | PW_RENDERFULLCONTENT); }
+            finally { g.ReleaseHdc(hdc); }
+        }
+        return bmp;
+    }
+
     /// <summary>
     /// Copies the window's rectangle from the screen: the composed result of the window over
     /// whatever is behind it. Used for the layered window, which sits over the main window, so
