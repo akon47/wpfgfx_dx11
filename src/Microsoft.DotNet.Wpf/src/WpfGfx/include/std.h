@@ -353,6 +353,7 @@ RtlAssert(
 #pragma warning (disable:4005) // suppress macro redefinition warning
 #include <D2D1.h>
 #include "mild3dtypes.h"
+#include "mildx11log.h"
 #include "dwrite.h"
 #pragma warning(pop)
 

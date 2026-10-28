@@ -18,33 +18,40 @@ MtDefine(CHwFixedFunctionShaders, MILRender, "CHwFixedFunctionShaders");
 // 버텍스 셰이더: 위치를 WorldViewProj로 변환하고 나머지는 그대로 넘긴다.
 // 입력 구조체는 버텍스 형식에 맞춰 조립된다.
 //
-static const char sc_szVertexShaderTemplate[] =
+static const char sc_szVertexShaderSource[] =
     "cbuffer MilFixedFunctionTransforms : register(b1)\n"
     "{\n"
     "    float4x4 WorldViewProj;\n"
     "};\n"
-    "struct VS_INPUT\n"
-    "{\n"
-    "    float3 Position : POSITION;\n"
-    "%s"   // optional normal
-    "    float4 Diffuse  : COLOR0;\n"
-    "%s"   // optional specular
-    "%s"   // texcoords
-    "};\n"
+    MIL_HLSL_VERTEX_INPUT
     "struct VS_OUTPUT\n"
     "{\n"
     "    float4 Position : SV_POSITION;\n"
     "    float4 Diffuse  : COLOR0;\n"
     "    float4 Specular : COLOR1;\n"
-    "%s"   // texcoords
+    "    float2 UV0 : TEXCOORD0;\n"
+    "    float2 UV1 : TEXCOORD1;\n"
+    "    float2 UV2 : TEXCOORD2;\n"
+    "    float2 UV3 : TEXCOORD3;\n"
+    "    float2 UV4 : TEXCOORD4;\n"
+    "    float2 UV5 : TEXCOORD5;\n"
+    "    float2 UV6 : TEXCOORD6;\n"
+    "    float2 UV7 : TEXCOORD7;\n"
     "};\n"
-    "VS_OUTPUT VS(VS_INPUT input)\n"
+    "VS_OUTPUT VS(MilVertexInput input)\n"
     "{\n"
     "    VS_OUTPUT output;\n"
     "    output.Position = mul(float4(input.Position, 1.0f), WorldViewProj);\n"
     "    output.Diffuse = input.Diffuse;\n"
-    "%s"   // specular assignment
-    "%s"   // texcoord assignments
+    "    output.Specular = input.Specular;\n"
+    "    output.UV0 = input.UV0;\n"
+    "    output.UV1 = input.UV1;\n"
+    "    output.UV2 = input.UV2;\n"
+    "    output.UV3 = input.UV3;\n"
+    "    output.UV4 = input.UV4;\n"
+    "    output.UV5 = input.UV5;\n"
+    "    output.UV6 = input.UV6;\n"
+    "    output.UV7 = input.UV7;\n"
     "    return output;\n"
     "}\n";
 
@@ -56,8 +63,9 @@ static const char sc_szVertexShaderTemplate[] =
 CHwFixedFunctionShaders::CHwFixedFunctionShaders()
 {
     m_pDevice = NULL;
+    m_pVertexShader = NULL;
+    m_pVertexShaderBlob = NULL;
     ZeroMemory(m_rgpInputLayouts, sizeof(m_rgpInputLayouts));
-    ZeroMemory(m_rgpVertexShaders, sizeof(m_rgpVertexShaders));
     ZeroMemory(m_rgPixelShaders, sizeof(m_rgPixelShaders));
     m_cPixelShaders = 0;
 }
@@ -72,8 +80,10 @@ CHwFixedFunctionShaders::~CHwFixedFunctionShaders()
     for (UINT i = 0; i < MilVertexFormat_Count; i++)
     {
         ReleaseInterface(m_rgpInputLayouts[i]);
-        ReleaseInterface(m_rgpVertexShaders[i]);
     }
+
+    ReleaseInterface(m_pVertexShader);
+    ReleaseInterface(m_pVertexShaderBlob);
 
     for (UINT i = 0; i < m_cPixelShaders; i++)
     {
@@ -112,49 +122,64 @@ CHwFixedFunctionShaders::Init(
 void
 CHwFixedFunctionShaders::BuildInputElements(
     MilVertexFormatId format,
-    __out_ecount(16) D3D11_INPUT_ELEMENT_DESC *rgElements,
+    __out_ecount(MIL_VERTEX_INPUT_ELEMENT_COUNT) D3D11_INPUT_ELEMENT_DESC *rgElements,
     __out_ecount(1) UINT *pcElements
     )
 {
+    //
+    // MIL_HLSL_VERTEX_INPUT 의 모든 속성을 선언한다. 형식에 있는 속성은 슬롯 0 의
+    // 버텍스 데이터에서, 없는 속성은 슬롯 MIL_NULL_VERTEX_SLOT 의 0 버퍼에서 읽는다
+    // (인스턴스 데이터, 단계 0 = 모든 버텍스가 첫 요소를 읽는다).
+    //
     UINT c = 0;
     UINT uOffset = 0;
+    UINT cTex = MilVertexFormatTexCoordCount(format);
 
     D3D11_INPUT_ELEMENT_DESC *p = rgElements;
 
-    // POSITION
-    p[c].SemanticName = "POSITION"; p[c].SemanticIndex = 0; p[c].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    p[c].InputSlot = 0; p[c].AlignedByteOffset = uOffset; p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; p[c].InstanceDataStepRate = 0;
-    c++; uOffset += 12;
+    struct Attr { LPCSTR pszName; UINT uIndex; DXGI_FORMAT fmt; UINT cb; bool fPresent; };
 
-    if (MilVertexFormatHasNormal(format))
+    const Attr rgAttr[] =
     {
-        p[c].SemanticName = "NORMAL"; p[c].SemanticIndex = 0; p[c].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-        p[c].InputSlot = 0; p[c].AlignedByteOffset = uOffset; p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; p[c].InstanceDataStepRate = 0;
-        c++; uOffset += 12;
-    }
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 12, true },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 12, !!MilVertexFormatHasNormal(format) },
+        { "COLOR",    0, DXGI_FORMAT_B8G8R8A8_UNORM,   4, !!MilVertexFormatHasDiffuse(format) },
+        { "COLOR",    1, DXGI_FORMAT_B8G8R8A8_UNORM,   4, !!MilVertexFormatHasSpecular(format) },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 0 },
+        { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 1 },
+        { "TEXCOORD", 2, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 2 },
+        { "TEXCOORD", 3, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 3 },
+        { "TEXCOORD", 4, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 4 },
+        { "TEXCOORD", 5, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 5 },
+        { "TEXCOORD", 6, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 6 },
+        { "TEXCOORD", 7, DXGI_FORMAT_R32G32_FLOAT,     8, cTex > 7 },
+    };
 
-    // COLOR0 (diffuse, D3DCOLOR layout == B8G8R8A8)
-    if (MilVertexFormatHasDiffuse(format))
+    C_ASSERT(ARRAYSIZE(rgAttr) == MIL_VERTEX_INPUT_ELEMENT_COUNT);
+
+    for (UINT i = 0; i < ARRAYSIZE(rgAttr); i++)
     {
-        p[c].SemanticName = "COLOR"; p[c].SemanticIndex = 0; p[c].Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        p[c].InputSlot = 0; p[c].AlignedByteOffset = uOffset; p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; p[c].InstanceDataStepRate = 0;
-        c++; uOffset += 4;
-    }
+        p[c].SemanticName = rgAttr[i].pszName;
+        p[c].SemanticIndex = rgAttr[i].uIndex;
+        p[c].Format = rgAttr[i].fmt;
 
-    if (MilVertexFormatHasSpecular(format))
-    {
-        p[c].SemanticName = "COLOR"; p[c].SemanticIndex = 1; p[c].Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        p[c].InputSlot = 0; p[c].AlignedByteOffset = uOffset; p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; p[c].InstanceDataStepRate = 0;
-        c++; uOffset += 4;
-    }
+        if (rgAttr[i].fPresent)
+        {
+            p[c].InputSlot = 0;
+            p[c].AlignedByteOffset = uOffset;
+            p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+            p[c].InstanceDataStepRate = 0;
+            uOffset += rgAttr[i].cb;
+        }
+        else
+        {
+            p[c].InputSlot = MIL_NULL_VERTEX_SLOT;
+            p[c].AlignedByteOffset = 0;
+            p[c].InputSlotClass = D3D11_INPUT_PER_INSTANCE_DATA;
+            p[c].InstanceDataStepRate = 0;
+        }
 
-    UINT cTex = MilVertexFormatTexCoordCount(format);
-
-    for (UINT i = 0; i < cTex; i++)
-    {
-        p[c].SemanticName = "TEXCOORD"; p[c].SemanticIndex = i; p[c].Format = DXGI_FORMAT_R32G32_FLOAT;
-        p[c].InputSlot = 0; p[c].AlignedByteOffset = uOffset; p[c].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; p[c].InstanceDataStepRate = 0;
-        c++; uOffset += 8;
+        c++;
     }
 
     Assert(uOffset == MilVertexFormatStride(format));
@@ -202,6 +227,8 @@ CHwFixedFunctionShaders::CompileShader(
             TraceTag((tagError, "MIL-HW: fixed function shader compile failed:\n%s", static_cast<const char *>(pErrors->GetBufferPointer())));
         }
 #endif
+        MIL_DX11_LOG("fixed function shader compile failed hr=0x%08x entry=%s: %s", hr, pszEntry,
+                     pErrors ? static_cast<const char *>(pErrors->GetBufferPointer()) : "");
         MIL_THR(WGXERR_SHADER_COMPILE_FAILED);
     }
 
@@ -224,61 +251,23 @@ CHwFixedFunctionShaders::EnsureVertexShader(
 {
     HRESULT hr = S_OK;
 
-    ID3DBlob *pBlob = NULL;
-
     Assert(format < MilVertexFormat_Count);
 
-    if (m_rgpVertexShaders[format] != NULL)
+    if (m_pVertexShader == NULL)
     {
-        goto Cleanup;
-    }
-
-    {
-        char szTexIn[8 * 48];
-        char szTexOut[8 * 48];
-        char szTexAssign[8 * 64];
-        szTexIn[0] = szTexOut[0] = szTexAssign[0] = '\0';
-
-        UINT cTex = MilVertexFormatTexCoordCount(format);
-
-        for (UINT i = 0; i < cTex; i++)
-        {
-            char szLine[80];
-
-            StringCchPrintfA(szLine, ARRAYSIZE(szLine), "    float2 UV%u : TEXCOORD%u;\n", i, i);
-            StringCchCatA(szTexIn, ARRAYSIZE(szTexIn), szLine);
-            StringCchCatA(szTexOut, ARRAYSIZE(szTexOut), szLine);
-
-            StringCchPrintfA(szLine, ARRAYSIZE(szLine), "    output.UV%u = input.UV%u;\n", i, i);
-            StringCchCatA(szTexAssign, ARRAYSIZE(szTexAssign), szLine);
-        }
-
-        bool fHasNormalSpecular = (format == MilVertexFormat_XYZNDSUV4);
-
-        char szSource[4096];
-
-        IFC(StringCchPrintfA(
-            szSource,
-            ARRAYSIZE(szSource),
-            sc_szVertexShaderTemplate,
-            fHasNormalSpecular ? "    float3 Normal : NORMAL;\n" : "",
-            fHasNormalSpecular ? "    float4 Specular : COLOR1;\n" : "",
-            szTexIn,
-            szTexOut,
-            fHasNormalSpecular ? "    output.Specular = input.Specular;\n" : "    output.Specular = float4(0,0,0,0);\n",
-            szTexAssign
-            ));
-
-        IFC(CompileShader(szSource, "VS", "vs_4_0", &pBlob));
+        IFC(CompileShader(sc_szVertexShaderSource, "VS", "vs_4_0", &m_pVertexShaderBlob));
 
         IFC(MilTranslateD3D11Error(m_pDevice->CreateVertexShader(
-            pBlob->GetBufferPointer(),
-            pBlob->GetBufferSize(),
+            m_pVertexShaderBlob->GetBufferPointer(),
+            m_pVertexShaderBlob->GetBufferSize(),
             NULL,
-            &m_rgpVertexShaders[format]
+            &m_pVertexShader
             )));
+    }
 
-        D3D11_INPUT_ELEMENT_DESC rgElements[16];
+    if (m_rgpInputLayouts[format] == NULL)
+    {
+        D3D11_INPUT_ELEMENT_DESC rgElements[MIL_VERTEX_INPUT_ELEMENT_COUNT];
         UINT cElements;
 
         BuildInputElements(format, rgElements, &cElements);
@@ -286,8 +275,8 @@ CHwFixedFunctionShaders::EnsureVertexShader(
         IFC(MilTranslateD3D11Error(m_pDevice->CreateInputLayout(
             rgElements,
             cElements,
-            pBlob->GetBufferPointer(),
-            pBlob->GetBufferSize(),
+            m_pVertexShaderBlob->GetBufferPointer(),
+            m_pVertexShaderBlob->GetBufferSize(),
             &m_rgpInputLayouts[format]
             )));
     }
@@ -295,11 +284,8 @@ CHwFixedFunctionShaders::EnsureVertexShader(
 Cleanup:
     if (FAILED(hr))
     {
-        ReleaseInterface(m_rgpVertexShaders[format]);
-        ReleaseInterface(m_rgpInputLayouts[format]);
+        MIL_DX11_LOG("EnsureVertexShader(format=%d) failed hr=0x%08x", format, hr);
     }
-
-    ReleaseInterface(pBlob);
 
     RRETURN(hr);
 }
@@ -340,7 +326,7 @@ CHwFixedFunctionShaders::GetVertexShaderNoRef(
 
     IFC(EnsureVertexShader(format));
 
-    *ppShader = m_rgpVertexShaders[format];
+    *ppShader = m_pVertexShader;
 
 Cleanup:
     RRETURN(hr);

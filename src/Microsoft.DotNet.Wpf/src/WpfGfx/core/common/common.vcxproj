@@ -57,6 +57,7 @@
     <ClCompile Include="BaseMatrix.cpp" />
     <ClCompile Include="BufferDispenser.cpp" />
     <ClCompile Include="D3DLoader.cpp" />
+    <ClCompile Include="mildx11log.cpp" />
     <ClCompile Include="DWMInterop.cpp" />
     <ClCompile Include="Gamma.cpp" />
     <ClCompile Include="Display.cpp" />

@@ -571,23 +571,30 @@ CHwShaderFragmentToHLSLConverter::AccumulateHLSL(
         "\n"
         );
 
+    //
+    // The vertex and pixel halves are compiled separately with MIL_VS or
+    // MIL_PS defined (CD3DDeviceLevel1::CompilePipeline*Shader). SM4 keeps
+    // every global in $Globals even when unused, so each stage must only see
+    // its own constant data for the c# register numbering to hold (D11).
+    //
+    AppendString("#ifdef MIL_PS\n");
     DeclareSamplers();
-
+    AppendString("#endif\n");
+    AppendString("#ifdef MIL_VS\n");
     WriteVertexShaderDataStructures();
-
+    AppendString("#endif\n");
+    AppendString("#ifdef MIL_PS\n");
     WritePixelShaderDataStructures();
-
+    AppendString("#endif\n");
+    AppendString("#ifdef MIL_VS\n");
     WriteVertexShaderOutputStruct();
-
     WriteVertexShaderFunctions();
-
     WriteVertexShader();
-
+    AppendString("#endif\n");
+    AppendString("#ifdef MIL_PS\n");
     WritePixelShaderFunctions();
-
     WritePixelShader();
-
-
+    AppendString("#endif\n");
     AppendString(
         "//\n// End of Dynamic Shader Code\n//\n"
         );
@@ -631,11 +638,21 @@ CHwShaderFragmentToHLSLConverter::DeclareSamplers(
                     uItem
                     );
 
+                //
+                // Pin the sampler to the stage the pipeline binds the texture
+                // to (HwPipelineItem::dwSampler). With SM4 backwards
+                // compatibility the texture takes the same slot number.
+                //
                 AppendString(
-                    ";\n"
+                    " : register(s"
+                    );
+                AppendNumber(
+                    m_rgPipelineItems[uItem].dwSampler
+                    );
+                AppendString(
+                    ");\n"
                     "\n"
                     );
-
                 fSamplersWritten = true;
             }
         }
@@ -775,6 +792,32 @@ CHwShaderFragmentToHLSLConverter::WriteVertexShaderDataStructures(
                     AppendString(
                         ";\n"
                         );
+                    //
+                    // The engine addresses every constant as one float4 register
+                    // (ShaderConstantTraits::RegisterSize == 1 for float..float4), as
+                    // D3D9 allocated them. SM4 packs small members together, so pad
+                    // each member up to a full register.
+                    //
+                    switch(vertexShader.rgConstDataParameter[uDataNum].Type)
+                    {
+                    case ShaderFunctionConstantData::Float:
+                        AppendString("    float3 ");
+                        AppendVariableString(vertexShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    case ShaderFunctionConstantData::Float2:
+                        AppendString("    float2 ");
+                        AppendVariableString(vertexShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    case ShaderFunctionConstantData::Float3:
+                        AppendString("    float ");
+                        AppendVariableString(vertexShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    default:
+                        break;
+                    }
                 }
 
                 AppendString(
@@ -979,6 +1022,32 @@ CHwShaderFragmentToHLSLConverter::WritePixelShaderDataStructures(
                     AppendString(
                         ";\n"
                         );
+                    //
+                    // The engine addresses every constant as one float4 register
+                    // (ShaderConstantTraits::RegisterSize == 1 for float..float4), as
+                    // D3D9 allocated them. SM4 packs small members together, so pad
+                    // each member up to a full register.
+                    //
+                    switch(pixelShader.rgConstDataParameter[uDataNum].Type)
+                    {
+                    case ShaderFunctionConstantData::Float:
+                        AppendString("    float3 ");
+                        AppendVariableString(pixelShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    case ShaderFunctionConstantData::Float2:
+                        AppendString("    float2 ");
+                        AppendVariableString(pixelShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    case ShaderFunctionConstantData::Float3:
+                        AppendString("    float ");
+                        AppendVariableString(pixelShader.rgConstDataParameter[uDataNum].pszParameterName);
+                        AppendString("_pad;\n");
+                        break;
+                    default:
+                        break;
+                    }
                 }
 
                 AppendString(
@@ -1066,7 +1135,7 @@ CHwShaderFragmentToHLSLConverter::WriteVertexShaderOutputStruct(
         "\n"
         "struct VertexShaderOutput\n"
         "{\n"
-        "    float4 Position : POSITION;\n"
+        "    float4 Position : SV_POSITION;\n"
         "    float4 Diffuse  : COLOR0;\n"
         );
 
@@ -1251,6 +1320,8 @@ CHwShaderFragmentToHLSLConverter::WriteVertexShader(
         "\n"
         "\n"
         "\n"
+        MIL_HLSL_VERTEX_INPUT
+        "\n"
         "VertexShaderOutput\n"
         "VertexShaderImpl(\n"
         );
@@ -1260,16 +1331,25 @@ CHwShaderFragmentToHLSLConverter::WriteVertexShader(
     //
 
     AppendString(
-        "    float4 Position : POSITION,\n"
-        "    // Right now, only COLOR0 or NORMAL is used in a pass. The compiler\n"
-        "    // optimizes away what's not used.\n"
-        "    float4 Diffuse  : COLOR0,\n"
-        "    float3 Normal   : NORMAL,\n"
-        "    float2 UV_0     : TEXCOORD0,\n"
-        "    float2 UV_1     : TEXCOORD1\n"
+        // The input declaration is shared with every other vertex shader
+        // (MIL_HLSL_VERTEX_INPUT); input layouts feed zeros for attributes the
+        // vertex format does not carry.
+        "    MilVertexInput In\n"
         "    )\n"
         "{\n"
         "    VertexShaderOutput Output = (VertexShaderOutput)0;\n"
+        "\n"
+        "    float4 Position = float4(In.Position, 1.0f);\n"
+        "    float4 Diffuse  = In.Diffuse;\n"
+        "    float3 Normal   = In.Normal;\n"
+        "    float2 UV_0     = In.UV0;\n"
+        "    float2 UV_1     = In.UV1;\n"
+        "    float2 UV_2     = In.UV2;\n"
+        "    float2 UV_3     = In.UV3;\n"
+        "    float2 UV_4     = In.UV4;\n"
+        "    float2 UV_5     = In.UV5;\n"
+        "    float2 UV_6     = In.UV6;\n"
+        "    float2 UV_7     = In.UV7;\n"
         "\n"
         "    // These will be optimized away when not in use\n"
         "    float4x4 View, WorldView, WorldViewProj, WorldViewAdjTrans;\n"
@@ -1607,7 +1687,7 @@ CHwShaderFragmentToHLSLConverter::WritePixelShader(
         "\n"
         "float4\n"
         "PixelShaderImpl(\n"
-        "    float4 Position : POSITION,\n"
+        "    float4 Position : SV_POSITION,\n"
         "    float4 Diffuse  : COLOR0"
         );
 
@@ -1709,7 +1789,7 @@ CHwShaderFragmentToHLSLConverter::WritePixelShader(
 
     AppendString(
         "\n"
-        "    ) : COLOR\n"
+        "    ) : SV_TARGET\n"
         "{\n"
         "    float4 curColor = Diffuse;\n\n"
         );

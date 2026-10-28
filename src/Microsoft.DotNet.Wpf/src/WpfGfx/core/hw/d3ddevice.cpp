@@ -30,6 +30,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include <d3d11shader.h>
 #include "HwGraphicsCards.h"
 
 using namespace dxlayer;
@@ -235,6 +236,7 @@ CD3DDeviceLevel1::CD3DDeviceLevel1(
         m_fMultisampleFailed(false),
         m_pCachedAnisoFilterMode(NULL)
 {
+    m_pMSAAResolveScratch = NULL;
     m_cEntry = 0;
     m_dwThreadId = 0;
 
@@ -668,6 +670,7 @@ CD3DDeviceLevel1::~CD3DDeviceLevel1()
 
     ReleaseInterface(m_pHwIndexBuffer);
     ReleaseInterface(m_pHwVertexBuffer);
+    ReleaseInterface(m_pMSAAResolveScratch);
 
     WPFFree(ProcessHeap, m_rgwFanIndices);
     m_rgwFanIndices = NULL;
@@ -1350,6 +1353,16 @@ CD3DDeviceLevel1::CreateRenderTargetUntracked(
 
     AssertDeviceEntry(*this);
 
+    //
+    // B8G8R8X8 only marks "no destination alpha" (ChooseTargetFormat). The swap
+    // chain back buffer is B8G8R8A8 and copies/resolves between the two formats
+    // are illegal in D3D11, so every render target is B8G8R8A8.
+    //
+    if (fmtSurface == DXGI_FORMAT_B8G8R8X8_UNORM)
+    {
+        fmtSurface = DXGI_FORMAT_B8G8R8A8_UNORM;
+    }
+
     AssertRenderFormatIsTestedSuccessfully(fmtSurface);
 
     D3D11_TEXTURE2D_DESC desc;
@@ -1508,11 +1521,23 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
 
         desc.Width = pParams->BackBufferWidth;
         desc.Height = pParams->BackBufferHeight;
-        // GDI compatible swap chains must be B8G8R8A8
-        desc.Format = pParams->GdiCompatible ? DXGI_FORMAT_B8G8R8A8_UNORM : pParams->BackBufferFormat;
+        //
+        // DXGI swap chains accept B8G8R8A8 but not B8G8R8X8. The X8 target
+        // format only marks "no destination alpha" for the render target;
+        // the real back buffer is B8G8R8A8 and DXGI_ALPHA_MODE_IGNORE drops
+        // the alpha at present. GDI compatible swap chains must be B8G8R8A8.
+        //
+        desc.Format =
+            (pParams->GdiCompatible || pParams->BackBufferFormat == DXGI_FORMAT_B8G8R8X8_UNORM)
+            ? DXGI_FORMAT_B8G8R8A8_UNORM
+            : pParams->BackBufferFormat;
+
+        IFC(CheckRenderTargetFormat(desc.Format));
         desc.Stereo = FALSE;
         desc.SampleDesc = pParams->SampleDesc;
-        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        // SHADER_INPUT: Begin3D copies the back buffer into the multisample
+        // intermediate by drawing it (StretchRectScaled).
+        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
         desc.BufferCount = max(1u, pParams->BackBufferCount);
         desc.Scaling = DXGI_SCALING_STRETCH;
         desc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
@@ -1585,6 +1610,10 @@ Cleanup:
         hr = WGXERR_DISPLAYSTATEINVALID;
         MarkUnusable(false /* This call is already entry protected. */);
     }
+
+    MIL_DX11_LOG("CreateAdditionalSwapChain hr=0x%08x %ux%u fmt=%d gdi=%d hwnd=%p",
+                 hr, pParams->BackBufferWidth, pParams->BackBufferHeight,
+                 pParams->BackBufferFormat, pParams->GdiCompatible, pParams->hDeviceWindow);
 
     ReleaseInterface(pDXGISwapChain);
     ReleaseInterface(pDXGIFactory);
@@ -2017,12 +2046,18 @@ HRESULT CD3DDeviceLevel1::StretchRect(
                 descDst.Format
                 );
         }
+        else if (fSameSize && descDst.SampleDesc.Count <= 1 && descSrc.Format == descDst.Format)
+        {
+            IFC(ResolveMultisampleRect(pSourceSurface, rcSrc, pDestSurface, rcDst));
+        }
         else
         {
             IFC(StretchRectScaled(pSourceSurface, rcSrc, pDestSurface, rcDst, Filter));
         }
     }
-    else if (fSameSize)
+    else if (   fSameSize
+             && descDst.SampleDesc.Count <= 1
+             && descSrc.Format == descDst.Format)
     {
         POINT ptDst = { rcDst.left, rcDst.top };
 
@@ -2118,6 +2153,7 @@ CD3DDeviceLevel1::StretchRectScaled(
 
 Cleanup:
     IGNORE_HR(SetD3DTexture(0, NULL));
+    UnbindAllTextures();   // the source may become a render target next
 
     //
     // Restore the previous target state
@@ -2172,11 +2208,35 @@ CD3DDeviceLevel1::SetRenderTargetForEffectPipeline(
 
     m_desc = pD3DSurface->Desc();
 
+
+    DropIncompatibleDepthStencil();
+
     IFC(SetRenderTargetInternal(pD3DSurface));
     m_pCurrentRenderTargetNoRef = pD3DSurface;
 
     SetClipSet(false);
 
+
+    //
+    // D3D9 SetRenderTarget reset the viewport and scissor rectangle to the
+    // whole target; D3D11 keeps the previous ones, so do it here. The effect
+    // pipeline supplies its own vertex transform, hence no clipping matrix.
+    //
+    {
+        MilPointAndSizeL rcViewport;
+
+        rcViewport.X = 0;
+        rcViewport.Y = 0;
+        rcViewport.Width = m_desc.Width;
+        rcViewport.Height = m_desc.Height;
+
+        if (SupportsScissorRect())
+        {
+            ScissorRectChanged(&rcViewport);
+        }
+
+        IFC(SetViewport(&rcViewport));
+    }
     m_fInScene = true;
 
 Cleanup:
@@ -2187,6 +2247,127 @@ Cleanup:
     }
 
     RRETURN(HandleDIE(hr));
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DDeviceLevel1::DropIncompatibleDepthStencil
+//
+//  Synopsis:
+//      D3D11 rejects OMSetRenderTargets when the depth stencil view does not
+//      match the render target (sample count, size). Release the use of the
+//      current depth buffer when the new target (m_desc) does not fit; 3D
+//      rendering re-establishes depth state through EnsureDepthState.
+//
+//------------------------------------------------------------------------------
+void
+CD3DDeviceLevel1::DropIncompatibleDepthStencil()
+{
+    if (m_pDepthStencilBufferForCurrentRTNoRef)
+    {
+        const D3D11_TEXTURE2D_DESC &descDS = m_pDepthStencilBufferForCurrentRTNoRef->Desc();
+
+        if (   descDS.SampleDesc.Count != m_desc.SampleDesc.Count
+            || descDS.SampleDesc.Quality != m_desc.SampleDesc.Quality
+            || descDS.Width != m_desc.Width
+            || descDS.Height != m_desc.Height)
+        {
+            ReleaseUseOfDepthStencilSurface(m_pDepthStencilBufferForCurrentRTNoRef);
+        }
+    }
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Member:
+//      CD3DDeviceLevel1::ResolveMultisampleRect
+//
+//  Synopsis:
+//      Resolves a rectangle of a multisample surface into a single sample
+//      surface. ResolveSubresource only resolves whole subresources, so the
+//      source is resolved into a scratch texture and the rectangle is copied.
+//
+//------------------------------------------------------------------------------
+HRESULT
+CD3DDeviceLevel1::ResolveMultisampleRect(
+    __in_ecount(1) CD3DSurface *pSourceSurface,
+    __in_ecount(1) const RECT &rcSource,
+    __inout_ecount(1) CD3DSurface *pDestSurface,
+    __in_ecount(1) const RECT &rcDest
+    )
+{
+    HRESULT hr = S_OK;
+
+    const D3D11_TEXTURE2D_DESC &descSrc = pSourceSurface->Desc();
+
+    if (m_pMSAAResolveScratch)
+    {
+        D3D11_TEXTURE2D_DESC descScratch;
+        m_pMSAAResolveScratch->GetDesc(&descScratch);
+
+        if (   descScratch.Width != descSrc.Width
+            || descScratch.Height != descSrc.Height
+            || descScratch.Format != descSrc.Format)
+        {
+            ReleaseInterface(m_pMSAAResolveScratch);
+        }
+    }
+
+    if (m_pMSAAResolveScratch == NULL)
+    {
+        D3D11_TEXTURE2D_DESC desc;
+        ZeroMemory(&desc, sizeof(desc));
+        desc.Width = descSrc.Width;
+        desc.Height = descSrc.Height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = descSrc.Format;
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+        BEGIN_DEVICE_ALLOCATION;
+
+        hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(&desc, NULL, &m_pMSAAResolveScratch));
+
+        END_DEVICE_ALLOCATION;
+
+        IFC(hr);
+    }
+
+    m_pD3DContext->ResolveSubresource(
+        m_pMSAAResolveScratch,
+        0,
+        pSourceSurface->ID3DTexture(),
+        pSourceSurface->Subresource(),
+        descSrc.Format
+        );
+
+    {
+        D3D11_BOX box;
+        box.left = rcSource.left;
+        box.top = rcSource.top;
+        box.front = 0;
+        box.right = rcSource.right;
+        box.bottom = rcSource.bottom;
+        box.back = 1;
+
+        m_pD3DContext->CopySubresourceRegion(
+            pDestSurface->ID3DTexture(),
+            pDestSurface->Subresource(),
+            rcDest.left,
+            rcDest.top,
+            0,
+            m_pMSAAResolveScratch,
+            0,
+            &box
+            );
+    }
+
+Cleanup:
+    RRETURN(hr);
 }
 
 //+-----------------------------------------------------------------------------
@@ -2218,6 +2399,8 @@ CD3DDeviceLevel1::SetRenderTarget(
     m_desc = pD3DSurface->Desc();
 
     FreAssert(pD3DSurface->ID3DTexture() != NULL);
+
+    DropIncompatibleDepthStencil();
 
     IFC(SetRenderTargetInternal(pD3DSurface));
     m_pCurrentRenderTargetNoRef = pD3DSurface;
@@ -2325,7 +2508,22 @@ CD3DDeviceLevel1::ClearRenderTargetRects(
 
         if (dwCount == 0 || pRects == NULL)
         {
-            m_pD3DContext->ClearRenderTargetView(pRTVNoRef, rgColor);
+            //
+            // D3D9 Clear was limited to the viewport and the scissor rectangle
+            // (CHwSurfaceRenderTarget::Clear sets the clip and clears with no
+            // rectangles). ClearRenderTargetView ignores both, so clear only
+            // the clip rectangle when one is set.
+            //
+            if (IsClipSet())
+            {
+                const MilPointAndSizeL &rcClip = GetClip();
+                D3D11_RECT rc = { rcClip.X, rcClip.Y, rcClip.X + rcClip.Width, rcClip.Y + rcClip.Height };
+                m_pD3DContext1->ClearView(pRTVNoRef, rgColor, &rc, 1);
+            }
+            else
+            {
+                m_pD3DContext->ClearRenderTargetView(pRTVNoRef, rgColor);
+            }
         }
         else
         {
@@ -2671,12 +2869,33 @@ CD3DDeviceLevel1::PresentWithD3D(
     DXGI_PRESENT_PARAMETERS params;
     ZeroMemory(&params, sizeof(params));
 
-    if (prcSource != NULL && pDirtyRegion != NULL && pDirtyRegion->rdh.nCount > 0)
+    //
+    // D3D9 presented the whole source rectangle (the union of the dirty
+    // rectangles) and used the dirty region only as a hint. DXGI copies exactly
+    // the dirty rectangles, so present the union rectangle to keep the D3D9
+    // behaviour; NULL (no source rectangle) presents the whole back buffer.
+    //
+    RECT rcDirty;
+
+    UNREFERENCED_PARAMETER(pDirtyRegion);
+
+    //
+    // DXGI dirty rectangles only update the window surface inside the
+    // rectangles. D3D9 recopied the whole back buffer whenever the window
+    // surface was (re)created, which DXGI does not do, so a dirty-rect present
+    // right after Show/Resize leaves the rest of the window black. Present the
+    // whole back buffer; the rectangle is kept for the log only.
+    //
+    if (prcSource != NULL)
     {
-        C_ASSERT(sizeof(RECT) == sizeof(D3D11_RECT));
-        params.DirtyRectsCount = pDirtyRegion->rdh.nCount;
-        params.pDirtyRects = reinterpret_cast<RECT *>(const_cast<char *>(pDirtyRegion->Buffer));
+        rcDirty.left = prcSource->left;
+        rcDirty.top = prcSource->top;
+        rcDirty.right = prcSource->right;
+        rcDirty.bottom = prcSource->bottom;
     }
+
+    params.DirtyRectsCount = 0;
+    params.pDirtyRects = NULL;
 
     UINT uSyncInterval =
         (pMILDC->GetRTInitializationFlags() & MilRTInitialization::PresentImmediately) ? 0 : 1;
@@ -2701,6 +2920,36 @@ CD3DDeviceLevel1::PresentWithD3D(
         ));
 
     END_DEVICE_ALLOCATION;
+
+    static LONG s_cPresentLogs = 0;
+
+    if (InterlockedIncrement(&s_cPresentLogs) <= 20)
+    MIL_DX11_LOG("Present1 hr=0x%08x rect=%ld,%ld,%ld,%ld sync=%u",
+                 hr,
+                 prcSource ? rcDirty.left : -1, prcSource ? rcDirty.top : -1,
+                 prcSource ? rcDirty.right : -1, prcSource ? rcDirty.bottom : -1,
+                 uSyncInterval);
+
+    MilDx11LogD3DMessages(m_pD3DDevice, "Present");
+
+    if (MilDx11LogEnabled())
+    {
+        static LONG s_cPresentDumps = 0;
+        LONG cDump = InterlockedIncrement(&s_cPresentDumps);
+
+        if (cDump <= 4)
+        {
+            ID3D11Texture2D *pBackBuffer = NULL;
+
+            if (SUCCEEDED(pDXGISwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&pBackBuffer))))
+            {
+                char szName[32];
+                StringCchPrintfA(szName, ARRAYSIZE(szName), "present%d", cDump);
+                MilDx11DumpTexture(m_pD3DDevice, m_pD3DContext, pBackBuffer, szName);
+                pBackBuffer->Release();
+            }
+        }
+    }
 
     DbgInjectDIE(&hr);
 
@@ -2731,6 +2980,7 @@ CD3DDeviceLevel1::PresentWithD3D(
 
     if (FAILED(hr))
     {
+        MIL_DX11_LOG("Present1 failed hr=0x%08x sync=%u flags=0x%x dirty=%u", hr, uSyncInterval, uFlags, params.DirtyRectsCount);
         hr = HandlePresentFailure(pMILDC, hr);
     }
 
@@ -2985,6 +3235,24 @@ CD3DDeviceLevel1::SetTexture(
         IFC(pD3DTexture->GetShaderResourceViewNoRef(&pSRVNoRef));
     }
 
+    if (MilDx11LogEnabled())
+    {
+        static LONG s_cTextureLogs = 0;
+
+        if (InterlockedIncrement(&s_cTextureLogs) <= 300)
+        {
+            if (pD3DTexture)
+            {
+                const D3D11_TEXTURE2D_DESC &d = pD3DTexture->D3DSurface0Desc();
+                MIL_DX11_LOG("SetTexture stage=%u %ux%u fmt=%d mips=%u srv=%p", dwTextureStage, d.Width, d.Height, d.Format, d.MipLevels, pSRVNoRef);
+            }
+            else
+            {
+                MIL_DX11_LOG("SetTexture stage=%u NULL", dwTextureStage);
+            }
+        }
+    }
+
     IFC(CD3DRenderState::SetTexture(dwTextureStage, pSRVNoRef));
 
 Cleanup:
@@ -3225,6 +3493,70 @@ Cleanup:
     RRETURN(hr);
 }
 
+
+//+-----------------------------------------------------------------------------
+//
+//  Function:  MilDx11LogShaderBindings
+//
+//  Synopsis:  진단용. 컴파일된 셰이더의 리소스 바인딩(텍스처/샘플러/상수 버퍼 슬롯)과
+//             $Globals 변수 오프셋을 로그에 쓴다.
+//
+//------------------------------------------------------------------------------
+static void
+MilDx11LogShaderBindings(
+    __in_z const char *pszKind,
+    __in_bcount(cb) const void *pvBytecode,
+    SIZE_T cb
+    )
+{
+    if (!MilDx11LogEnabled())
+    {
+        return;
+    }
+
+    ID3D11ShaderReflection *pReflection = NULL;
+
+    if (SUCCEEDED(D3DReflect(pvBytecode, cb, __uuidof(ID3D11ShaderReflection), reinterpret_cast<void **>(&pReflection))))
+    {
+        D3D11_SHADER_DESC desc;
+
+        if (SUCCEEDED(pReflection->GetDesc(&desc)))
+        {
+            for (UINT i = 0; i < desc.BoundResources; i++)
+            {
+                D3D11_SHADER_INPUT_BIND_DESC bind;
+
+                if (SUCCEEDED(pReflection->GetResourceBindingDesc(i, &bind)))
+                {
+                    MIL_DX11_LOG("%s bind: %s type=%d point=%u dim=%d", pszKind, bind.Name, bind.Type, bind.BindPoint, bind.Dimension);
+                }
+            }
+
+            for (UINT i = 0; i < desc.ConstantBuffers; i++)
+            {
+                ID3D11ShaderReflectionConstantBuffer *pCB = pReflection->GetConstantBufferByIndex(i);
+                D3D11_SHADER_BUFFER_DESC cbDesc;
+
+                if (pCB && SUCCEEDED(pCB->GetDesc(&cbDesc)))
+                {
+                    for (UINT v = 0; v < cbDesc.Variables; v++)
+                    {
+                        ID3D11ShaderReflectionVariable *pVar = pCB->GetVariableByIndex(v);
+                        D3D11_SHADER_VARIABLE_DESC varDesc;
+
+                        if (pVar && SUCCEEDED(pVar->GetDesc(&varDesc)))
+                        {
+                            MIL_DX11_LOG("%s cbuffer %s: %s offset=%u size=%u", pszKind, cbDesc.Name, varDesc.Name, varDesc.StartOffset, varDesc.Size);
+                        }
+                    }
+                }
+            }
+        }
+
+        pReflection->Release();
+    }
+}
+
 //+-----------------------------------------------------------------------------
 //
 //  Member:
@@ -3246,11 +3578,18 @@ CD3DDeviceLevel1::CompilePipelineVertexShader(
 
     std::string profile_name = shader::get_vertex_shader_profile_name();
 
+    if (MilDx11LogEnabled())
+    {
+        MilDx11LogText("pipeline HLSL", pHLSLSource, cbHLSLSource);
+    }
+
     // 파이프라인 HLSL 은 D3D9 문법(POSITION/COLOR 시맨틱, tex2D)을 쓴다.
     // 변환기를 SM4 전용으로 바꿀 때까지(M3) 호환 모드로 컴파일한다.
+    // MIL_VS: the converter guards the pixel shader half of the source so
+    // the pixel constants do not take space in this stage's $Globals (D11).
     HRESULT hr =
         shader::compile(
-            std::string(pHLSLSource, pHLSLSource + cbHLSLSource),
+            std::string("#define MIL_VS 1\n") + std::string(pHLSLSource, pHLSLSource + cbHLSLSource),
             "VertexShaderImpl",
             profile_name,
             D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
@@ -3259,11 +3598,14 @@ CD3DDeviceLevel1::CompilePipelineVertexShader(
     if (SUCCEEDED(hr))
     {
         dxlayer::data blob = pShader->get_buffer_data();
+        MilDx11LogShaderBindings("pipeline VS", blob.buffer, static_cast<SIZE_T>(blob.buffer_size));
         hr = CreateVertexShader(blob.buffer, static_cast<SIZE_T>(blob.buffer_size), ppVertexShader);
     }
 
     if (FAILED(hr))
     {
+        MIL_DX11_LOG("pipeline VS compile failed hr=0x%08x: %s", hr,
+                     pErr ? static_cast<const char *>(pErr->get_buffer_data().buffer) : "");
         hr = shader::handle_errors_and_transform_hresult(hr, pErr);
     }
 
@@ -3293,7 +3635,7 @@ CD3DDeviceLevel1::CompilePipelinePixelShader(
 
     HRESULT hr =
         shader::compile(
-            std::string(pHLSLSource, pHLSLSource + cbHLSLSource),
+            std::string("#define MIL_PS 1\n") + std::string(pHLSLSource, pHLSLSource + cbHLSLSource),
             "PixelShaderImpl",
             profile_name,
             D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
@@ -3302,11 +3644,14 @@ CD3DDeviceLevel1::CompilePipelinePixelShader(
     if (SUCCEEDED(hr))
     {
         dxlayer::data blob = pShader->get_buffer_data();
+        MilDx11LogShaderBindings("pipeline PS", blob.buffer, static_cast<SIZE_T>(blob.buffer_size));
         hr = CreatePixelShader(blob.buffer, static_cast<SIZE_T>(blob.buffer_size), ppPixelShader);
     }
 
     if (!SUCCEEDED(hr))
     {
+        MIL_DX11_LOG("pipeline PS compile failed hr=0x%08x: %s", hr,
+                     pErr ? static_cast<const char *>(pErr->get_buffer_data().buffer) : "");
         hr = shader::handle_errors_and_transform_hresult(hr, pErr);
     }
 

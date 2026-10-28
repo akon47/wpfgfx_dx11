@@ -337,6 +337,8 @@ public:
 
     HRESULT SetVertexFormat(MilVertexFormatId format);
 
+    HRESULT CreateNullVertexBuffer();
+
     MIL_FORCEINLINE BOOL IsVertexFormatSet(
         MilVertexFormatId format
         ) const
@@ -580,6 +582,7 @@ private:
     bool m_fVertexFormatDirty;
 
     ID3D11Buffer *m_pVertexBuffer;
+    ID3D11Buffer *m_pNullVertexBuffer;   // 슬롯 MIL_NULL_VERTEX_SLOT: 형식에 없는 속성의 0 값
     UINT m_uVertexStride;
     bool m_fVertexBufferKnown;
     bool m_fVertexBufferDirty;

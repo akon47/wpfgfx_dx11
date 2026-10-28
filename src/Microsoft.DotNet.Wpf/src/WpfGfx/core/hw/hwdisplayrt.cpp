@@ -395,7 +395,11 @@ CHwDisplayRenderTarget::Present(
         &fPresent
         ));
 
-    if (!fPresent) goto Cleanup;
+    if (!fPresent)
+    {
+        MIL_DX11_LOG("Present skipped: nothing invalid in %ld,%ld,%ld,%ld", pRect->left, pRect->top, pRect->right, pRect->bottom);
+        goto Cleanup;
+    }
 
     //
     // If swap chain creation failed then we must

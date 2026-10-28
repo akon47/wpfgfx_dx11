@@ -131,6 +131,7 @@ CHwRenderStateManager::CHwRenderStateManager()
     m_fVertexFormatDirty = true;
 
     m_pVertexBuffer = NULL;
+    m_pNullVertexBuffer = NULL;
     m_uVertexStride = 0;
     m_fVertexBufferKnown = false;
     m_fVertexBufferDirty = true;
@@ -174,6 +175,7 @@ CHwRenderStateManager::~CHwRenderStateManager()
     ReleaseInterface(m_pPSConstantBuffer);
     ReleaseInterface(m_pPSIntBoolConstantBuffer);
     ReleaseInterface(m_pFFConstantBuffer);
+    ReleaseInterface(m_pNullVertexBuffer);
 
     ReleaseInterface(m_pD3DContext);
     ReleaseInterface(m_pD3DDevice);
@@ -325,8 +327,59 @@ CHwRenderStateManager::SetRenderTargetView(
 {
     if (pRTV != m_pRTV)
     {
-        // 이 리소스가 SRV로 묶여 있을 수 있다. 먼저 전부 떼어낸다.
-        UnbindAllTextures();
+        //
+        // D3D11 forbids a resource bound as a shader resource and as the render
+        // target at the same time; the runtime silently unbinds the SRV. Drop
+        // only the conflicting bindings from the shadow state so textures the
+        // caller set before switching targets (effects do this) stay bound and
+        // a later SetTexture of the dropped one binds it again.
+        //
+        if (pRTV)
+        {
+            ID3D11Resource *pRTResource = NULL;
+            pRTV->GetResource(&pRTResource);
+
+            //
+            // Compare against what the context has bound (the shadow state may
+            // hold not yet applied changes) and against the shadow state.
+            //
+            ID3D11ShaderResourceView *rgBound[MIL_TEXTURE_STAGE_COUNT] = { 0 };
+            m_pD3DContext->PSGetShaderResources(0, MIL_TEXTURE_STAGE_COUNT, rgBound);
+
+            for (UINT i = 0; i < MIL_TEXTURE_STAGE_COUNT; i++)
+            {
+                bool fConflict = false;
+
+                for (UINT j = 0; j < 2 && !fConflict; j++)
+                {
+                    ID3D11ShaderResourceView *pSRV = (j == 0) ? rgBound[i] : m_rgpTextures[i];
+
+                    if (pSRV != NULL)
+                    {
+                        ID3D11Resource *pResource = NULL;
+                        pSRV->GetResource(&pResource);
+                        fConflict = (pResource == pRTResource);
+                        ReleaseInterface(pResource);
+                    }
+                }
+
+                if (fConflict)
+                {
+                    // Unbind just this slot now; the next draw re-applies
+                    // whatever the caller sets after the target switch.
+                    ID3D11ShaderResourceView *pNull = NULL;
+                    m_pD3DContext->PSSetShaderResources(i, 1, &pNull);
+
+                    m_rgpTextures[i] = NULL;
+                    m_rgfTextureKnown[i] = false;
+                    m_fTexturesDirty = true;
+                }
+
+                ReleaseInterface(rgBound[i]);
+            }
+
+            ReleaseInterface(pRTResource);
+        }
 
         m_pRTV = pRTV;
         m_pD3DContext->OMSetRenderTargets(1, &m_pRTV, m_pDSV);
@@ -1355,6 +1408,42 @@ Cleanup:
     RRETURN(hr);
 }
 
+//+-----------------------------------------------------------------------------
+//
+//  Member:    CHwRenderStateManager::CreateNullVertexBuffer
+//
+//  Synopsis:  버텍스 형식에 없는 속성(법선, 반사색, 추가 텍스처 좌표)을 0 으로
+//             공급하는 작은 버퍼. 입력 레이아웃이 슬롯 MIL_NULL_VERTEX_SLOT 에서
+//             인스턴스 단계 0 으로 읽는다(HwFixedFunctionShaders.cpp).
+//
+//------------------------------------------------------------------------------
+HRESULT
+CHwRenderStateManager::CreateNullVertexBuffer()
+{
+    HRESULT hr = S_OK;
+    ID3D11Device *pDevice = NULL;
+
+    static const float rgZero[16] = {};
+
+    D3D11_BUFFER_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.ByteWidth = sizeof(rgZero);
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA data;
+    ZeroMemory(&data, sizeof(data));
+    data.pSysMem = rgZero;
+
+    m_pD3DContext->GetDevice(&pDevice);
+
+    IFC(MilTranslateD3D11Error(pDevice->CreateBuffer(&desc, &data, &m_pNullVertexBuffer)));
+
+Cleanup:
+    ReleaseInterface(pDevice);
+    RRETURN(hr);
+}
+
 HRESULT
 CHwRenderStateManager::ApplyInputAssembler()
 {
@@ -1372,8 +1461,18 @@ CHwRenderStateManager::ApplyInputAssembler()
 
     if (m_fVertexBufferDirty)
     {
-        UINT uOffset = 0;
-        m_pD3DContext->IASetVertexBuffers(0, 1, &m_pVertexBuffer, &m_uVertexStride, &uOffset);
+        if (m_pNullVertexBuffer == NULL)
+        {
+            IFC(CreateNullVertexBuffer());
+        }
+
+        ID3D11Buffer *rgBuffers[2] = { m_pVertexBuffer, m_pNullVertexBuffer };
+        UINT rgStrides[2] = { m_uVertexStride, 16 };
+        UINT rgOffsets[2] = { 0, 0 };
+
+        C_ASSERT(MIL_NULL_VERTEX_SLOT == 1);
+
+        m_pD3DContext->IASetVertexBuffers(0, 2, rgBuffers, rgStrides, rgOffsets);
         m_fVertexBufferDirty = false;
     }
 
@@ -1658,6 +1757,7 @@ CHwRenderStateManager::SetDefaultState()
     // Streams
     //
     m_pVertexBuffer = NULL;
+    m_pNullVertexBuffer = NULL;
     m_uVertexStride = 0;
     m_fVertexBufferKnown = true;
     m_fVertexBufferDirty = true;

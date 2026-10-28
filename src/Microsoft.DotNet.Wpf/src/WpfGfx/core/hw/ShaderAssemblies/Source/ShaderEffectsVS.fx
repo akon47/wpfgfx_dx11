@@ -12,12 +12,21 @@ cbuffer MilVertexShaderConstants : register(b0)
 };
 
 //--------------------------------------------------------------------------------------
+// core/hw/HwFixedFunctionShaders.h 의 MIL_HLSL_VERTEX_INPUT 과 같아야 한다.
 struct VS_INPUT
 {
-    float4 Position : POSITION;
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
     float4 Diffuse  : COLOR0;
-    float2 UV0      : TEXCOORD0;
-    float2 UV1      : TEXCOORD1;
+    float4 Specular : COLOR1;
+    float2 UV0 : TEXCOORD0;
+    float2 UV1 : TEXCOORD1;
+    float2 UV2 : TEXCOORD2;
+    float2 UV3 : TEXCOORD3;
+    float2 UV4 : TEXCOORD4;
+    float2 UV5 : TEXCOORD5;
+    float2 UV6 : TEXCOORD6;
+    float2 UV7 : TEXCOORD7;
 };
 
 struct VS_OUTPUT
@@ -33,7 +42,7 @@ struct VS_OUTPUT
 VS_OUTPUT VS(VS_INPUT input)
 {
     VS_OUTPUT output = (VS_OUTPUT)0;
-    output.Position = mul(input.Position, deviceTransform);
+    output.Position = mul(float4(input.Position, 1.0f), deviceTransform);
     output.UV = input.UV0;
     return output;
 }

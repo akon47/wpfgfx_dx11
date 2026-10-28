@@ -65,6 +65,33 @@ struct MilTextureStageState
 #define MIL_FF_STAGE_COUNT 8
 
 //
+// 모든 버텍스 셰이더(고정 기능 에뮬레이션, 파이프라인 조립기, 효과)가 공유하는 입력 선언.
+// D3D11은 입력 레이아웃과 VS 입력 시그니처의 시맨틱·레지스터가 맞아야 하므로, 모든 VS가
+// 같은 순서로 같은 속성을 선언한다. 버텍스 형식에 없는 속성은 입력 레이아웃이 슬롯
+// MIL_NULL_VERTEX_SLOT 의 0 버퍼(인스턴스 단계 0)에서 읽게 해 항상 0 이 들어온다.
+// 선언 순서가 입력 레지스터 번호를 정하므로 바꾸지 않는다.
+//
+#define MIL_HLSL_VERTEX_INPUT \
+    "struct MilVertexInput\n" \
+    "{\n" \
+    "    float3 Position : POSITION;\n" \
+    "    float3 Normal   : NORMAL;\n" \
+    "    float4 Diffuse  : COLOR0;\n" \
+    "    float4 Specular : COLOR1;\n" \
+    "    float2 UV0 : TEXCOORD0;\n" \
+    "    float2 UV1 : TEXCOORD1;\n" \
+    "    float2 UV2 : TEXCOORD2;\n" \
+    "    float2 UV3 : TEXCOORD3;\n" \
+    "    float2 UV4 : TEXCOORD4;\n" \
+    "    float2 UV5 : TEXCOORD5;\n" \
+    "    float2 UV6 : TEXCOORD6;\n" \
+    "    float2 UV7 : TEXCOORD7;\n" \
+    "};\n"
+
+#define MIL_NULL_VERTEX_SLOT 1
+#define MIL_VERTEX_INPUT_ELEMENT_COUNT 12
+
+//
 // 고정 기능 에뮬레이션 상수 버퍼 (VS b1). 열 우선(packing) 규약은 파이프라인 셰이더와
 // 같다: C++에서 전치해서 올리고 HLSL에서 mul(pos, m)으로 쓴다.
 //
@@ -106,7 +133,7 @@ public:
 
     static void BuildInputElements(
         MilVertexFormatId format,
-        __out_ecount(16) D3D11_INPUT_ELEMENT_DESC *rgElements,
+        __out_ecount(MIL_VERTEX_INPUT_ELEMENT_COUNT) D3D11_INPUT_ELEMENT_DESC *rgElements,
         __out_ecount(1) UINT *pcElements
         );
 
@@ -124,7 +151,8 @@ private:
     ID3D11Device *m_pDevice;
 
     ID3D11InputLayout *m_rgpInputLayouts[MilVertexFormat_Count];
-    ID3D11VertexShader *m_rgpVertexShaders[MilVertexFormat_Count];
+    ID3D11VertexShader *m_pVertexShader;      // 형식과 무관한 변환 VS 하나
+    ID3DBlob *m_pVertexShaderBlob;             // 입력 레이아웃 생성용 시그니처
 
     struct PixelShaderEntry
     {

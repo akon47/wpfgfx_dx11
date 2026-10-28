@@ -222,21 +222,6 @@ CD3DModuleLoaderInternal::CreateD3DObjects(
     HRESULT hr = S_OK;
     IDXGIFactory1 *pFactory = NULL;
 
-    //
-    // M1 게이트(D13): 하드웨어 경로(M2~M7)가 완성될 때까지 DXGI 팩터리를 만들지
-    // 않는다. 디스플레이 세트는 "D3D 없음" 경로로 가서 Tier 0을 보고하고, 모든
-    // 렌더 타깃은 소프트웨어 래스터라이저를 쓴다. M2에서 이 블록을 지운다.
-    //
-    static const bool sc_fHardwareRenderingEnabled = false;
-
-    if (!sc_fHardwareRenderingEnabled)
-    {
-        // D3DERR_NOTAVAILABLE: 소프트웨어 렌더 타깃이 3D 폴백 디바이스 없음을
-        // 조용히 삼키는 코드(swsurfrt.cpp Begin3D).
-        TraceTag((tagMILWarning, "Hardware rendering is disabled for milestone M1."));
-        RRETURN(D3DERR_NOTAVAILABLE);
-    }
-
     // 팩터리 생성은 여러 DLL 로드를 유발한다. 어딘가 잘못된 코드가 FPU 설정을
     // 깨뜨려도 우리 코드가 영향을 받지 않도록 보호한다(D3D9 시절부터의 보호).
     FPUStateSandbox oGuard;
