@@ -50,7 +50,13 @@ CD3DTexture::~CD3DTexture()
     }
 
     ReleaseInterfaceNoNULL(m_pSRV);
-    ReleaseInterfaceNoNULL(m_pD3DTexture);
+
+    if (m_pD3DTexture != NULL)
+    {
+        // D26: intermediate render targets go back to the device's pool.
+        Device().ReturnTextureToPool(m_pD3DTexture);
+        m_pD3DTexture = NULL;
+    }
 }
 
 //+------------------------------------------------------------------------
@@ -162,7 +168,29 @@ void
 CD3DTexture::ReleaseD3DResources()
 {
     ReleaseInterface(m_pSRV);
-    ReleaseInterface(m_pD3DTexture);
+
+    if (m_pD3DTexture != NULL)
+    {
+        // D26: intermediate render targets go back to the device's pool.
+        // (The resource manager calls this under the device lock.) The
+        // surface wrappers of this texture still hold references; they are
+        // released with this object right after.
+        ULONG cSurfaceRefs = 0;
+
+        if (m_rgSurfaceLevel != NULL)
+        {
+            for (UINT i = 0; i < m_cLevels; i++)
+            {
+                if (m_rgSurfaceLevel[i] != NULL)
+                {
+                    cSurfaceRefs++;
+                }
+            }
+        }
+
+        Device().ReturnTextureToPool(m_pD3DTexture, 1 + cSurfaceRefs);
+        m_pD3DTexture = NULL;
+    }
 
     return;
 }

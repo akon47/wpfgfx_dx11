@@ -264,6 +264,11 @@ CD3DDeviceLevel1::CD3DDeviceLevel1(
     m_fDeviceLostProcessed = false;
     m_fTestDeviceLost = false;
     m_pMediaDevice9 = NULL;
+
+    m_cTexturePool = 0;
+    m_cbTexturePool = 0;
+    m_uPresentCount = 0;
+    m_fTexturePoolEnabled = SUCCEEDED(m_csTexturePool.Init());
     m_hrDisplayInvalid = S_OK;
 
     m_dwGPUMarkerFlags = 0;
@@ -666,6 +671,13 @@ CD3DDeviceLevel1::~CD3DDeviceLevel1()
     ResetMarkers();
 
     ReleaseInterface(m_pMediaDevice9);
+
+    TrimTexturePool(true);
+    if (m_fTexturePoolEnabled)
+    {
+        m_csTexturePool.DeInit();
+        m_fTexturePoolEnabled = false;
+    }
 
     ReleaseInterface(m_pEffectPipelineVertexShader);
     ReleaseInterface(m_pEffectPipelineVertexBuffer);
@@ -1286,6 +1298,7 @@ CD3DDeviceLevel1::MarkUnusable(
         //
 
         m_resourceManager.DestroyAllResources();
+        TrimTexturePool(true);
     }
 }
 
@@ -1399,6 +1412,7 @@ CD3DDeviceLevel1::CreateRenderTargetUntracked(
     {
         MtSetDefault(Mt(D3DRenderTarget));
 
+        MilDx11CountCreate(MilDx11Site_RenderTarget);
         hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(
             &desc,
             NULL,
@@ -1552,6 +1566,7 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
 
         BEGIN_DEVICE_ALLOCATION;
 
+        MilDx11CountCreate(MilDx11Site_SwapChain);
         hr = MilTranslateD3D11Error(pDXGIFactory->CreateSwapChainForHwnd(
             m_pD3DDevice,
             pParams->hDeviceWindow,
@@ -1710,7 +1725,8 @@ CD3DDeviceLevel1::CreateTexture(
     __in_ecount(1) const D3D11_TEXTURE2D_DESC *pDesc,
     __in_ecount_opt(1) const D3D11_SUBRESOURCE_DATA *pInitialData,
     __deref_out_ecount(1) ID3D11Texture2D ** const ppD3DTexture,
-    __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle
+    __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle,
+    bool fAllowLargerFromPool
     )
 {
     AssertDeviceEntry(*this);
@@ -1751,8 +1767,21 @@ CD3DDeviceLevel1::CreateTexture(
             desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
         }
 
+        if (   pInitialData == NULL
+            && pSharedHandle == NULL
+            && TryGetPooledTexture(&desc, ppD3DTexture, fAllowLargerFromPool))
+        {
+            MilDx11CountCreate(MilDx11Site_PoolHit);
+            goto Cleanup;
+        }
+
+        // Note: rounding sizes up (so animated intermediates reuse each other)
+        // was tried and rejected: the effect pipeline samples intermediates by
+        // the texture's real size, so padding shifts the content per frame.
+
         BEGIN_DEVICE_ALLOCATION;
 
+        MilDx11CountCreate(MilDx11Site_Texture);
         hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(
             &desc,
             pInitialData,
@@ -2334,6 +2363,7 @@ CD3DDeviceLevel1::ResolveMultisampleRect(
 
         BEGIN_DEVICE_ALLOCATION;
 
+        MilDx11CountCreate(MilDx11Site_MsaaScratch);
         hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(&desc, NULL, &m_pMSAAResolveScratch));
 
         END_DEVICE_ALLOCATION;
@@ -2934,6 +2964,9 @@ CD3DDeviceLevel1::PresentWithD3D(
         hr = D3DERR_DEVICELOST;
     }
 
+    m_uPresentCount++;
+    TrimTexturePool(false);
+
     static LONG s_cPresentLogs = 0;
 
     if (InterlockedIncrement(&s_cPresentLogs) <= 20)
@@ -2944,6 +2977,19 @@ CD3DDeviceLevel1::PresentWithD3D(
                  uSyncInterval);
 
     MilDx11LogD3DMessages(m_pD3DDevice, "Present");
+
+    if (MilDx11LogEnabled())
+    {
+        // Leak tracking: live object counts every 300 presents.
+        static LONG s_cPresentsForLiveObjects = 0;
+        LONG cPresents = InterlockedIncrement(&s_cPresentsForLiveObjects);
+        if (cPresents % 300 == 0)
+        {
+            char szContext[48];
+            StringCchPrintfA(szContext, ARRAYSIZE(szContext), "after %ld presents", cPresents);
+            MilDx11LogLiveObjects(m_pD3DDevice, szContext);
+        }
+    }
 
     if (MilDx11LogEnabled())
     {
@@ -4149,6 +4195,7 @@ CD3DDeviceLevel1::CreateDepthBuffer(
 
         BEGIN_DEVICE_ALLOCATION;
 
+        MilDx11CountCreate(MilDx11Site_DepthStencil);
         hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(&desc, NULL, &pD3DTexture));
 
         //
@@ -5357,6 +5404,215 @@ CD3DDeviceLevel1::InitializeIMediaDeviceConsumer(
     )
 {
     UNREFERENCED_PARAMETER(pIMediaDeviceConsumer);
+}
+
+//+-----------------------------------------------------------------------------
+//
+//  Intermediate texture pool (D26)
+//
+//------------------------------------------------------------------------------
+
+static UINT TexturePoolBytes(__in_ecount(1) const D3D11_TEXTURE2D_DESC &desc)
+{
+    UINT cbPixel = 4;
+
+    if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT)
+    {
+        cbPixel = 16;
+    }
+    else if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+    {
+        cbPixel = 8;
+    }
+
+    return desc.Width * desc.Height * cbPixel * max(1u, desc.SampleDesc.Count);
+}
+
+static bool IsTexturePoolable(__in_ecount(1) const D3D11_TEXTURE2D_DESC &desc)
+{
+    if (desc.MiscFlags != 0 || desc.MipLevels != 1 || desc.ArraySize != 1 || desc.Width > 4096 || desc.Height > 4096)
+    {
+        return false;
+    }
+
+    // GPU textures (intermediate render targets, bitmap and glyph uploads) and
+    // the staging half of lockable textures. Both are created and freed per
+    // frame by the engine's own code paths.
+    if (desc.Usage == D3D11_USAGE_DEFAULT)
+    {
+        return desc.CPUAccessFlags == 0
+            && (desc.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)) != 0;
+    }
+
+    return desc.Usage == D3D11_USAGE_STAGING && desc.BindFlags == 0;
+}
+
+bool
+CD3DDeviceLevel1::TryGetPooledTexture(
+    __in_ecount(1) const D3D11_TEXTURE2D_DESC *pDesc,
+    __deref_out_ecount(1) ID3D11Texture2D **ppTexture,
+    bool fAllowLarger
+    )
+{
+    bool fFound = false;
+
+    if (m_fTexturePoolEnabled && IsTexturePoolable(*pDesc))
+    {
+        CGuard<CCriticalSection> guard(m_csTexturePool);
+
+        UINT iBest = UINT_MAX;
+        UINT uBestArea = UINT_MAX;
+
+        for (UINT i = 0; i < m_cTexturePool; i++)
+        {
+            const D3D11_TEXTURE2D_DESC &d = m_rgTexturePool[i].desc;
+
+            // A staging texture freed during this present may still be the
+            // source of a copy in flight: reusing it would stall in Map. Give
+            // those one present of rest; GPU-only textures are safe at once.
+            if (   pDesc->Usage == D3D11_USAGE_STAGING
+                && m_rgTexturePool[i].uLastUsePresent == m_uPresentCount)
+            {
+                continue;
+            }
+
+            if (   d.Format != pDesc->Format
+                || d.Usage != pDesc->Usage
+                || d.BindFlags != pDesc->BindFlags
+                || d.CPUAccessFlags != pDesc->CPUAccessFlags
+                || d.MiscFlags != pDesc->MiscFlags
+                || d.SampleDesc.Count != pDesc->SampleDesc.Count
+                || d.SampleDesc.Quality != pDesc->SampleDesc.Quality
+                || d.MipLevels != pDesc->MipLevels
+                || d.ArraySize != pDesc->ArraySize)
+            {
+                continue;
+            }
+
+            if (d.Width == pDesc->Width && d.Height == pDesc->Height)
+            {
+                iBest = i;
+                break;
+            }
+
+            // Intermediate render targets: a texture up to 64 pixels larger in
+            // each direction serves (the color source maps the bitmap rectangle
+            // onto the real texture size).
+            if (   fAllowLarger
+                && d.Width >= pDesc->Width && d.Width <= pDesc->Width + 64
+                && d.Height >= pDesc->Height && d.Height <= pDesc->Height + 64
+                && d.Width * d.Height < uBestArea)
+            {
+                iBest = i;
+                uBestArea = d.Width * d.Height;
+            }
+        }
+
+        if (iBest != UINT_MAX)
+        {
+            *ppTexture = m_rgTexturePool[iBest].pTexture;   // the pool's reference moves to the caller
+            m_cbTexturePool -= TexturePoolBytes(m_rgTexturePool[iBest].desc);
+            m_rgTexturePool[iBest] = m_rgTexturePool[--m_cTexturePool];
+            fFound = true;
+        }
+    }
+
+    return fFound;
+}
+
+void
+CD3DDeviceLevel1::ReturnTextureToPool(
+    __in_ecount(1) ID3D11Texture2D *pTexture,
+    ULONG cExpectedRefs
+    )
+{
+    D3D11_TEXTURE2D_DESC desc;
+    pTexture->GetDesc(&desc);
+
+    // Only textures nobody else references (views and surfaces are already
+    // gone), and only while the device is usable.
+    pTexture->AddRef();
+    ULONG cRefs = pTexture->Release();
+
+    bool fPooled = false;
+
+    if (   cRefs <= cExpectedRefs
+        && m_fTexturePoolEnabled
+        && !m_fDeviceLostProcessed
+        && IsTexturePoolable(desc))
+    {
+        CGuard<CCriticalSection> guard(m_csTexturePool);
+
+        UINT cb = TexturePoolBytes(desc);
+
+        // Full: evict the least recently returned entry (unless everything in
+        // the pool came back during this very present).
+        if (m_cTexturePool >= c_cTexturePoolMax || m_cbTexturePool + cb > c_cbTexturePoolMax)
+        {
+            UINT iOldest = UINT_MAX;
+            UINT uOldest = m_uPresentCount;
+
+            for (UINT i = 0; i < m_cTexturePool; i++)
+            {
+                if (m_rgTexturePool[i].uLastUsePresent < uOldest)
+                {
+                    uOldest = m_rgTexturePool[i].uLastUsePresent;
+                    iOldest = i;
+                }
+            }
+
+            if (iOldest != UINT_MAX)
+            {
+                m_cbTexturePool -= TexturePoolBytes(m_rgTexturePool[iOldest].desc);
+                m_rgTexturePool[iOldest].pTexture->Release();
+                m_rgTexturePool[iOldest] = m_rgTexturePool[--m_cTexturePool];
+            }
+        }
+
+        if (   m_cTexturePool < c_cTexturePoolMax
+            && m_cbTexturePool + cb <= c_cbTexturePoolMax)
+        {
+            PooledTexture &entry = m_rgTexturePool[m_cTexturePool++];
+            entry.pTexture = pTexture;
+            entry.desc = desc;
+            entry.uLastUsePresent = m_uPresentCount;
+            m_cbTexturePool += cb;
+            fPooled = true;
+        }
+    }
+
+    if (!fPooled)
+    {
+        pTexture->Release();
+    }
+}
+
+void
+CD3DDeviceLevel1::TrimTexturePool(
+    bool fAll
+    )
+{
+    if (!m_fTexturePoolEnabled)
+    {
+        return;
+    }
+
+    CGuard<CCriticalSection> guard(m_csTexturePool);
+
+    for (UINT i = 0; i < m_cTexturePool; )
+    {
+        if (   fAll
+            || m_uPresentCount - m_rgTexturePool[i].uLastUsePresent > c_cTexturePoolIdlePresents)
+        {
+            m_cbTexturePool -= TexturePoolBytes(m_rgTexturePool[i].desc);
+            m_rgTexturePool[i].pTexture->Release();
+            m_rgTexturePool[i] = m_rgTexturePool[--m_cTexturePool];
+        }
+        else
+        {
+            i++;
+        }
+    }
 }
 
 //+-----------------------------------------------------------------------------

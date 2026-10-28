@@ -31,7 +31,8 @@ CD3DVidMemOnlyTexture::Create(
     bool fIsEvictable,
     __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
     __deref_out_ecount(1) CD3DVidMemOnlyTexture **ppVidMemOnlyTexture,
-    __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle
+    __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle,
+    bool fAllowLargerFromPool
     )
 {
     HRESULT hr = S_OK;
@@ -51,7 +52,8 @@ CD3DVidMemOnlyTexture::Create(
         &desc,
         NULL,
         OUT &pD3DTexture,
-        IN OUT pSharedHandle
+        IN OUT pSharedHandle,
+        fAllowLargerFromPool
         ));
 
     //

@@ -180,6 +180,29 @@ public:
 
     __out_opt IUnknown *GetMediaDevice9NoRef() const { return m_pMediaDevice9; }
 
+    //
+    // Intermediate texture pool (D26). WPF creates and frees intermediate
+    // render targets every frame (effects, brush realizations). D3D11 drivers
+    // make that allocation churn expensive, so released textures are kept and
+    // handed back for an identical description.
+    //
+    bool TryGetPooledTexture(
+        __in_ecount(1) const D3D11_TEXTURE2D_DESC *pDesc,
+        __deref_out_ecount(1) ID3D11Texture2D **ppTexture,
+        bool fAllowLarger
+        );
+
+    void ReturnTextureToPool(
+        __in_ecount(1) ID3D11Texture2D *pTexture,     // the caller's reference is consumed
+        ULONG cExpectedRefs = 1                       // references the caller knows will go away with it
+        );
+
+    void TrimTexturePool(
+        bool fAll
+        );
+
+
+
     HRESULT CheckRenderTargetFormat(
         DXGI_FORMAT fmtRenderTarget,
         __deref_opt_out_ecount(1) HRESULT const ** const pphrTestGetDC = NULL
@@ -253,7 +276,8 @@ public:
         __in_ecount(1) const D3D11_TEXTURE2D_DESC *pDesc,
         __in_ecount_opt(1) const D3D11_SUBRESOURCE_DATA *pInitialData,
         __deref_out_ecount(1) ID3D11Texture2D ** const ppD3DTexture,
-        __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle = NULL
+        __deref_opt_inout_ecount(1) HANDLE * const pSharedHandle = NULL,
+        bool fAllowLargerFromPool = false   // D26: a somewhat larger pooled texture is fine (intermediate RTs)
         );
 
     HRESULT CreatePixelShaderFromResource(
@@ -886,6 +910,30 @@ private:
     bool m_fTestDeviceLost;             // WPFGFX_DX11_TEST_DEVICE_LOSS hook fired on this device
 
     IUnknown *m_pMediaDevice9;          // see SetMediaDevice9
+
+    // Intermediate texture pool (D26), see TryGetPooledTexture.
+    struct PooledTexture
+    {
+        ID3D11Texture2D *pTexture;
+        D3D11_TEXTURE2D_DESC desc;
+        UINT uLastUsePresent;
+    };
+
+    enum
+    {
+        c_cTexturePoolMax = 48,
+        c_cbTexturePoolMax = 96 * 1024 * 1024,
+        c_cTexturePoolIdlePresents = 300
+    };
+
+    PooledTexture m_rgTexturePool[c_cTexturePoolMax];
+    UINT m_cTexturePool;
+    UINT m_cbTexturePool;
+    UINT m_uPresentCount;
+    CCriticalSection m_csTexturePool;
+    bool m_fTexturePoolEnabled;
+
+
 
     // HRESULT indicating whether the display is invalid
     HRESULT m_hrDisplayInvalid;

@@ -143,3 +143,11 @@ EXPORTS
 ; D3D11 engine additions (D8). Not present in the stock DX9 engine.
     WpfGfxDx11_GetInfo
     WpfGfxDx11_GetDevice
+    WpfGfxDx11_SetOption
+    WpfGfxDx11_FrameQueue_Create
+    WpfGfxDx11_FrameQueue_GetSharedHandles
+    WpfGfxDx11_FrameQueue_TryAcquire
+    WpfGfxDx11_FrameQueue_Present
+    WpfGfxDx11_FrameQueue_Discard
+    WpfGfxDx11_FrameQueue_GetStats
+    WpfGfxDx11_FrameQueue_QueryCapability

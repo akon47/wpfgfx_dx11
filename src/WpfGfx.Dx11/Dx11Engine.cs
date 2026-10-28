@@ -36,6 +36,12 @@ public static class Dx11Engine
     [DllImport(EngineModule, ExactSpelling = true)]
     private static extern int WpfGfxDx11_GetDevice(uint displayIndex, out IntPtr device);
 
+    [DllImport(EngineModule, ExactSpelling = true)]
+    private static extern int WpfGfxDx11_SetOption(uint option, uint value);
+
+    private const uint OptionHardwareRenderTargetBitmap = 1;
+    private static bool s_hardwareRenderTargetBitmap;
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern IntPtr GetModuleHandleW(string moduleName);
 
@@ -80,6 +86,24 @@ public static class Dx11Engine
         EnsureAvailable();
         Marshal.ThrowExceptionForHR(WpfGfxDx11_GetDevice(displayIndex, out IntPtr device));
         return device;
+    }
+
+    /// <summary>
+    /// When true, <see cref="System.Windows.Media.Imaging.RenderTargetBitmap"/> renders on the GPU
+    /// (effects included, ps_3_0 as well) instead of the software rasterizer. Opt-in because the
+    /// pixel output differs slightly from the software path (anti-aliasing, text). Takes effect for
+    /// bitmaps created after the change. Needs ABI 2 of the engine.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The D3D11 engine is not loaded.</exception>
+    public static bool HardwareRenderTargetBitmap
+    {
+        get => s_hardwareRenderTargetBitmap;
+        set
+        {
+            EnsureAvailable();
+            Marshal.ThrowExceptionForHR(WpfGfxDx11_SetOption(OptionHardwareRenderTargetBitmap, value ? 1u : 0u));
+            s_hardwareRenderTargetBitmap = value;
+        }
     }
 
     internal static void EnsureAvailable()

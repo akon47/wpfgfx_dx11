@@ -142,7 +142,13 @@ Cleanup:
 void
 CD3DLockableTexture::ReleaseD3DResources()
 {
-    ReleaseInterface(m_pD3DStagingTexture);
+    if (m_pD3DStagingTexture != NULL)
+    {
+        // D26: staging halves are pooled too (reused one present later).
+        Device().ReturnTextureToPool(m_pD3DStagingTexture);
+        m_pD3DStagingTexture = NULL;
+    }
+
     CD3DTexture::ReleaseD3DResources();
 }
 

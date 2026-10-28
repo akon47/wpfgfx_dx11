@@ -24,6 +24,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include <d3d11_4.h>      // ID3D11Multithread
 
 ExternTag(tagD3DStats);
 DeclareTag(tagDisableHWGroupAdapterSupport, "MIL-HW", "Disable HW group adapter support");
@@ -390,6 +391,23 @@ CD3DDeviceManager::CreateD3D11Device(
     {
         hr = MilTranslateD3D11Error(hr);
         goto Cleanup;
+    }
+
+    //
+    // The immediate context is also used from the UI thread (GPU
+    // RenderTargetBitmap: render through the sync channel, read back through
+    // CDeviceBitmap::Lock) and by anyone holding the device from
+    // WpfGfxDx11_GetDevice. Like D3DCREATE_MULTITHREADED on the D3D9 device,
+    // let the runtime serialize context calls; the engine's own device lock
+    // stays on top of it.
+    //
+    {
+        ID3D11Multithread *pMultithread = NULL;
+        if (SUCCEEDED((*ppContext)->QueryInterface(__uuidof(ID3D11Multithread), reinterpret_cast<void **>(&pMultithread))))
+        {
+            pMultithread->SetMultithreadProtected(TRUE);
+            pMultithread->Release();
+        }
     }
 
     if (*pFeatureLevel < D3D_FEATURE_LEVEL_10_0)

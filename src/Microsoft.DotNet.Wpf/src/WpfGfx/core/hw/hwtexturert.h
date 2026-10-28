@@ -36,6 +36,19 @@ public:
         DBG_STEP_RENDERING_COMMA_PARAM(__inout_ecount_opt(1) CHwDisplayRenderTarget *pDisplayRTParent)
         );
 
+    // RenderTargetBitmap on the GPU (opt-in, see MilDx11Option_HardwareRenderTargetBitmap):
+    // a texture target at the requested DPI; its bitmap reads back on demand and
+    // draws straight from the texture on this device.
+    static HRESULT CreateForBitmap(
+        UINT uWidth,
+        UINT uHeight,
+        FLOAT dpiX,
+        FLOAT dpiY,
+        __inout_ecount(1) CD3DDeviceLevel1 *pDevice,
+        DisplayId associatedDisplay,
+        __deref_out_ecount(1) IMILRenderTargetBitmap **ppIRenderTargetBitmap
+        );
+
 private:
 
     DECLARE_METERHEAP_ALLOC(ProcessHeap, Mt(CHwTextureRenderTarget));
@@ -180,6 +193,8 @@ private:
     CD3DVidMemOnlyTexture *m_pVidMemOnlyTexture;
 
     CDeviceBitmap *m_pDeviceBitmap;
+    FLOAT m_dpiX;
+    FLOAT m_dpiY;
         // non-NULL after successful call to GetBitmapSource
 
     bool m_fInvalidContents;

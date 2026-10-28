@@ -14,6 +14,15 @@
 
 #include "precomp.hpp"
 #include "osversionhelper.h"
+#include "mildx11log.h"
+
+// api_dx11.cpp
+HRESULT
+MilDx11GetEngineDevice(
+    UINT uDisplayIndex,
+    __deref_out CD3DDeviceLevel1 **ppDevice,
+    __deref_opt_out CDisplaySet const **ppDisplaySet
+    );
 
 MtDefine(CMILFactory, MILApi, "CMILFactory");
 MtDefine(BitmapDataClient, Mem, "BitmapMemClient");
@@ -289,16 +298,56 @@ CMILFactory::CreateBitmapRenderTarget(
     {
         if ( !(dwFlags & MilRTInitialization::HardwareOnly) )
         {
-            MIL_THR(CSwRenderTargetBitmap::Create(
-                width,
-                height,
-                format,
-                dpiX,
-                dpiY,
-                DisplayId::None,
-                ppIRenderTargetBitmap
-                DBG_STEP_RENDERING_COMMA_PARAM(NULL) // pDisplayRTParent
-                ));
+            //
+            // Opt-in (WpfGfxDx11_SetOption or WPFGFX_DX11_HW_RTB): render the
+            // bitmap on the primary display's GPU device, effects included.
+            // Anything that fails falls back to the software target below.
+            //
+            bool fHardwareDone = false;
+
+            if (   (dwFlags & MilRTInitialization::SoftwareOnly) == 0
+                && format == MilPixelFormat::PBGRA32bpp
+                && MilDx11OptionEnabled(MilDx11Option_HardwareRenderTargetBitmap))
+            {
+                CD3DDeviceLevel1 *pDevice = NULL;
+                CDisplaySet const *pDisplaySet = NULL;
+
+                HRESULT hrHw = MilDx11GetEngineDevice(0, &pDevice, &pDisplaySet);
+
+                if (SUCCEEDED(hrHw))
+                {
+                    hrHw = CHwTextureRenderTarget::CreateForBitmap(
+                        width,
+                        height,
+                        dpiX,
+                        dpiY,
+                        pDevice,
+                        pDisplaySet->Display(0)->GetDisplayId(),
+                        ppIRenderTargetBitmap
+                        );
+                }
+
+                MIL_DX11_LOG("RenderTargetBitmap %ux%u on the GPU: hr=0x%08x", width, height, hrHw);
+
+                ReleaseInterface(pDevice);
+                ReleaseInterface(pDisplaySet);
+
+                fHardwareDone = SUCCEEDED(hrHw);
+            }
+
+            if (!fHardwareDone)
+            {
+                MIL_THR(CSwRenderTargetBitmap::Create(
+                    width,
+                    height,
+                    format,
+                    dpiX,
+                    dpiY,
+                    DisplayId::None,
+                    ppIRenderTargetBitmap
+                    DBG_STEP_RENDERING_COMMA_PARAM(NULL) // pDisplayRTParent
+                    ));
+            }
         }
         else
         {
