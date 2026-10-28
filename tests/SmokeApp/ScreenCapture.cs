@@ -8,30 +8,32 @@ namespace SmokeApp;
 internal static class ScreenCapture
 {
     /// <summary>
-    /// Captures through DWM (PrintWindow with PW_RENDERFULLCONTENT), so overlapping windows never
-    /// end up in the capture. For a layered window DWM may hand back nothing; then the window's
-    /// screen rectangle is copied instead (the window is topmost, so the composed result with
-    /// whatever is behind it is captured). Returns the method used.
+    /// Captures the client area through DWM (PrintWindow with PW_CLIENTONLY | PW_RENDERFULLCONTENT),
+    /// so overlapping windows never end up in the capture and the title bar (whose colors depend
+    /// on focus) is left out. If DWM hands back nothing, the client rectangle is copied from the
+    /// screen instead. Returns the method used.
     /// </summary>
     public static string Capture(Window window, string path)
     {
         IntPtr hwnd = new WindowInteropHelper(window).Handle;
-        GetWindowRect(hwnd, out RECT r);
-        int w = r.Right - r.Left, h = r.Bottom - r.Top;
+        GetClientRect(hwnd, out RECT c);
+        int w = c.Right - c.Left, h = c.Bottom - c.Top;
         string method = "printwindow";
         var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             IntPtr hdc = g.GetHdc();
-            try { PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT); }
+            try { PrintWindow(hwnd, hdc, PW_CLIENTONLY | PW_RENDERFULLCONTENT); }
             finally { g.ReleaseHdc(hdc); }
         }
 
         if (IsBlank(bmp))
         {
             method = "screen";
+            var origin = new POINT { X = 0, Y = 0 };
+            ClientToScreen(hwnd, ref origin);
             using var g = System.Drawing.Graphics.FromImage(bmp);
-            g.CopyFromScreen(r.Left, r.Top, 0, 0, new System.Drawing.Size(w, h), System.Drawing.CopyPixelOperation.SourceCopy);
+            g.CopyFromScreen(origin.X, origin.Y, 0, 0, new System.Drawing.Size(w, h), System.Drawing.CopyPixelOperation.SourceCopy);
         }
 
         bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
@@ -97,6 +99,7 @@ internal static class ScreenCapture
         }
     }
 
+    private const uint PW_CLIENTONLY = 0x00000001;
     private const uint PW_RENDERFULLCONTENT = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -115,6 +118,12 @@ internal static class ScreenCapture
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
     [DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
