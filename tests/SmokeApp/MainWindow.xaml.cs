@@ -24,6 +24,8 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        InteropCells.Populate(D3D9Cell, D3D11Cell, D3D11Notice, new WindowInteropHelper(this).Handle);
+
         string? shot = null;
         bool exit = false;
         int delayMs = 2000;
