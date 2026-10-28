@@ -33,6 +33,8 @@ MSBuild 노드가 환경 변수를 물려받으므로, 이전 빌드의 노드�
 주석에 먹힌다(`docs/LEARNINGS.md` L11). `python tools/check_trailing_nonascii.py src/Microsoft.DotNet.Wpf/src/WpfGfx` 로 검사하고
 `--fix` 로 고친다.
 
+x86·arm64 도 같은 명령에 `-platform x86` / `-platform arm64` 로 빌드된다(산출물은 `artifacts\bin\wpfgfx\<platform>\Release`).
+
 ## 산출물
 
 | 파일 | 경로 |
