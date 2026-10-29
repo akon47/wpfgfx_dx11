@@ -40,6 +40,7 @@ public static class Dx11Engine
     private static extern int WpfGfxDx11_SetOption(uint option, uint value);
 
     private const uint OptionHardwareRenderTargetBitmap = 1;
+    private const uint OptionGpuAntialiasing = 2;
     private static bool s_hardwareRenderTargetBitmap;
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -105,6 +106,28 @@ public static class Dx11Engine
             s_hardwareRenderTargetBitmap = value;
         }
     }
+
+    /// <summary>
+    /// MSAA sample count for GPU anti-aliasing of windows (0 = off, the default; 4 or 8). When on, shape
+    /// edges are anti-aliased by the GPU instead of WPF's CPU coverage rasterizer, which takes a large share
+    /// of render-thread time in shape-heavy, animated scenes. Edges then differ slightly from the stock
+    /// output, and content drawn with <c>EdgeMode.Aliased</c> also gets smooth edges. Applies to windows
+    /// created or resized after the change; set it before the first window is shown. Same as the
+    /// environment variable <c>WPFGFX_DX11_MSAA=&lt;samples&gt;</c>.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The D3D11 engine is not loaded.</exception>
+    public static int GpuAntialiasingSamples
+    {
+        get => s_gpuAntialiasingSamples;
+        set
+        {
+            EnsureAvailable();
+            Marshal.ThrowExceptionForHR(WpfGfxDx11_SetOption(OptionGpuAntialiasing, (uint)Math.Max(0, value)));
+            s_gpuAntialiasingSamples = value;
+        }
+    }
+
+    private static int s_gpuAntialiasingSamples;
 
     internal static void EnsureAvailable()
     {

@@ -189,6 +189,10 @@ protected:
     BOOL    m_fEnableRendering; // Rendering is disabled during resize
     BOOL    m_fDisableDirtyRectangles;  // app wants to skip D3D dirty-rect optimization
     CD3DSwapChain *m_pD3DSwapChain;
+
+    // D32: with GPU anti-aliasing the target surface is a multisampled
+    // texture and this is the swap chain's back buffer it resolves into.
+    CD3DSurface *m_pD3DBackBufferSurface;
     MilSwapChainParams m_D3DPresentParams;
     UINT const m_AdapterOrdinalInGroup;
     DWORD m_dwPresentFlags;

@@ -140,26 +140,23 @@ CBaseRenderTarget::Init()
     // but not all of them need this functionality.
     //
 
-    if (m_hrgnInvalidRegion == NULL)
-    {
-        IFCW32(m_hrgnInvalidRegion = CreateRectRgn(0, 0, 0, 0));
-    }
-    else
+    //
+    // dotnet/wpf#8031: the two GDI regions are created on first invalidation.
+    // Off-screen targets (BitmapCache, effect and RenderTargetBitmap
+    // intermediates) never invalidate, and allocating two GDI objects for each
+    // of them exhausted the 10000 per-process GDI object limit at a few
+    // thousand cached elements (UCEERR_RENDERTHREADFAILURE).
+    //
+    if (m_hrgnInvalidRegion != NULL)
     {
         IFCW32(SetRectRgn(m_hrgnInvalidRegion, 0, 0, 0, 0));
     }
 
-    if (m_hrgnNewRectRegion == NULL)
-    {
-        IFCW32(m_hrgnNewRectRegion = CreateRectRgn(0, 0, 0, 0));
-    }
-    else
+    if (m_hrgnNewRectRegion != NULL)
     {
         IFCW32(SetRectRgn(m_hrgnNewRectRegion, 0, 0, 0, 0));
     }
 
-    IFCW32_CHECKOOH(GR_GDIOBJECTS, m_hrgnInvalidRegion);
-    IFCW32_CHECKOOH(GR_GDIOBJECTS, m_hrgnNewRectRegion);
 
     IFC(WPFRealloc(
                 ProcessHeap,
@@ -267,6 +264,8 @@ CBaseRenderTarget::InvalidateRect(
         "IMILRenderTargetHWND::Invalidate: invalid rect."
         );
 
+    IFC(EnsureInvalidRegions());
+
     IFCW32(SetRectRgn(m_hrgnNewRectRegion, 
                     pRect->left,
                     pRect->top,
@@ -289,13 +288,47 @@ Cleanup:
 
 //==============================================================================
 
+//+-----------------------------------------------------------------------
+//
+//  Member:    CBaseRenderTarget::EnsureInvalidRegions
+//
+//  Synopsis:  Creates the dirty region objects on first use (dotnet/wpf#8031).
+//
+//------------------------------------------------------------------------
+
+HRESULT
+CBaseRenderTarget::EnsureInvalidRegions()
+{
+    HRESULT hr = S_OK;
+
+    if (m_hrgnInvalidRegion == NULL)
+    {
+        IFCW32_CHECKOOH(GR_GDIOBJECTS, m_hrgnInvalidRegion = CreateRectRgn(0, 0, 0, 0));
+    }
+
+    if (m_hrgnNewRectRegion == NULL)
+    {
+        IFCW32_CHECKOOH(GR_GDIOBJECTS, m_hrgnNewRectRegion = CreateRectRgn(0, 0, 0, 0));
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
+
 HRESULT
 CBaseRenderTarget::ClearInvalidatedRects()
 {
     HRESULT hr = S_OK;
-    
-    IFCW32(SetRectRgn(m_hrgnInvalidRegion, 0, 0, 0, 0));
-    IFCW32(SetRectRgn(m_hrgnNewRectRegion, 0, 0, 0, 0));
+
+    if (m_hrgnInvalidRegion != NULL)
+    {
+        IFCW32(SetRectRgn(m_hrgnInvalidRegion, 0, 0, 0, 0));
+    }
+
+    if (m_hrgnNewRectRegion != NULL)
+    {
+        IFCW32(SetRectRgn(m_hrgnNewRectRegion, 0, 0, 0, 0));
+    }
 
     m_fHaveEmptyRegionsBeenInvalidated = false;
     m_fHasComplexInvalidRegions = false;
@@ -455,7 +488,7 @@ void
 CBaseRenderTarget::DbgAssertNothingInvalid() const
 {
     RECT rect;
-    Assert(GetRgnBox(m_hrgnInvalidRegion, &rect) == NULLREGION);
+    Assert(m_hrgnInvalidRegion == NULL || GetRgnBox(m_hrgnInvalidRegion, &rect) == NULLREGION);
 }
 #endif
 

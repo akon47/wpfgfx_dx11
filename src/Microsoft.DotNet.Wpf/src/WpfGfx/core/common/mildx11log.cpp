@@ -172,6 +172,37 @@ void MilDx11SetOption(UINT uOption, bool fEnabled)
 }
 
 
+static LONG s_lGpuAntialiasSamples = -1;   // -1 = not read from the environment yet
+
+static UINT NormalizeSamples(UINT c)
+{
+    // 1 means "on, best": the device later falls back to 4 when 8 is unsupported.
+    return (c == 0) ? 0 : (c <= 2) ? ((c == 1) ? 8 : 2) : (c <= 4) ? 4 : 8;
+}
+
+UINT MilDx11GpuAntialiasSamples()
+{
+    if (s_lGpuAntialiasSamples < 0)
+    {
+        char szValue[8] = {};
+        UINT c = 0;
+        if (GetEnvironmentVariableA("WPFGFX_DX11_MSAA", szValue, ARRAYSIZE(szValue)) > 0)
+        {
+            c = NormalizeSamples(static_cast<UINT>(atoi(szValue)));
+        }
+        InterlockedCompareExchange(&s_lGpuAntialiasSamples, static_cast<LONG>(c), -1);
+    }
+
+    return static_cast<UINT>(s_lGpuAntialiasSamples);
+}
+
+void MilDx11SetGpuAntialiasSamples(UINT cSamples)
+{
+    UINT c = NormalizeSamples(cSamples);
+    InterlockedExchange(&s_lGpuAntialiasSamples, static_cast<LONG>(c));
+    MIL_DX11_LOG("gpu antialiasing set to %u samples", c);
+}
+
 void MilDx11CountCreate(MilDx11CreateSite site)
 {
     InterlockedIncrement(&s_rgCreateCounts[site]);

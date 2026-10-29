@@ -146,6 +146,8 @@ private:
     static const UINT s_cbInvalidRegionInitialSize = 160;
 
     HRGN m_hrgnNewRectRegion;
+    HRESULT EnsureInvalidRegions();
+
     HRGN m_hrgnInvalidRegion;
 
     RGNDATA *m_pInvalidRegionRgn;

@@ -2684,29 +2684,30 @@ HRESULT CDrawingContext::PushEffects(
 
     if (pGeometryMask)
     {
-        IShapeData *pShapeData;
-
-        IFC(pGeometryMask->GetShapeData(&pShapeData));
-
-        pMaskShape = new CShape;
-        IFCOOM(pMaskShape);
-
-        // Clone the shape before we transform it
-        IFC(pMaskShape->AddShapeData(*pShapeData));
-
+        //
+        // dotnet/wpf#7421: a clip geometry with NaN or infinite coordinates
+        // used to fail the whole render pass (UCEERR_RENDERTHREADFAILURE).
+        // Drawing calls already skip such geometry; for a clip, nothing
+        // inside it is drawn, and the push stays balanced with its pop.
+        //
+        IShapeData *pShapeData = NULL;
+        MIL_THR(pGeometryMask->GetShapeData(&pShapeData));
+        if (SUCCEEDED(hr))
+        {
+            pMaskShape = new CShape;
+            IFCOOM(pMaskShape);
+            MIL_THR(pMaskShape->AddShapeData(*pShapeData));
+        }
+        if (hr == WGXERR_BADNUMBER)
+        {
+            delete pMaskShape;
+            pMaskShape = NULL;
+            hr = S_OK;
+            IFC(PushExactClip(CMilRectF::sc_rcEmpty, TRUE));
+            goto Cleanup;
+        }
+        IFC(hr);
         pMaskShape->SetFillMode(pShapeData->GetFillMode());
-
-        //
-        // Transform the geometry into target space now.
-        //
-        // This has two advantages over transforming later when drawing from
-        // the layer:
-        //   1. We don't have to worry about cloning and transforming the shape
-        //      in case there was a need to call DrawLayer multiple times.
-        //   2. The bounds we get will be more accurate which can reduce
-        //      wasted rendering.
-        //
-
         pMaskShape->Transform(m_transformStack.GetTopByReference());
     }
 
@@ -3349,6 +3350,14 @@ HRESULT CDrawingContext::PushLayer(
             {
                 layer.scaleMatrix.Scale(layer.surfaceScaleX, layer.surfaceScaleY);
             }
+            else
+            {
+                IFC(QuantizeEffectIntermediateSize(
+                    layer.pEffect,
+                    IN OUT intermediateWidth,
+                    IN OUT intermediateHeight
+                    ));
+            }
 
             // Store the intermediate size on the layer.
             layer.uIntermediateHeight = intermediateHeight;
@@ -3743,6 +3752,58 @@ Cleanup:
 //  Synopsis:  Calculates max texture size limitations.
 //
 //------------------------------------------------------------------------------
+
+//+-----------------------------------------------------------------------
+//
+//  Member:    CDrawingContext::QuantizeEffectIntermediateSize
+//
+//  Synopsis:  Rounds the intermediate of a built-in blur or drop shadow up to
+//             a multiple of 32 pixels on hardware targets. An animated element
+//             (rotation, scale) otherwise asks for a different size every
+//             frame and every frame allocates new GPU textures, which costs
+//             far more on D3D11 than on D3D9. The layer content stays clipped
+//             to its real size (PushLayer), so the margin is transparent, and
+//             the whole effect works with the one rounded size, which keeps
+//             texel mapping exact. Custom ShaderEffects are left alone: their
+//             shaders see the intermediate as UV 0..1.
+//
+//------------------------------------------------------------------------
+
+HRESULT
+CDrawingContext::QuantizeEffectIntermediateSize(
+    __in_ecount(1) CMilEffectDuce *pEffect,
+    __inout UINT &uWidth,
+    __inout UINT &uHeight
+    )
+{
+    HRESULT hr = S_OK;
+    DWORD renderTargetType = 0;
+
+    if (   !pEffect->IsOfType(TYPE_BLUREFFECT)
+        && !pEffect->IsOfType(TYPE_DROPSHADOWEFFECT))
+    {
+        goto Cleanup;
+    }
+
+    IFC(m_pIRenderTarget->GetType(&renderTargetType));
+
+    if (renderTargetType == HWRasterRenderTarget)
+    {
+        const UINT c_uQuantum = 32;
+        const UINT c_uLimit = 4096;   // well inside every D3D11 feature level's limit
+        UINT uW = (uWidth + c_uQuantum - 1) & ~(c_uQuantum - 1);
+        UINT uH = (uHeight + c_uQuantum - 1) & ~(c_uQuantum - 1);
+
+        if (uW <= c_uLimit && uH <= c_uLimit)
+        {
+            uWidth = uW;
+            uHeight = uH;
+        }
+    }
+
+Cleanup:
+    RRETURN(hr);
+}
 
 HRESULT
 CDrawingContext::CalculateEffectTextureLimits(

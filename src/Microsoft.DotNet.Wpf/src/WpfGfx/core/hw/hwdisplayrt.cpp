@@ -201,6 +201,7 @@ CHwDisplayRenderTarget::CHwDisplayRenderTarget(
         )
 {
     m_pD3DSwapChain = NULL;
+    m_pD3DBackBufferSurface = NULL;
     m_dwPresentFlags = 0;
     m_fEnableRendering = TRUE;
     m_hrDisplayInvalid = S_OK;
@@ -231,6 +232,7 @@ CHwDisplayRenderTarget::CHwDisplayRenderTarget(
 //-------------------------------------------------------------------------
 CHwDisplayRenderTarget::~CHwDisplayRenderTarget()
 {
+    ReleaseInterface(m_pD3DBackBufferSurface);
     ReleaseInterface(m_pD3DSwapChain);
 #if DBG_STEP_RENDERING
     // NULL the parent so CHwSurfaceRT won't try to release it
@@ -436,6 +438,23 @@ CHwDisplayRenderTarget::Present(
     // The DXGI bitblt-model swap chain (D10) always retains the back buffer
     // contents, so dirty rectangles can always be used.
     //
+
+    if (m_pD3DBackBufferSurface)
+    {
+        // D32: the frame was drawn multisampled; resolve it into the back buffer.
+        ENTER_USE_CONTEXT_FOR_SCOPE(*m_pD3DDevice);
+
+        if (m_pD3DTargetSurface->IsValid() && m_pD3DBackBufferSurface->IsValid())
+        {
+            m_pD3DDevice->GetD3DContextNoRef()->ResolveSubresource(
+                m_pD3DBackBufferSurface->ID3DTexture(),
+                m_pD3DBackBufferSurface->Subresource(),
+                m_pD3DTargetSurface->ID3DTexture(),
+                m_pD3DTargetSurface->Subresource(),
+                m_pD3DBackBufferSurface->Desc().Format
+                );
+        }
+    }
 
     // Source and destination are always the same for us.
     IFC(PresentInternal(

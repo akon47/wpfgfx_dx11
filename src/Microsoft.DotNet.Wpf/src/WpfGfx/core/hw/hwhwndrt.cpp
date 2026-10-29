@@ -258,6 +258,7 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
     }
 
     ReleaseInterface(m_pD3DTargetSurface);
+    ReleaseInterface(m_pD3DBackBufferSurface);
 
     if (m_pD3DIntermediateMultisampleTargetSurface)
     {
@@ -341,6 +342,39 @@ CHwHWNDRenderTarget::UpdateFlippingChain(
     m_uHeight = uHeight;
 
     IFCSUB1(m_pD3DSwapChain->GetBackBuffer(0, &m_pD3DTargetSurface));
+
+    //
+    // D32: GPU anti-aliasing. Draw into a multisampled surface; fills skip
+    // the CPU coverage rasterizer (CHwRasterizer) and the edges come from
+    // MSAA. Present resolves the surface into the back buffer.
+    //
+    {
+        UINT cSamples = MilDx11GpuAntialiasSamples();
+        ID3D11Device *pDevice = m_pD3DDevice->GetD3DDeviceNoRef();
+        DXGI_FORMAT fmt = m_pD3DTargetSurface->Desc().Format;
+        UINT uQuality = 0;
+
+        while (   cSamples > 1
+               && (   FAILED(pDevice->CheckMultisampleQualityLevels(fmt, cSamples, &uQuality))
+                   || uQuality == 0))
+        {
+            cSamples /= 2;
+        }
+
+        if (cSamples > 1)
+        {
+            DXGI_SAMPLE_DESC sampleDesc = { cSamples, 0 };
+            CD3DSurface *pMultisampleSurface = NULL;
+
+            if (SUCCEEDED(m_pD3DDevice->CreateRenderTarget(
+                    uWidth, uHeight, fmt, sampleDesc, false, &pMultisampleSurface)))
+            {
+                m_pD3DBackBufferSurface = m_pD3DTargetSurface;
+                m_pD3DTargetSurface = pMultisampleSurface;
+                MIL_DX11_LOG("gpu antialiasing: %u samples %ux%u", cSamples, uWidth, uHeight);
+            }
+        }
+    }
 
     //
     // Reset dirty list for new frame (expected next) in case there was a

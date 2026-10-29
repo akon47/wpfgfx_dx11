@@ -31,9 +31,15 @@ enum MilDx11Option
 {
     MilDx11Option_None = 0,
     MilDx11Option_HardwareRenderTargetBitmap = 1,   // env WPFGFX_DX11_HW_RTB=1
+    MilDx11Option_GpuAntialiasing = 2,              // env WPFGFX_DX11_MSAA=<samples>; value = samples (D32)
     MilDx11Option_Count
 };
 bool MilDx11OptionEnabled(UINT uOption);
+
+// D32: requested MSAA sample count for window targets (0 = off). Takes effect
+// for swap chains created or resized afterwards.
+UINT MilDx11GpuAntialiasSamples();
+void MilDx11SetGpuAntialiasSamples(UINT cSamples);
 void MilDx11SetOption(UINT uOption, bool fEnabled);
 
 

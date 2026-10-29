@@ -1218,7 +1218,7 @@ CHwSurfaceRenderTarget::FillPathWithBrush(
         // If we are anti-aliased, go to trapezoidal AA
         //
 
-        if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None)
+        if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
         {
             pHwRasterizer = new(&localBuffer) CHwRasterizer();
             IFCOOM(pHwRasterizer);
@@ -1781,7 +1781,7 @@ CHwSurfaceRenderTarget::HwShaderFillPath(
     // If we are anti-aliased, go to trapezoidal AA
     //
 
-    if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None)
+    if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
     {
         pHwRasterizer = new(&localBuffer) CHwRasterizer();
         IFCOOM(pHwRasterizer);
@@ -2562,7 +2562,7 @@ HRESULT CHwSurfaceRenderTarget::EndLayerInternal(
         CEffectList effectList;
         AlphaScaleParams alphaParams;
 
-        if (layer.AntiAliasMode != MilAntiAliasMode::None)
+        if (layer.AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
         {
             pHwRasterizer = new(&localBuffer) CHwRasterizer();
             IFCOOM(pHwRasterizer);
@@ -2898,8 +2898,9 @@ CHwSurfaceRenderTarget::Ensure3DRenderTarget(
     //  with default target and disable multisample via render state later.
     //
 
+    // D32: a target that is already multisampled takes 3D directly.
     if (   MultisampleType.Count > 1
-        && m_pD3DTargetSurface->Desc().SampleDesc.Count != MultisampleType.Count)
+        && m_pD3DTargetSurface->Desc().SampleDesc.Count == 1)
     {
         //
         // Future Consideration:   Restrict intermediate 3D surface to need
