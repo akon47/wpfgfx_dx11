@@ -4,6 +4,7 @@
 
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 //------------------------------------------------------------------------------
 //
 //  Description:
@@ -264,6 +265,8 @@ CHwRenderStateManager::UploadConstantBuffer(
 
     D3D11_MAPPED_SUBRESOURCE mapped;
 
+    MilDx11StatAdd(MilDx11Stat_ConstantUploads);
+    MilDx11StatAdd(MilDx11Stat_ConstantBytes, cb);
     IFC(MilTranslateD3D11Error(m_pD3DContext->Map(pBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)));
 
     CopyMemory(mapped.pData, pvData, cb);
@@ -1613,6 +1616,9 @@ CHwRenderStateManager::ApplyStateForDraw()
 {
     HRESULT hr = S_OK;
 
+    MilDx11StatAdd(MilDx11Stat_Draws);
+    double const msApply = g_fMilDx11Stats ? MilDx11QpcMs() : 0;
+
     if (m_fBlendDirty)
     {
         IFC(ApplyBlendState());
@@ -1647,6 +1653,7 @@ CHwRenderStateManager::ApplyStateForDraw()
     IFC(ApplyViewportAndScissor());
 
 Cleanup:
+    if (g_fMilDx11Stats && msApply != 0) MilDx11StatAdd(MilDx11Stat_ApplyStateUs, static_cast<unsigned long long>((MilDx11QpcMs() - msApply) * 1000));
     RRETURN(hr);
 }
 

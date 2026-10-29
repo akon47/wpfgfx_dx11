@@ -10,6 +10,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 #if PRERELEASE
 //
@@ -859,7 +860,12 @@ CComposition::Render(
     // Ask the render target manager to render the updated content.
     //
 
-    IFC(m_pRenderTargetManager->Render(pfPresentNeeded));
+    {
+        double const msRender = g_fMilDx11Stats ? MilDx11QpcMs() : 0;
+        hr = m_pRenderTargetManager->Render(pfPresentNeeded);
+        if (g_fMilDx11Stats && msRender != 0) MilDx11StatAdd(MilDx11Stat_RenderUs, static_cast<unsigned long long>((MilDx11QpcMs() - msRender) * 1000));
+        IFC(hr);
+    }
 
 
 Cleanup:
@@ -1029,9 +1035,14 @@ CComposition::Present(
         qpcPresentationTime = 0;
     }
 
-    IFC(m_pRenderTargetManager->Present(&uiRefreshRate, 
-                                        &ePresentationResults, 
-                                        &qpcPresentationTime));
+    {
+        double const msPresent = g_fMilDx11Stats ? MilDx11QpcMs() : 0;
+        hr = (m_pRenderTargetManager->Present(&uiRefreshRate, 
+                                            &ePresentationResults, 
+                                            &qpcPresentationTime));
+        if (g_fMilDx11Stats && msPresent != 0) MilDx11StatAdd(MilDx11Stat_PresentUs, static_cast<unsigned long long>((MilDx11QpcMs() - msPresent) * 1000));
+        IFC(hr);
+    }
 
     NotifyPresentListeners(ePresentationResults, uiRefreshRate, qpcPresentationTime);
 

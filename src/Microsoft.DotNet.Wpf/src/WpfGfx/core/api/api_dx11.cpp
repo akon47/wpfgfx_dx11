@@ -179,6 +179,9 @@ Cleanup:
 //  Synopsis:  Turns an opt-in engine option on or off (ABI 2). Options:
 //             1 = RenderTargetBitmap renders on the GPU (effects included)
 //                 instead of the software rasterizer.
+//             2 = GPU anti-aliasing for windows (D32): uValue is the MSAA
+//                 sample count (0 off, 1 best available, 4, 8). Applies to
+//                 windows created or resized afterwards.
 //
 //------------------------------------------------------------------------------
 
@@ -193,7 +196,14 @@ WpfGfxDx11_SetOption(
         RRETURN(E_INVALIDARG);
     }
 
-    MilDx11SetOption(uOption, uValue != 0);
+    if (uOption == MilDx11Option_GpuAntialiasing)
+    {
+        MilDx11SetGpuAntialiasSamples(uValue);
+    }
+    else
+    {
+        MilDx11SetOption(uOption, uValue != 0);
+    }
 
     return S_OK;
 }

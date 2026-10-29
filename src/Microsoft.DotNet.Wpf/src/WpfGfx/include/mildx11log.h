@@ -31,9 +31,15 @@ enum MilDx11Option
 {
     MilDx11Option_None = 0,
     MilDx11Option_HardwareRenderTargetBitmap = 1,   // env WPFGFX_DX11_HW_RTB=1
+    MilDx11Option_GpuAntialiasing = 2,              // env WPFGFX_DX11_MSAA=<samples>; value = samples (D32)
     MilDx11Option_Count
 };
 bool MilDx11OptionEnabled(UINT uOption);
+
+// D32: requested MSAA sample count for window targets (0 = off). Takes effect
+// for swap chains created or resized afterwards.
+UINT MilDx11GpuAntialiasSamples();
+void MilDx11SetGpuAntialiasSamples(UINT cSamples);
 void MilDx11SetOption(UINT uOption, bool fEnabled);
 
 
@@ -79,3 +85,38 @@ enum MilDx11TimingSlot
 
 void MilDx11TimingAdd(MilDx11TimingSlot slot, double ms);
 double MilDx11QpcMs();
+
+// Per-frame work counters (log-gated). Averages per present are printed with
+// the 300-present memory line.
+enum MilDx11Stat
+{
+    MilDx11Stat_Draws = 0,
+    MilDx11Stat_ConstantUploads,
+    MilDx11Stat_ConstantBytes,
+    MilDx11Stat_TempBufferDraws,
+    MilDx11Stat_RenderTargetBinds,
+    MilDx11Stat_TextureMaps,
+    MilDx11Stat_TextureMapBytes,
+    MilDx11Stat_TextureMapUs,
+    MilDx11Stat_RenderUs,
+    MilDx11Stat_PresentUs,
+    MilDx11Stat_ApplyStateUs,
+    MilDx11Stat_TexNewRenderTarget,
+    MilDx11Stat_TexNewStaging,
+    MilDx11Stat_TexNewWithData,
+    MilDx11Stat_TexNewOther,
+    MilDx11Stat_Count
+};
+
+extern bool g_fMilDx11Stats;
+
+void MilDx11StatAddSlow(MilDx11Stat stat, unsigned long long n);
+void MilDx11StatsReport(unsigned int cPresents);
+
+inline void MilDx11StatAdd(MilDx11Stat stat, unsigned long long n = 1)
+{
+    if (g_fMilDx11Stats)
+    {
+        MilDx11StatAddSlow(stat, n);
+    }
+}

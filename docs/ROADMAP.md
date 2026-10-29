@@ -98,6 +98,9 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
   투명 창 벤치: 스톡 15.1/15.9 → D3D11 17.2/17.2 fps. 리드백 + `UpdateLayeredWindow` 가 상한이다(D30).
   후속(D31, 2026-10-28): 리드백을 창 크기 스테이징 하나로 더티 영역만 하고 플립 체인을 3버퍼로 바꿔 투명 창 전체 갱신 17.0 → 19.5 fps,
   부분 갱신 59.7 → 107.6 fps(스톡 98). 게이트 `bench ... (transparent, partial update)` 행.
+- ✅ GPU 안티에일리어싱 옵트인(D32, 2026-10-29): 렌더 스레드 시간의 절반이던 CPU 커버리지 래스터라이저를 MSAA 로 대신한다.
+  벤치 22.8 → 38.5 fps. 효과 중간 텍스처 크기 양자화와 풀 상한 조정(D33)으로 프레임당 텍스처 할당 93% 감소, 메모리 541 → 343 MB.
+- ✅ 엔진 원인 업스트림 버그 수정(D34): dotnet/wpf#7421(NaN 클립), #8031(BitmapCache 다수). 게이트 `bug ...` 행.
 - ❌ 투명 창의 DirectComposition 프레젠트는 하지 않는다(D30): 레이어드 창의 픽셀 단위 히트 테스트가 `UpdateLayeredWindow` 비트맵에 묶여
   있어 리드백을 없앨 수 없다. 비용은 게이트 `bench ... (transparent window)` 행으로 기록한다.
 - 미디어를 `IMFMediaEngine` + `IMFDXGIDeviceManager`로 옮겨 D3D9 의존을 없앤다(WMP OCX·EVR 대체, 대규모, D25).

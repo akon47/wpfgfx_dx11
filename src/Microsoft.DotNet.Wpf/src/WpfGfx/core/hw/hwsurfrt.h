@@ -260,6 +260,12 @@ public:
         );
 
 protected:
+    // D32: GPU anti-aliasing draws fills without CPU coverage on such a target.
+    bool IsTargetMultisampled() const
+    {
+        return m_pD3DTargetSurface != NULL && m_pD3DTargetSurface->Desc().SampleDesc.Count > 1;
+    }
+
     HRESULT SetAsRenderTarget(
         );
 

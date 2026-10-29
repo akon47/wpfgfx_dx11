@@ -55,6 +55,7 @@ public partial class MainWindow : Window
         int delayMs = 2000;
         int resizeSteps = 0;
         bool software = false;
+        string? bugScenario = null, bugArg = null;
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 1; i < args.Length; i++)
         {
@@ -74,6 +75,11 @@ public partial class MainWindow : Window
             else if (args[i] == "--spin-jitter" && i + 1 < args.Length) jitterFrames = ParseInt(args[++i]);
             else if (args[i] == "--resize" && i + 1 < args.Length) resizeSteps = ParseInt(args[++i]);
             else if (args[i] == "--software") software = true;
+            else if (args[i].StartsWith("--bug-", StringComparison.Ordinal))
+            {
+                bugScenario = args[i].Substring(6);
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) bugArg = args[++i];
+            }
             else if (args[i] == "--exit") exit = true;
             else if (args[i] == "--delay" && i + 1 < args.Length) delayMs = ParseInt(args[++i]);
         }
@@ -154,6 +160,10 @@ public partial class MainWindow : Window
         if (jitterFrames > 0)
         {
             Console.WriteLine("spin-jitter: " + await MeasureSpinJitterAsync(jitterFrames));
+        }
+        if (bugScenario != null)
+        {
+            Console.WriteLine("bug: " + await TestBugs.RunAsync(this, bugScenario, bugArg));
         }
         if (resizeSteps > 0)
         {

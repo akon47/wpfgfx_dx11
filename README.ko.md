@@ -23,7 +23,9 @@ dotnet/wpf 에는 D3D11/12 전환 계획이 없습니다([dotnet/wpf#7062](https
 - ps_2_0 / ps_3_0 바이트코드의 `ShaderEffect`, `IDirect3DSurface9` 를 쓰는 `D3DImage`, `MediaElement`, 레이어드(`AllowsTransparency`) 창,
   다중 모니터 창, `RenderTargetBitmap`, 디바이스 손실 복구.
 - 어댑터당 D3D11 디바이스 하나, 창당 플립 모델 스왑체인 하나, 텍스처 풀, 그리고 자기 `ID3D11Device` 로 그리는 앱을 위한 프레임 큐(아래).
-  무거운 2D 벤치가 스톡보다 30~50% 빠릅니다.
+  무거운 2D 벤치가 스톡보다 30~50% 빠르고, 선택 기능인 GPU 안티에일리어싱을 켜면 약 2.3배 빠릅니다.
+- 엔진이 원인인 dotnet/wpf 버그 수정: NaN 이 든 클립 기하가 더는 렌더 스레드를 죽이지 않고([#7421](https://github.com/dotnet/wpf/issues/7421)),
+  수천 개의 `BitmapCache` 요소가 프로세스 GDI 객체 한도를 넘기지 않습니다([#8031](https://github.com/dotnet/wpf/issues/8031)).
 - x64·x86·arm64 빌드(arm64 는 빌드만 확인, 실행 미검증).
 
 스톡과 아직 다른 점: `MediaElement` 는 표준 EVR 믹서가 D3D9 만 받으므로 Direct3D 9Ex 디바이스에서 비디오를 믹싱합니다(미디어 재생
@@ -151,6 +153,23 @@ if (Dx11Engine.IsAvailable)
 GPU `RenderTargetBitmap` 경로는 환경 변수 `WPFGFX_DX11_HW_RTB=1` 로도 켤 수 있습니다. 스톡 엔진이 항상 쓰는 소프트웨어
 래스터라이저와 픽셀(앤티에일리어싱, 텍스트)이 조금 달라 기본은 꺼져 있습니다.
 
+### GPU 안티에일리어싱 (옵트인)
+
+WPF 는 도형 가장자리의 안티에일리어싱을 CPU 에서 합니다. 매 프레임 렌더 스레드가 채우거나 그은 도형을 커버리지 사다리꼴로 쪼개는데,
+도형이 많은 애니메이션에서는 이것이 렌더 스레드 시간의 절반쯤 됩니다. GPU 안티에일리어싱을 켜면 창이 4x 또는 8x 다중 표본 대상에
+그려지고, 도형은 커버리지 없이 분할되며 가장자리는 GPU 가 만듭니다. 스모크 벤치에서 약 23 → 38 fps 가 됩니다.
+
+```powershell
+$env:WPFGFX_DX11_MSAA = "4"     # 또는 8. 1 = GPU 가 지원하는 최대. 앱 시작 전에 설정
+```
+
+```csharp
+Dx11Engine.GpuAntialiasingSamples = 4;   // 이후에 만들어지거나 크기가 바뀌는 창부터 적용
+```
+
+가장자리 픽셀이 스톡과 조금 다르고, `EdgeMode.Aliased` 로 그린 콘텐츠도 부드러운 가장자리가 됩니다. 화면 밖 중간 대상(효과,
+`RenderTargetBitmap`)은 CPU 경로를 그대로 씁니다. 메모리는 창 크기 × 표본 수 × 4바이트만큼 늘어납니다.
+
 ### `D3D11Image`: 백버퍼가 `ID3D11Texture2D` 인 `D3DImage`
 
 ```csharp
@@ -205,7 +224,7 @@ Dx11FrameQueueStats stats = queue.Stats;               // 프레젠트·표시·
 ```
 HRESULT WpfGfxDx11_GetInfo(WpfGfxDx11Info* info);                    // cbSize, abi, 피처 레벨, 디스플레이 수, 어댑터 LUID
 HRESULT WpfGfxDx11_GetDevice(UINT displayIndex, ID3D11Device** device);
-HRESULT WpfGfxDx11_SetOption(UINT option, UINT value);               // 1 = 하드웨어 RenderTargetBitmap
+HRESULT WpfGfxDx11_SetOption(UINT option, UINT value);               // 1 = 하드웨어 RenderTargetBitmap, 2 = MSAA 표본 수
 HRESULT WpfGfxDx11_FrameQueue_Create(const WpfGfxFrameQueueDesc*, IUnknown** queue);
 HRESULT WpfGfxDx11_FrameQueue_GetSharedHandles(IUnknown*, HANDLE*, UINT count);
 HRESULT WpfGfxDx11_FrameQueue_TryAcquire(IUnknown*, UINT* index);     // 빈 버퍼가 없으면 S_FALSE
@@ -225,6 +244,8 @@ HRESULT WpfGfxDx11_FrameQueue_QueryCapability(UINT displayIndex, BOOL* hardware)
 | `WPFGFX_DX11_LOG=<파일>` | 로그를 덧붙인다: 디바이스 생성, 스왑체인(`flip`/`bitblt`), 프레젠트 호출, 생성된 HLSL, D3D 디버그 레이어 메시지, 300 프레젠트마다 텍스처 생성 카운터가 있는 메모리 줄. |
 | `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>` | n 번째 프레젠트를 디바이스 손실로 처리해 복구 경로를 시험한다. |
 | `WPFGFX_DX11_HW_RTB=1` | 하드웨어 `RenderTargetBitmap`(`Dx11Engine.HardwareRenderTargetBitmap = true` 와 같음). |
+| `WPFGFX_DX11_MSAA=<4\|8\|1>` | 창의 GPU 안티에일리어싱(`Dx11Engine.GpuAntialiasingSamples` 와 같음). |
+| `WPFGFX_DX11_DEBUG_LAYER=0` | 로그는 켜 두고 D3D 디버그 레이어만 끈다(시간 측정용). 로그가 켜져 있으면 300 프레젠트마다 프레임당 작업 카운터도 찍는다. |
 
 ## 호환성 메모
 

@@ -23,6 +23,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 MtDefine(CD3DLockableTexture, MILRender, "CD3DLockableTexture");
 MtDefine(D3DResource_LockableTexture, MILHwMetrics, "Approximate lockable texture size");
@@ -176,13 +177,19 @@ CD3DLockableTexture::LockRect(
     Assert(!m_fLocked);
     Assert(IsValid());
 
-    IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
-        m_pD3DStagingTexture,
-        0,
-        (dwFlags & D3DLOCK_READONLY) ? D3D11_MAP_READ : D3D11_MAP_READ_WRITE,
-        0,
-        &mapped
-        )));
+    MilDx11StatAdd(MilDx11Stat_TextureMaps);
+    MilDx11StatAdd(MilDx11Stat_TextureMapBytes, static_cast<unsigned long long>(m_sdLevel0.Width) * m_sdLevel0.Height * 4);
+    {
+        double const msMap = g_fMilDx11Stats ? MilDx11QpcMs() : 0;
+        IFC(MilTranslateD3D11Error(Device().GetD3DContextNoRef()->Map(
+            m_pD3DStagingTexture,
+            0,
+            (dwFlags & D3DLOCK_READONLY) ? D3D11_MAP_READ : D3D11_MAP_READ_WRITE,
+            0,
+            &mapped
+            )));
+        if (g_fMilDx11Stats && msMap != 0) MilDx11StatAdd(MilDx11Stat_TextureMapUs, static_cast<unsigned long long>((MilDx11QpcMs() - msMap) * 1000));
+    }
 
     m_fLocked = true;
 

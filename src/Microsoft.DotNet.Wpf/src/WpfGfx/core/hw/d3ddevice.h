@@ -922,7 +922,7 @@ private:
 
     enum
     {
-        c_cTexturePoolMax = 48,
+        c_cTexturePoolMax = 192,          // the byte limit is the real bound (D26, D32)
         c_cbTexturePoolMax = 96 * 1024 * 1024,
         c_cTexturePoolIdlePresents = 300
     };

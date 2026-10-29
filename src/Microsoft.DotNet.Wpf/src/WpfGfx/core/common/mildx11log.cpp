@@ -33,6 +33,11 @@ bool MilDx11LogEnabled()
         InterlockedCompareExchange(&s_lLogState, lState, 0);
     }
 
+    if (lState == 2)
+    {
+        g_fMilDx11Stats = true;
+    }
+
     return lState == 2;
 }
 
@@ -166,6 +171,37 @@ void MilDx11SetOption(UINT uOption, bool fEnabled)
     }
 }
 
+
+static LONG s_lGpuAntialiasSamples = -1;   // -1 = not read from the environment yet
+
+static UINT NormalizeSamples(UINT c)
+{
+    // 1 means "on, best": the device later falls back to 4 when 8 is unsupported.
+    return (c == 0) ? 0 : (c <= 2) ? ((c == 1) ? 8 : 2) : (c <= 4) ? 4 : 8;
+}
+
+UINT MilDx11GpuAntialiasSamples()
+{
+    if (s_lGpuAntialiasSamples < 0)
+    {
+        char szValue[8] = {};
+        UINT c = 0;
+        if (GetEnvironmentVariableA("WPFGFX_DX11_MSAA", szValue, ARRAYSIZE(szValue)) > 0)
+        {
+            c = NormalizeSamples(static_cast<UINT>(atoi(szValue)));
+        }
+        InterlockedCompareExchange(&s_lGpuAntialiasSamples, static_cast<LONG>(c), -1);
+    }
+
+    return static_cast<UINT>(s_lGpuAntialiasSamples);
+}
+
+void MilDx11SetGpuAntialiasSamples(UINT cSamples)
+{
+    UINT c = NormalizeSamples(cSamples);
+    InterlockedExchange(&s_lGpuAntialiasSamples, static_cast<LONG>(c));
+    MIL_DX11_LOG("gpu antialiasing set to %u samples", c);
+}
 
 void MilDx11CountCreate(MilDx11CreateSite site)
 {
@@ -419,4 +455,53 @@ void MilDx11TimingAdd(MilDx11TimingSlot slot, double ms)
         s_rgSum[slot] = 0;
         s_rgMax[slot] = 0;
     }
+}
+
+//+------------------------------------------------------------------------
+//  Per-frame work counters
+//-------------------------------------------------------------------------
+
+bool g_fMilDx11Stats = false;
+static volatile LONG64 s_rgStats[MilDx11Stat_Count];
+
+void MilDx11StatAddSlow(MilDx11Stat stat, unsigned long long n)
+{
+    if (stat >= 0 && stat < MilDx11Stat_Count)
+    {
+        InterlockedAdd64(&s_rgStats[stat], static_cast<LONG64>(n));
+    }
+}
+
+void MilDx11StatsReport(unsigned int cPresents)
+{
+    if (!MilDx11LogEnabled() || cPresents == 0)
+    {
+        return;
+    }
+
+    LONG64 rg[MilDx11Stat_Count];
+
+    for (int i = 0; i < MilDx11Stat_Count; i++)
+    {
+        rg[i] = InterlockedExchange64(&s_rgStats[i], 0);
+    }
+
+    MIL_DX11_LOG(
+        "per present (avg of %u): draws=%.1f constantUploads=%.1f constantKB=%.1f tempBufferDraws=%.2f rtBinds=%.1f textureMaps=%.1f textureMapKB=%.1f textureMapMs=%.3f renderMs=%.3f presentMs=%.3f applyStateMs=%.3f newTex(rt/staging/data/other)=%.1f/%.1f/%.1f/%.1f",
+        cPresents,
+        rg[MilDx11Stat_Draws] / double(cPresents),
+        rg[MilDx11Stat_ConstantUploads] / double(cPresents),
+        rg[MilDx11Stat_ConstantBytes] / 1024.0 / cPresents,
+        rg[MilDx11Stat_TempBufferDraws] / double(cPresents),
+        rg[MilDx11Stat_RenderTargetBinds] / double(cPresents),
+        rg[MilDx11Stat_TextureMaps] / double(cPresents),
+        rg[MilDx11Stat_TextureMapBytes] / 1024.0 / cPresents,
+        rg[MilDx11Stat_TextureMapUs] / 1000.0 / cPresents,
+        rg[MilDx11Stat_RenderUs] / 1000.0 / cPresents,
+        rg[MilDx11Stat_PresentUs] / 1000.0 / cPresents,
+        rg[MilDx11Stat_ApplyStateUs] / 1000.0 / cPresents,
+        rg[MilDx11Stat_TexNewRenderTarget] / double(cPresents),
+        rg[MilDx11Stat_TexNewStaging] / double(cPresents),
+        rg[MilDx11Stat_TexNewWithData] / double(cPresents),
+        rg[MilDx11Stat_TexNewOther] / double(cPresents));
 }

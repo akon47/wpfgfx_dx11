@@ -70,7 +70,10 @@ function Run-Smoke([string]$tfm, [bool]$hw, [string[]]$smokeArgs) {
     if ($hw) { $all += @("--wpfgfx", $dllDir) }
     $all += $smokeArgs
     $all += "--exit"
-    $text = (& $exe @all 2>&1 | Out-String)
+    # A crashing app (the stock engine in the bug rows) writes to stderr; keep going and report it.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { $text = (& $exe @all 2>&1 | ForEach-Object { "$_" } | Out-String) } finally { $ErrorActionPreference = $prev }
     return $text
 }
 
@@ -119,6 +122,24 @@ foreach ($t in $Tfm) {
     $swText = Run-Smoke $t $true @("--software", "--screenshot", "$out\$short-hw-sw.png")
     $c = Compare-Capture "$out\$short-stock-sw.png" "$out\$short-hw-sw.png" @(4, 16)
     Add-Row "software mode (ProcessRenderMode)" $short ("diff>8 {0:P2}, diff>64 {1:P2}" -f $c.Diff8, $c.Diff64) (($swText -match "Tier=") -and ($c.Diff64 -lt 0.01))
+
+    # ---- known dotnet/wpf engine bugs fixed here: the D3D11 engine must survive (the stock result is reported only)
+    foreach ($bug in @(@("nan", @("--bug-nan"), "#7421 NaN clip geometry"), @("bitmapcache", @("--bug-bitmapcache", "9000"), "#8031 BitmapCache x9000"))) {
+        $bs = Run-Smoke $t $false $bug[1]
+        $bh = Run-Smoke $t $true $bug[1]
+        $okS = $bs -match "survived=true"; $okH = $bh -match "survived=true"
+        Add-Row ("bug " + $bug[2]) $short ("stock survived: {0}, D3D11 survived: {1}" -f $okS, $okH) $okH
+    }
+
+    # ---- GPU anti-aliasing (D32, opt-in): edges differ slightly from stock, nothing else may
+    $env:WPFGFX_DX11_MSAA = "4"
+    try {
+        $mt = Run-Smoke $t $true @("--screenshot", "$out\$short-hw-msaa.png")
+        $mj = Run-Smoke $t $true @("--spin-jitter", "24")
+    } finally { Remove-Item Env:\WPFGFX_DX11_MSAA -ErrorAction SilentlyContinue }
+    $c = Compare-Capture "$out\$short-stock.png" "$out\$short-hw-msaa.png" @(4, 16)
+    $devM = 99.0; if ($mj -match "bodyCentroidMaxDev=([0-9.]+)px") { $devM = [double]$matches[1] }
+    Add-Row "gpu antialiasing (MSAA 4x, opt-in)" $short ("vs stock diff>8 {0:P2}, diff>64 {1:P2}; spin jitter {2:F2}px" -f $c.Diff8, $c.Diff64, $devM) (($mt -match "Tier=2") -and ($c.Diff64 -lt 0.005) -and ($c.Diff8 -lt 0.03) -and ($devM -lt 1.5))
 
     # ---- transparent (layered) window
     [void](Run-Smoke $t $false @("--screenshot", "$out\$short-stock-t.png", "--transparent", "$out\$short-stock-transparent.png"))
@@ -202,6 +223,11 @@ foreach ($t in $Tfm) {
         $lph = ($ph -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
         Add-Row "bench stock DX9 (transparent, partial update)" $short $lps.Trim() $true
         Add-Row "bench D3D11 (transparent, partial update)" $short $lph.Trim() $true
+
+        $env:WPFGFX_DX11_MSAA = "4"
+        try { $gm = Run-Smoke $t $true @("--bench", "$BenchSeconds") } finally { Remove-Item Env:\WPFGFX_DX11_MSAA -ErrorAction SilentlyContinue }
+        $lgm = ($gm -split "`n" | Where-Object { $_ -match "^bench:" } | Select-Object -First 1) -replace "^bench: ", ""
+        Add-Row "bench D3D11 (GPU antialiasing 4x)" $short $lgm.Trim() $true
     }
 }
 

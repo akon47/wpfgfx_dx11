@@ -20,6 +20,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 #define MAX_TANK_WIDTH 2048
 #define MAX_TANK_HEIGHT 256
@@ -337,6 +338,7 @@ HRESULT CD3DGlyphBank::RectFillAlpha(
 
     {
         D3D11_MAPPED_SUBRESOURCE mapped;
+        MilDx11StatAdd(MilDx11Stat_TextureMaps);
         IFC(MilTranslateD3D11Error(pContext->Map(pTempSurface, 0, D3D11_MAP_WRITE, 0, &mapped)));
         lockedRect.Pitch = static_cast<INT>(mapped.RowPitch);
         lockedRect.pBits = mapped.pData;

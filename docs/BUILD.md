@@ -80,6 +80,8 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
   `Dx11Engine.HardwareRenderTargetBitmap = true`(GPU 경로, D27; 스톡 엔진에서는 예외).
 - `--resize <steps>`: 창 크기를 단계별로 키우고 줄이며 매 단계 캡처해 검은 픽셀 비율을 보고한다(D29 플립 모델의 제자리 리사이즈 검증).
 - `--software`: `RenderOptions.ProcessRenderMode = SoftwareOnly` 로 그린다(소프트웨어 래스터라이저 + WARP 3D 폴백, L19).
+- `--bug-nan`, `--bug-aliased [점 파일]`, `--bug-bitmapcache [개수]`: 엔진 원인 업스트림 버그 재현(D34). 결과 줄 `bug: <이름> survived=...`.
+- GPU 안티에일리어싱(D32)은 환경 변수 `WPFGFX_DX11_MSAA=4`(또는 8)로 켠다. 게이트는 4x 로 표준 장면·스핀 떨림을 확인한다.
 - `--fq <png> [--fq-queues N] [--fq-seconds S] [--fq-block]`: 프레임 큐(D19) 시나리오. 워커 스레드가 N개 큐에 60 fps 로 그리고
   `--fq-block` 이면 UI 스레드를 0.5초마다 100 ms 막는다. 결과 줄 `fq: ...` 에 카운터와 250 ms 간격 두 캡처의 변화율이 나온다.
   `tests/assets/smptebars.mp4`는 정지 SMPTE 막대(H.264 160×120, 4초)라 캡처 시점에 무관하다.
@@ -117,7 +119,7 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 .\tests\run-smoke.ps1 -Rid win-x86 -Tfm net8.0-windows   # x86: 먼저 .\build.cmd -configuration Release -platform x86
 ```
 
-행: engine, standard, spin jitter, resize(16 steps), software mode, transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
+행: engine, standard, spin jitter, resize(16 steps), software mode, bug #7421·#8031, gpu antialiasing(MSAA 4x), transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
 frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, 선택 bench(일반 창·투명 창, 스톡·D3D11).
 
 의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로
@@ -151,6 +153,9 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 - `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>`(로그와 별개): n번째 `Present`를 디바이스 손실로 처리해 복구 경로를 시험한다(D24).
 - 로그의 `timing <이름>: avg=.. max=.. over 300` 줄: 레이어드 창 리드백(`gdi readback`), `UpdateLayeredWindowIndirect`(`ulw`),
   컴포지션의 프레젠트 대기(`wait to present`), 수직 동기 대기(`vblank wait`)를 300회 단위로 평균·최대 ms 로 찍는다(D31).
+- 로그의 `per present (avg of 300): ...` 줄: 프레젠트당 드로 수, 상수 버퍼 업로드 수·KB, 임시 버퍼 드로, 렌더타깃 바인딩, 텍스처 Map,
+  렌더·프레젠트·상태 적용 시간(ms), 새로 만든 텍스처 종류(렌더타깃/스테이징/초기 데이터/기타). 처음 60개의 새 렌더타깃 크기도 찍는다.
+- `WPFGFX_DX11_DEBUG_LAYER=0`: 로그는 켜 두고 D3D 디버그 레이어만 끈다. 시간 측정은 이 상태로 한다(디버그 레이어가 CPU 를 크게 늘린다).
 
 ```powershell
 $env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"

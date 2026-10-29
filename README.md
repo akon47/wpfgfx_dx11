@@ -27,7 +27,10 @@ against the stock engine on .NET 8 and .NET 10 (x64, and x86) by an automated ga
   layered (`AllowsTransparency`) windows, multi-monitor windows, `RenderTargetBitmap`, device-loss recovery.
 - One D3D11 device per adapter, one flip-model swap chain per window, a texture pool, and a frame queue for
   apps that render with their own `ID3D11Device` (see below). A heavy 2D benchmark runs 30 to 50 percent
-  faster than the stock engine.
+  faster than the stock engine, and about 2.3 times faster with the optional GPU anti-aliasing.
+- Fixes for engine-side dotnet/wpf bugs: a clip geometry containing NaN no longer kills the render thread
+  ([#7421](https://github.com/dotnet/wpf/issues/7421)), and thousands of `BitmapCache` elements no longer exhaust
+  the process GDI object limit ([#8031](https://github.com/dotnet/wpf/issues/8031)).
 - Builds for x64, x86 and arm64 (arm64 is build-only, not yet run).
 
 What still differs from the stock engine: `MediaElement` mixes video on a Direct3D 9Ex device because the
@@ -163,6 +166,26 @@ The GPU `RenderTargetBitmap` path can also be switched on with the environment v
 `WPFGFX_DX11_HW_RTB=1`. It is off by default because its pixels differ slightly (anti-aliasing, text) from
 the software rasterizer the stock engine always uses.
 
+### GPU anti-aliasing (opt-in)
+
+WPF anti-aliases shape edges on the CPU: every frame, each filled or stroked shape is split into coverage
+trapezoids by the render thread. In shape-heavy, animated scenes that is about half of the render thread's
+time. With GPU anti-aliasing the window renders into a 4x or 8x multisampled target, shapes are tessellated
+without coverage, and the GPU produces the edges. On the smoke benchmark this raises the frame rate from about
+23 to 38 fps.
+
+```powershell
+$env:WPFGFX_DX11_MSAA = "4"     # or 8; 1 = best the GPU supports. Set before the app starts.
+```
+
+```csharp
+Dx11Engine.GpuAntialiasingSamples = 4;   // takes effect for windows created or resized afterwards
+```
+
+Edge pixels differ slightly from the stock output, and content drawn with `EdgeMode.Aliased` also gets smooth
+edges. Off-screen intermediates (effects, `RenderTargetBitmap`) keep the CPU path. Memory grows by the window
+size times the sample count times 4 bytes.
+
 ### `D3D11Image`: a `D3DImage` with an `ID3D11Texture2D` back buffer
 
 ```csharp
@@ -218,7 +241,7 @@ previous path. Requirements, design and measurements: [docs/FRAME_QUEUE.md](docs
 ```
 HRESULT WpfGfxDx11_GetInfo(WpfGfxDx11Info* info);                    // cbSize, abi, feature level, display count, adapter LUID
 HRESULT WpfGfxDx11_GetDevice(UINT displayIndex, ID3D11Device** device);
-HRESULT WpfGfxDx11_SetOption(UINT option, UINT value);               // 1 = hardware RenderTargetBitmap
+HRESULT WpfGfxDx11_SetOption(UINT option, UINT value);               // 1 = hardware RenderTargetBitmap, 2 = MSAA samples
 HRESULT WpfGfxDx11_FrameQueue_Create(const WpfGfxFrameQueueDesc*, IUnknown** queue);
 HRESULT WpfGfxDx11_FrameQueue_GetSharedHandles(IUnknown*, HANDLE*, UINT count);
 HRESULT WpfGfxDx11_FrameQueue_TryAcquire(IUnknown*, UINT* index);     // S_FALSE when no buffer is free
@@ -238,6 +261,8 @@ on this engine; the engine recognises it through `QueryInterface`.
 | `WPFGFX_DX11_LOG=<file>` | Appends a log: device creation, swap chains (`flip`/`bitblt`), present calls, generated HLSL, D3D debug-layer messages, and every 300 presents a memory line with texture creation counters. |
 | `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>` | Treats the n-th present as a lost device to exercise the recovery path. |
 | `WPFGFX_DX11_HW_RTB=1` | Hardware `RenderTargetBitmap` (same as `Dx11Engine.HardwareRenderTargetBitmap = true`). |
+| `WPFGFX_DX11_MSAA=<4\|8\|1>` | GPU anti-aliasing for windows (same as `Dx11Engine.GpuAntialiasingSamples`). |
+| `WPFGFX_DX11_DEBUG_LAYER=0` | Keep the log but skip the D3D debug layer (for timing). With the log on, the log also prints per-frame work counters every 300 presents. |
 
 ## Compatibility notes
 

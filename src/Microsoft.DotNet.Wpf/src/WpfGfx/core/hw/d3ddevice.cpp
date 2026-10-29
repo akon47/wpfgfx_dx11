@@ -1831,6 +1831,20 @@ CD3DDeviceLevel1::CreateTexture(
         BEGIN_DEVICE_ALLOCATION;
 
         MilDx11CountCreate(MilDx11Site_Texture);
+        if (g_fMilDx11Stats)
+        {
+            MilDx11StatAdd(
+                  pInitialData ? MilDx11Stat_TexNewWithData
+                : (desc.BindFlags & D3D11_BIND_RENDER_TARGET) ? MilDx11Stat_TexNewRenderTarget
+                : (desc.Usage == D3D11_USAGE_STAGING) ? MilDx11Stat_TexNewStaging
+                : MilDx11Stat_TexNewOther);
+
+            static LONG s_cLogged = 0;
+            if ((desc.BindFlags & D3D11_BIND_RENDER_TARGET) && InterlockedIncrement(&s_cLogged) <= 60)
+            {
+                MIL_DX11_LOG("new RT texture %ux%u fmt=%d samples=%u", desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count);
+            }
+        }
         hr = MilTranslateD3D11Error(m_pD3DDevice->CreateTexture2D(
             &desc,
             pInitialData,
@@ -3101,6 +3115,7 @@ CD3DDeviceLevel1::PresentWithD3D(
             char szContext[48];
             StringCchPrintfA(szContext, ARRAYSIZE(szContext), "after %ld presents", cPresents);
             MilDx11LogLiveObjects(m_pD3DDevice, szContext);
+            MilDx11StatsReport(300);
         }
     }
 
@@ -4654,6 +4669,7 @@ CD3DDeviceLevel1::DrawIndexedTriangleListUP(
     if (!fVBLockAcquired || !fIBLockAcquired)
     {
         MtSetDefault(Mt(D3DDrawIndexedPrimitiveUP));
+        MilDx11StatAdd(MilDx11Stat_TempBufferDraws);
 
         //
         // Too large for the shared buffers: use temporary buffers
@@ -4936,6 +4952,7 @@ CD3DDeviceLevel1::DrawPrimitiveUP(
     if (!fLockAcquired)
     {
         MtSetDefault(Mt(D3DDrawPrimitiveUP));
+        MilDx11StatAdd(MilDx11Stat_TempBufferDraws);
 
         //
         // Too large for the shared buffer: use a temporary buffer
