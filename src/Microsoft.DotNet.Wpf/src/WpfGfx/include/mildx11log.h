@@ -26,6 +26,13 @@ void MilDx11LogText(__in_z const char *pszTitle, __in_bcount(cb) const char *pTe
 // 검증 메시지를 로그에 쏟고 비운다. 아니면 아무 일도 하지 않는다.
 void MilDx11LogD3DMessages(__in_opt IUnknown *pD3DDevice, __in_z const char *pszContext);
 
+// DXGI debug messages (swap chain, present). Needs the factory created with
+// DXGI_CREATE_FACTORY_DEBUG, which happens when MilDx11DebugLayerWanted().
+void MilDx11LogDXGIMessages(__in_z const char *pszContext);
+
+// Log on and WPFGFX_DX11_DEBUG_LAYER is not "0".
+bool MilDx11DebugLayerWanted();
+
 // 옵트인 옵션(D8). 기본은 모두 꺼짐. 환경 변수(테스트용)나 WpfGfxDx11_SetOption export 로 켠다.
 enum MilDx11Option
 {

@@ -188,6 +188,7 @@ CD3DSwapChain::CD3DSwapChain(
     m_cDXGIBuffers = 1;
     m_pPreviousBackBuffer = NULL;
     m_cWholeCopiesPending = 0;
+    m_cFullPresentsPending = 0;
     m_rcPendingCopy.SetEmpty();
     m_rcPreviousFrame.SetEmpty();
 }
@@ -390,8 +391,15 @@ CD3DSwapChain::AcquireBackBuffers()
 
     if (m_fFlipModel && desc.BufferCount > 1)
     {
+        //
+        // D35: the frame just presented is the highest index. DXGI rotates the
+        // resources behind the buffer interfaces on every flip present, so
+        // with three buffers index 1 is an older (or never drawn) buffer. The
+        // D29 copy read index 1 and carried stale content, which partial
+        // presents happened to hide.
+        //
         IFC(MilTranslateD3D11Error(m_pDXGISwapChain->GetBuffer(
-            1,
+            desc.BufferCount - 1,
             __uuidof(ID3D11Texture2D),
             reinterpret_cast<void **>(&m_pPreviousBackBuffer)
             )));
@@ -400,6 +408,7 @@ CD3DSwapChain::AcquireBackBuffers()
     // Every buffer but the one being rendered starts out undefined.
     m_cDXGIBuffers = desc.BufferCount;
     m_cWholeCopiesPending = (desc.BufferCount > 1) ? desc.BufferCount - 1 : 0;
+    m_cFullPresentsPending = desc.BufferCount;
     m_rcPendingCopy.SetEmpty();
     m_rcPreviousFrame.SetEmpty();
 
@@ -455,6 +464,7 @@ Cleanup:
     if (FAILED(hr))
     {
         MIL_DX11_LOG("ResizeBuffers failed hr=0x%08x %ux%u", hr, uWidth, uHeight);
+        MilDx11LogDXGIMessages("ResizeBuffers");
         ReleaseBackBuffers();
     }
 

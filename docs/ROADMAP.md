@@ -100,6 +100,7 @@ M11 합격 근거(2026-10-28): 스모크 `--media tests/assets/smptebars.mp4`(H.
   부분 갱신 59.7 → 107.6 fps(스톡 98). 게이트 `bench ... (transparent, partial update)` 행.
 - ✅ GPU 안티에일리어싱 옵트인(D32, 2026-10-29): 렌더 스레드 시간의 절반이던 CPU 커버리지 래스터라이저를 MSAA 로 대신한다.
   벤치 22.8 → 38.5 fps. 효과 중간 텍스처 크기 양자화와 풀 상한 조정(D33)으로 프레임당 텍스처 할당 93% 감소, 메모리 541 → 343 MB.
+- ✅ 최대화 직후 Present 거부로 렌더 스레드가 죽던 문제(D35, 2026-10-29): 크기 변경 뒤 첫 프레젠트는 전체로, 거부 시 재시도·창 재생성.
 - ✅ 엔진 원인 업스트림 버그 수정(D34): dotnet/wpf#7421(NaN 클립), #8031(BitmapCache 다수). 게이트 `bug ...` 행.
 - ❌ 투명 창의 DirectComposition 프레젠트는 하지 않는다(D30): 레이어드 창의 픽셀 단위 히트 테스트가 `UpdateLayeredWindow` 비트맵에 묶여
   있어 리드백을 없앨 수 없다. 비용은 게이트 `bench ... (transparent window)` 행으로 기록한다.

@@ -116,6 +116,10 @@ foreach ($t in $Tfm) {
     if ($rs -match "maxBlack=([0-9.]+)%") { $bs = [double]$matches[1] }
     if ($rh -match "maxBlack=([0-9.]+)%") { $bh = [double]$matches[1] }
     Add-Row "resize (16 steps, black pixels)" $short ("stock max {0:F2}%, D3D11 max {1:F2}%" -f $bs, $bh) (($bh -le ($bs + 0.5)) -and ($bh -lt 5))
+    $env:WPFGFX_DX11_FLIP_BUFFERS = "2"
+    try { $rh2 = Run-Smoke $t $true @("--resize", "16") } finally { Remove-Item Env:\WPFGFX_DX11_FLIP_BUFFERS -ErrorAction SilentlyContinue }
+    $bh2 = 99.0; if ($rh2 -match "maxBlack=([0-9.]+)%") { $bh2 = [double]$matches[1] }
+    Add-Row "resize (16 steps, flip x2)" $short ("stock max {0:F2}%, D3D11 max {1:F2}%" -f $bs, $bh2) (($bh2 -le ($bs + 0.5)) -and ($bh2 -lt 5))
 
     # ---- software rendering mode: RenderMode.SoftwareOnly, 3D drawn through the software 3D fallback (DrtBasic3D regression guard)
     [void](Run-Smoke $t $false @("--software", "--screenshot", "$out\$short-stock-sw.png"))
@@ -129,6 +133,21 @@ foreach ($t in $Tfm) {
         $bh = Run-Smoke $t $true $bug[1]
         $okS = $bs -match "survived=true"; $okH = $bh -match "survived=true"
         Add-Row ("bug " + $bug[2]) $short ("stock survived: {0}, D3D11 survived: {1}" -f $okS, $okH) $okH
+    }
+
+    # ---- D35: maximize / restore a WindowChrome dialog (maximized window is larger than the monitor). The first
+    #      present of a resized flip chain must not carry dirty rects; every buffer count and MSAA setting must survive,
+    #      and with the fix forced off (test hook) the full-present retry must rescue every frame.
+    $ms = Run-Smoke $t $false @("--bug-maximize", "8")
+    Add-Row "maximize/restore x8 (stock)" $short ($(if ($ms -match "survived=true") { "survived" } else { "FAILED: " + (($ms -split "`n") | Where-Object { $_ -match "^bug:" } | Select-Object -First 1) })) ($ms -match "survived=true")
+    foreach ($cfg in @(@("3", "", "flip x3"), @("2", "", "flip x2"), @("3", "4", "flip x3 + MSAA 4x"), @("2", "4", "flip x2 + MSAA 4x"), @("3", "", "retry path (full present skipped)"))) {
+        $env:WPFGFX_DX11_FLIP_BUFFERS = $cfg[0]
+        if ($cfg[1]) { $env:WPFGFX_DX11_MSAA = $cfg[1] }
+        if ($cfg[2] -like "retry*") { $env:WPFGFX_DX11_TEST_SKIP_FULL_PRESENT = "1" }
+        try { $mh = Run-Smoke $t $true @("--bug-maximize", "8") }
+        finally { Remove-Item Env:\WPFGFX_DX11_FLIP_BUFFERS, Env:\WPFGFX_DX11_MSAA, Env:\WPFGFX_DX11_TEST_SKIP_FULL_PRESENT -ErrorAction SilentlyContinue }
+        $line = (($mh -split "`n") | Where-Object { $_ -match "^bug:" } | Select-Object -First 1)
+        Add-Row ("maximize/restore x8, " + $cfg[2]) $short $(if ($line) { $line.Trim() -replace "^bug: maximize ", "" } else { "no result" }) ($mh -match "survived=true")
     }
 
     # ---- GPU anti-aliasing (D32, opt-in): edges differ slightly from stock, nothing else may

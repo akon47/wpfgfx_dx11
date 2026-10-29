@@ -1494,6 +1494,41 @@ CD3DDeviceLevel1::GetRenderTargetData(
 //      Creates a DXGI swap chain for the window (bitblt model, D10).
 //
 //------------------------------------------------------------------------------
+//
+// D35: presents DXGI refused even without dirty rects; after a few, new
+// windows use the bitblt model.
+//
+static volatile LONG g_cMilDx11FlipPresentRefusals = 0;
+static const LONG c_cFlipRefusalsBeforeBitblt = 3;
+
+//
+// D35 test knob: WPFGFX_DX11_FLIP_BUFFERS=2|3 (default 3, D29).
+//
+//
+// D35 test hook: WPFGFX_DX11_TEST_SKIP_FULL_PRESENT=1 sends dirty rects on the
+// first present of a new flip chain (the original bug) to exercise the retry.
+//
+static bool MilDx11TestSkipFullPresent()
+{
+    static int s_n = -1;
+    if (s_n < 0)
+    {
+        char sz[4] = {};
+        s_n = (GetEnvironmentVariableA("WPFGFX_DX11_TEST_SKIP_FULL_PRESENT", sz, ARRAYSIZE(sz)) == 1 && sz[0] == '1') ? 1 : 0;
+    }
+    return s_n == 1;
+}
+
+static UINT MilDx11FlipBufferCount()
+{
+    char sz[4] = {};
+    if (GetEnvironmentVariableA("WPFGFX_DX11_FLIP_BUFFERS", sz, ARRAYSIZE(sz)) == 1 && sz[0] == '2')
+    {
+        return 2;
+    }
+    return 3;
+}
+
 HRESULT
 CD3DDeviceLevel1::CreateAdditionalSwapChain(
     __in_ecount_opt(1) CMILDeviceContext const *pMILDC,
@@ -1566,12 +1601,13 @@ CD3DDeviceLevel1::CreateAdditionalSwapChain(
         const bool fFlipModel =
                pParams->FlipModel
             && !pParams->GdiCompatible
-            && pParams->SampleDesc.Count <= 1;
+            && pParams->SampleDesc.Count <= 1
+            && g_cMilDx11FlipPresentRefusals < c_cFlipRefusalsBeforeBitblt;   // D35
 
         // Three buffers: with two, the GPU cannot start the next frame until DWM
         // releases the previous one at vblank, and every GPU sync in the process
         // (layered window readback, CopyPixels) waits behind that stall.
-        desc.BufferCount = fFlipModel ? 3 : max(1u, pParams->BackBufferCount);
+        desc.BufferCount = fFlipModel ? MilDx11FlipBufferCount() : max(1u, pParams->BackBufferCount);
         desc.Scaling = DXGI_SCALING_STRETCH;
         desc.SwapEffect = fFlipModel ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_SEQUENTIAL;
 
@@ -2896,7 +2932,7 @@ CD3DDeviceLevel1::Present(
             pMILDC,
             pDirtyRegion,
             dwD3DPresentFlags,
-            pD3DSwapChain->IsFlipModel(),
+            pD3DSwapChain->IsFlipModel() && (!pD3DSwapChain->TakeFullPresent() || MilDx11TestSkipFullPresent()),   // D35
             &fPresentProcessed
             ));
 
@@ -2972,7 +3008,7 @@ CD3DDeviceLevel1::PresentWithD3D(
     __in_ecount(1) CMILDeviceContext const *pMILDC,
     __in_ecount_opt(1) RGNDATA const * pDirtyRegion,
     DWORD dwD3DPresentFlags,
-    bool fFlipModel,
+    bool fUseDirtyRects,
     __out_ecount(1) bool *pfPresentProcessed
     )
 {
@@ -3021,7 +3057,7 @@ CD3DDeviceLevel1::PresentWithD3D(
 
     RECT rgDirtyRects[CD3DSwapChain::sc_cMaxDirtyRects];
 
-    if (fFlipModel)
+    if (fUseDirtyRects)
     {
         //
         // D29: flip model presents report what changed so DWM composes only
@@ -3079,6 +3115,39 @@ CD3DDeviceLevel1::PresentWithD3D(
         uFlags,
         &params
         ));
+
+    if (!fUseDirtyRects && MilDx11LogEnabled())
+    {
+        static LONG s_cFullLogs = 0;
+        if (InterlockedIncrement(&s_cFullLogs) <= 200)
+        {
+            MIL_DX11_LOG("full Present1 hr=0x%08x src=%ld,%ld,%ld,%ld", hr,
+                         prcSource ? prcSource->left : -1, prcSource ? prcSource->top : -1,
+                         prcSource ? prcSource->right : -1, prcSource ? prcSource->bottom : -1);
+        }
+    }
+
+    if (hr == D3DERR_INVALIDCALL && params.DirtyRectsCount > 0)
+    {
+        //
+        // D35: DXGI refused the partial present. Say why in the log, then
+        // present the whole buffer once instead of failing the render thread.
+        //
+        MIL_DX11_LOG("Present1 refused with %u dirty rect(s) (first %ld,%ld,%ld,%ld); retrying a full present",
+                     params.DirtyRectsCount,
+                     params.pDirtyRects[0].left, params.pDirtyRects[0].top,
+                     params.pDirtyRects[0].right, params.pDirtyRects[0].bottom);
+        MilDx11LogDXGIMessages("Present1");
+
+        params.DirtyRectsCount = 0;
+        params.pDirtyRects = NULL;
+
+        hr = MilTranslateD3D11Error(pDXGISwapChain->Present1(
+            uSyncInterval,
+            uFlags,
+            &params
+            ));
+    }
 
     END_DEVICE_ALLOCATION;
 
@@ -3168,6 +3237,29 @@ CD3DDeviceLevel1::PresentWithD3D(
     if (FAILED(hr))
     {
         MIL_DX11_LOG("Present1 failed hr=0x%08x sync=%u flags=0x%x dirty=%u", hr, uSyncInterval, uFlags, params.DirtyRectsCount);
+        for (UINT iRect = 0; iRect < params.DirtyRectsCount; iRect++)
+        {
+            MIL_DX11_LOG("  dirty[%u] = %ld,%ld,%ld,%ld", iRect,
+                         params.pDirtyRects[iRect].left, params.pDirtyRects[iRect].top,
+                         params.pDirtyRects[iRect].right, params.pDirtyRects[iRect].bottom);
+        }
+        MilDx11LogDXGIMessages("Present1");
+
+        if (hr == D3DERR_INVALIDCALL)
+        {
+            //
+            // D35: still refused. Never let this end the render thread: have
+            // the window target recreated (WGXERR_NEED_RECREATE_AND_PRESENT is
+            // handled by CSlaveHWndRenderTarget). If flip chains keep being
+            // refused, later windows fall back to the bitblt model.
+            //
+            if (InterlockedIncrement(&g_cMilDx11FlipPresentRefusals) == c_cFlipRefusalsBeforeBitblt)
+            {
+                MIL_DX11_LOG("flip model presents refused %u times; using the bitblt model from now on", c_cFlipRefusalsBeforeBitblt);
+            }
+            hr = WGXERR_NEED_RECREATE_AND_PRESENT;
+        }
+
         hr = HandlePresentFailure(pMILDC, hr);
     }
 

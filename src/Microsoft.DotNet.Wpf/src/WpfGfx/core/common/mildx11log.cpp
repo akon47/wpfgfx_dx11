@@ -10,6 +10,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include <dxgidebug.h>
 #include <psapi.h>
 #include <dxgi1_4.h>
 #include <stdarg.h>
@@ -91,6 +92,77 @@ void __cdecl MilDx11Log(__in_z const char *pszFormat, ...)
         fputc('\n', pFile);
         fclose(pFile);
     }
+}
+
+bool MilDx11DebugLayerWanted()
+{
+    if (!MilDx11LogEnabled())
+    {
+        return false;
+    }
+
+    char szDebugLayer[4] = {};
+    DWORD cch = GetEnvironmentVariableA("WPFGFX_DX11_DEBUG_LAYER", szDebugLayer, ARRAYSIZE(szDebugLayer));
+    return !(cch == 1 && szDebugLayer[0] == '0');
+}
+
+// DXGI_DEBUG_ALL without linking dxguid.lib (no new library dependency).
+static const GUID c_guidDxgiDebugAll = { 0xe48ae283, 0xda80, 0x490b, { 0x87, 0xe6, 0x43, 0xe9, 0xa9, 0xcf, 0xda, 0x08 } };
+
+void MilDx11LogDXGIMessages(__in_z const char *pszContext)
+{
+    if (!MilDx11DebugLayerWanted())
+    {
+        return;
+    }
+
+    typedef HRESULT (WINAPI *PFN_GETDEBUG1)(UINT, REFIID, void **);
+    static PFN_GETDEBUG1 s_pfn = NULL;
+    static bool s_fResolved = false;
+
+    if (!s_fResolved)
+    {
+        HMODULE hDxgi = GetModuleHandleW(L"dxgi.dll");
+        s_pfn = hDxgi ? reinterpret_cast<PFN_GETDEBUG1>(GetProcAddress(hDxgi, "DXGIGetDebugInterface1")) : NULL;
+        s_fResolved = true;
+    }
+
+    IDXGIInfoQueue *pQueue = NULL;
+
+    if (s_pfn == NULL || FAILED(s_pfn(0, __uuidof(IDXGIInfoQueue), reinterpret_cast<void **>(&pQueue))))
+    {
+        return;
+    }
+
+    UINT64 cMessages = pQueue->GetNumStoredMessages(c_guidDxgiDebugAll);
+
+    for (UINT64 i = 0; i < cMessages; i++)
+    {
+        SIZE_T cbMessage = 0;
+
+        if (FAILED(pQueue->GetMessage(c_guidDxgiDebugAll, i, NULL, &cbMessage)) || cbMessage == 0)
+        {
+            continue;
+        }
+
+        DXGI_INFO_QUEUE_MESSAGE *pMessage = static_cast<DXGI_INFO_QUEUE_MESSAGE *>(malloc(cbMessage));
+
+        if (pMessage == NULL)
+        {
+            break;
+        }
+
+        if (SUCCEEDED(pQueue->GetMessage(c_guidDxgiDebugAll, i, pMessage, &cbMessage)))
+        {
+            MilDx11Log("DXGI[%s] sev=%d id=%d: %.*s", pszContext, pMessage->Severity, pMessage->ID,
+                       static_cast<int>(pMessage->DescriptionByteLength), pMessage->pDescription);
+        }
+
+        free(pMessage);
+    }
+
+    pQueue->ClearStoredMessages(c_guidDxgiDebugAll);
+    pQueue->Release();
 }
 
 void MilDx11LogD3DMessages(__in_opt IUnknown *pD3DDevice, __in_z const char *pszContext)

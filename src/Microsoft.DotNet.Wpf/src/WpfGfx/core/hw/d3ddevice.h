@@ -810,7 +810,7 @@ private:
         __in_ecount(1) CMILDeviceContext const *pMILDC,
         __in_ecount_opt(1) RGNDATA const * pDirtyRegion,
         DWORD dwD3DPresentFlags,
-        bool fFlipModel,
+        bool fUseDirtyRects,        // D29/D35: flip chain past its first full presents
         __out_ecount(1) bool *pfPresentProcessed
         );
 

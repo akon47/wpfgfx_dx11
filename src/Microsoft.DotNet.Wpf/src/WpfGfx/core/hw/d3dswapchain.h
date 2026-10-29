@@ -88,6 +88,27 @@ public:
 
     bool IsFlipModel() const { return m_fFlipModel; }
 
+    //
+    // D35: DXGI rejects dirty rects until a flip chain has had one regular
+    // (full) present after creation or ResizeBuffers ("Partial Presentation
+    // ... is not valid until first submitting a regular Present"). The first
+    // presents of a fresh chain (one per buffer) go out without dirty rects.
+    //
+    bool TakeFullPresent() const
+    {
+        if (m_cFullPresentsPending > 0)
+        {
+            m_cFullPresentsPending--;
+            return true;
+        }
+        return false;
+    }
+
+    void RequireFullPresent() const
+    {
+        m_cFullPresentsPending = max(m_cFullPresentsPending, 1u);
+    }
+
     HRESULT Resize(
         UINT uWidth,
         UINT uHeight
@@ -168,6 +189,7 @@ private:
     UINT m_cDXGIBuffers;                        // buffers in the DXGI chain (3 for flip)
     ID3D11Texture2D *m_pPreviousBackBuffer;    // buffer 1: frame just presented
     mutable UINT m_cWholeCopiesPending;        // fresh buffers still to be filled completely
+    mutable UINT m_cFullPresentsPending;       // D35: presents that must not carry dirty rects
     mutable CMILSurfaceRect m_rcPendingCopy;   // changes a skipped present left behind
     mutable CMILSurfaceRect m_rcPreviousFrame; // what the previous rotated present changed
 };
