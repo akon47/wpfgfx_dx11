@@ -31,6 +31,7 @@
 //------------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
 
 extern HINSTANCE g_DllInstance;
 
@@ -472,6 +473,8 @@ CD3DRenderState::SetRenderTargetInternal(
     )
 {
     HRESULT hr = S_OK;
+
+    MilDx11StatAdd(MilDx11Stat_RenderTargetBinds);
     ID3D11RenderTargetView *pRTVNoRef = NULL;
     UINT uWidth = 0;
     UINT uHeight = 0;

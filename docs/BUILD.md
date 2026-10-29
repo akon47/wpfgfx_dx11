@@ -151,6 +151,9 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 - `WPFGFX_DX11_TEST_DEVICE_LOSS=<n>`(로그와 별개): n번째 `Present`를 디바이스 손실로 처리해 복구 경로를 시험한다(D24).
 - 로그의 `timing <이름>: avg=.. max=.. over 300` 줄: 레이어드 창 리드백(`gdi readback`), `UpdateLayeredWindowIndirect`(`ulw`),
   컴포지션의 프레젠트 대기(`wait to present`), 수직 동기 대기(`vblank wait`)를 300회 단위로 평균·최대 ms 로 찍는다(D31).
+- 로그의 `per present (avg of 300): ...` 줄: 프레젠트당 드로 수, 상수 버퍼 업로드 수·KB, 임시 버퍼 드로, 렌더타깃 바인딩, 텍스처 Map,
+  렌더·프레젠트·상태 적용 시간(ms), 새로 만든 텍스처 종류(렌더타깃/스테이징/초기 데이터/기타). 처음 60개의 새 렌더타깃 크기도 찍는다.
+- `WPFGFX_DX11_DEBUG_LAYER=0`: 로그는 켜 두고 D3D 디버그 레이어만 끈다. 시간 측정은 이 상태로 한다(디버그 레이어가 CPU 를 크게 늘린다).
 
 ```powershell
 $env:WPFGFX_DX11_LOG = "$PWD\tests\out\dx11.log"

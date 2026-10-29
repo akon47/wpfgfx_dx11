@@ -282,9 +282,16 @@ CD3DDeviceManager::CreateD3D11Device(
 #endif
 
     // 진단 로그가 켜져 있으면 디버그 레이어의 검증 메시지도 로그로 받는다.
+    // WPFGFX_DX11_DEBUG_LAYER=0 keeps the log but skips the layer (timing runs).
     if (MilDx11LogEnabled())
     {
-        uFlags |= D3D11_CREATE_DEVICE_DEBUG;
+        char szDebugLayer[4] = {};
+        DWORD cch = GetEnvironmentVariableA("WPFGFX_DX11_DEBUG_LAYER", szDebugLayer, ARRAYSIZE(szDebugLayer));
+
+        if (!(cch == 1 && szDebugLayer[0] == '0'))
+        {
+            uFlags |= D3D11_CREATE_DEVICE_DEBUG;
+        }
     }
 
     D3D_DRIVER_TYPE driverType;
