@@ -182,8 +182,12 @@ $env:WPFGFX_DX11_MSAA = "4"     # or 8; 1 = best the GPU supports. Set before th
 Dx11Engine.GpuAntialiasingSamples = 4;   // takes effect for windows created or resized afterwards
 ```
 
-Edge pixels differ slightly from the stock output, and content drawn with `EdgeMode.Aliased` also gets smooth
-edges. Off-screen intermediates (effects, `RenderTargetBitmap`) keep the CPU path. Memory grows by the window
+Small shapes and thin strokes keep WPF's CPU anti-aliasing even with MSAA on, so icons and 1 px borders look
+like the stock output: fills whose bounding box is at most 32 device pixels on its long side, and strokes at most
+2 pixels thick. Both thresholds are adjustable (`WPFGFX_DX11_MSAA_SMALL_SHAPE`, `WPFGFX_DX11_MSAA_THIN_STROKE`,
+or `Dx11Engine.GpuAntialiasingSmallShapePixels` / `GpuAntialiasingThinStrokePixels`; 0 turns a rule off). Scenes
+with many small animated shapes run faster with lower values. Large-shape edges differ slightly from the stock
+output, and content drawn with `EdgeMode.Aliased` also gets smooth edges. Off-screen intermediates (effects, `RenderTargetBitmap`) keep the CPU path. Memory grows by the window
 size times the sample count times 4 bytes.
 
 ### `D3D11Image`: a `D3DImage` with an `ID3D11Texture2D` back buffer

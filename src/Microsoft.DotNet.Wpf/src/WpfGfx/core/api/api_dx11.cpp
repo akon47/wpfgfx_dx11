@@ -182,6 +182,9 @@ Cleanup:
 //             2 = GPU anti-aliasing for windows (D32): uValue is the MSAA
 //                 sample count (0 off, 1 best available, 4, 8). Applies to
 //                 windows created or resized afterwards.
+//             3 = with GPU anti-aliasing, fills whose long side is at most
+//                 uValue device pixels keep CPU coverage AA (D36, default 32).
+//             4 = same for strokes at most uValue pixels thick (default 2).
 //
 //------------------------------------------------------------------------------
 
@@ -199,6 +202,11 @@ WpfGfxDx11_SetOption(
     if (uOption == MilDx11Option_GpuAntialiasing)
     {
         MilDx11SetGpuAntialiasSamples(uValue);
+    }
+    else if (   uOption == MilDx11Option_MsaaSmallShapePixels
+             || uOption == MilDx11Option_MsaaThinStrokePixels)
+    {
+        MilDx11SetMsaaThreshold(uOption, uValue);
     }
     else
     {

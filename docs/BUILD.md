@@ -81,6 +81,9 @@ dotnet build -c Release -p:SmokeTfm=net10.0-windows       # net10.0-windows
 - `--resize <steps>`: 창 크기를 단계별로 키우고 줄이며 매 단계 캡처해 검은 픽셀 비율을 보고한다(D29 플립 모델의 제자리 리사이즈 검증).
 - `--software`: `RenderOptions.ProcessRenderMode = SoftwareOnly` 로 그린다(소프트웨어 래스터라이저 + WARP 3D 폴백, L19).
 - `--bug-nan`, `--bug-aliased [점 파일]`, `--bug-bitmapcache [개수]`: 엔진 원인 업스트림 버그 재현(D34). 결과 줄 `bug: <이름> survived=...`.
+- `--icons <png>`: 작은 벡터 콘텐츠(아이콘 16~48 px, 1 px 테두리, 얇은 선, 맞닿은 도형, Aliased 아이콘)를 캡처하고 영역 좌표를
+  `icons-region: 이름 x y w h` 로 찍는다(D36). `WPFGFX_DX11_MSAA_SMALL_SHAPE=<px>`, `WPFGFX_DX11_MSAA_THIN_STROKE=<px>` 로 문턱값을 바꾼다.
+- `--bug-spinblur [프레임]`: 블러를 먹인 사각형이 제자리 회전할 때 무게중심 편차(D33 철회 회귀 방지).
 - `--bug-maximize [횟수]`: WindowChrome 대화상자(980×500)를 최대화/복원 반복(D35). 최대화 창은 모니터보다 크다. UI 스레드가 8초 멈추면
   감시 스레드가 `survived=false hung UI thread` 를 찍고 끝낸다. 환경 변수 `WPFGFX_DX11_FLIP_BUFFERS=2|3`, `WPFGFX_DX11_TEST_SKIP_FULL_PRESENT=1` 과 함께 쓴다.
 - Present·ResizeBuffers 가 실패하면 로그에 `DXGI[...]` 줄(DXGI 정보 큐의 거부 사유)과 더티 사각형이 남는다(디버그 레이어가 켜져 있을 때).
@@ -122,7 +125,7 @@ dotnet build src\WpfGfx.Dx11 -c Release      # 산출물: src\WpfGfx.Dx11\bin\Re
 .\tests\run-smoke.ps1 -Rid win-x86 -Tfm net8.0-windows   # x86: 먼저 .\build.cmd -configuration Release -platform x86
 ```
 
-행: engine, standard, spin jitter, resize(16 steps), software mode, bug #7421·#8031, maximize/restore(스톡, 플립 2·3버퍼 × MSAA, 재시도 경로), gpu antialiasing(MSAA 4x), transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
+행: engine, standard, spin jitter, resize(16 steps), software mode, bug #7421·#8031, maximize/restore(스톡, 플립 2·3버퍼 × MSAA, 재시도 경로), blurred rotation jitter, small shapes under MSAA 8x, gpu antialiasing(MSAA 4x), transparent window, media, device loss recovery, RenderTargetBitmap(software / GPU opt-in),
 frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, 선택 bench(일반 창·투명 창, 스톡·D3D11).
 
 의도된 차이는 제외한다: 4번 셀(회전 애니메이션 위상), 16번 셀(스톡에서는 안내 문구). 캡처는 `PrintWindow(PW_CLIENTONLY)` 로

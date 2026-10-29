@@ -41,6 +41,8 @@ public static class Dx11Engine
 
     private const uint OptionHardwareRenderTargetBitmap = 1;
     private const uint OptionGpuAntialiasing = 2;
+    private const uint OptionMsaaSmallShapePixels = 3;
+    private const uint OptionMsaaThinStrokePixels = 4;
     private static bool s_hardwareRenderTargetBitmap;
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -128,6 +130,30 @@ public static class Dx11Engine
     }
 
     private static int s_gpuAntialiasingSamples;
+
+    /// <summary>
+    /// With GPU anti-aliasing on, fills whose device-space bounding box has a long side of at most this many
+    /// pixels keep WPF's CPU coverage anti-aliasing, so small icons and borders look like the stock output.
+    /// Default 32; 0 sends every fill to MSAA. Same as <c>WPFGFX_DX11_MSAA_SMALL_SHAPE</c>. Takes effect at once.
+    /// </summary>
+    public static int GpuAntialiasingSmallShapePixels
+    {
+        get => s_smallShapePixels;
+        set { EnsureAvailable(); Marshal.ThrowExceptionForHR(WpfGfxDx11_SetOption(OptionMsaaSmallShapePixels, (uint)Math.Max(0, value))); s_smallShapePixels = value; }
+    }
+
+    /// <summary>
+    /// With GPU anti-aliasing on, strokes at most this many device pixels thick keep CPU coverage
+    /// anti-aliasing whatever their length. Default 2; 0 disables. Same as <c>WPFGFX_DX11_MSAA_THIN_STROKE</c>.
+    /// </summary>
+    public static int GpuAntialiasingThinStrokePixels
+    {
+        get => s_thinStrokePixels;
+        set { EnsureAvailable(); Marshal.ThrowExceptionForHR(WpfGfxDx11_SetOption(OptionMsaaThinStrokePixels, (uint)Math.Max(0, value))); s_thinStrokePixels = value; }
+    }
+
+    private static int s_smallShapePixels = 32;
+    private static int s_thinStrokePixels = 2;
 
     internal static void EnsureAvailable()
     {

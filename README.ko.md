@@ -167,7 +167,10 @@ $env:WPFGFX_DX11_MSAA = "4"     # 또는 8. 1 = GPU 가 지원하는 최대. 앱
 Dx11Engine.GpuAntialiasingSamples = 4;   // 이후에 만들어지거나 크기가 바뀌는 창부터 적용
 ```
 
-가장자리 픽셀이 스톡과 조금 다르고, `EdgeMode.Aliased` 로 그린 콘텐츠도 부드러운 가장자리가 됩니다. 화면 밖 중간 대상(효과,
+MSAA 를 켜도 작은 도형과 얇은 선은 WPF 의 CPU 안티에일리어싱을 그대로 써서 아이콘과 1 px 테두리가 스톡과 같게 보입니다.
+기준은 바운딩 박스 긴 변이 장치 픽셀 32 이하인 채우기, 두께 2 픽셀 이하인 선이며, 둘 다 바꿀 수 있습니다(`WPFGFX_DX11_MSAA_SMALL_SHAPE`,
+`WPFGFX_DX11_MSAA_THIN_STROKE`, 또는 `Dx11Engine.GpuAntialiasingSmallShapePixels` / `GpuAntialiasingThinStrokePixels`. 0 이면 규칙을 끔).
+작은 도형이 많이 움직이는 화면은 값을 낮추면 빨라집니다. 큰 도형의 가장자리는 스톡과 조금 다르고, `EdgeMode.Aliased` 콘텐츠도 부드러운 가장자리가 됩니다. 화면 밖 중간 대상(효과,
 `RenderTargetBitmap`)은 CPU 경로를 그대로 씁니다. 메모리는 창 크기 × 표본 수 × 4바이트만큼 늘어납니다.
 
 ### `D3D11Image`: 백버퍼가 `ID3D11Texture2D` 인 `D3DImage`

@@ -500,12 +500,6 @@ private:
         __out_ecount(1) CRectF<CoordinateSpace::PageInPixels> &surfaceBoundsWorldSpace
         );
 
-    HRESULT QuantizeEffectIntermediateSize(
-        __in_ecount(1) CMilEffectDuce *pEffect,
-        __inout UINT &uWidth,
-        __inout UINT &uHeight
-        );
-
     HRESULT CalculateEffectTextureLimits(
         __in UINT uTextureWidthIn,
         __in UINT uTextureHeightIn,
