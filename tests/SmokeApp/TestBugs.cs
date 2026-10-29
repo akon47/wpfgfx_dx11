@@ -18,6 +18,9 @@ namespace SmokeApp;
 ///   --bug-nan                 dotnet/wpf#7421: a clip geometry built from a NaN rectangle
 ///   --bug-aliased [points]    dotnet/wpf#3501: a dense aliased polyline that moves sideways
 ///   --bug-bitmapcache [n]     dotnet/wpf#8031: n elements with CacheMode = BitmapCache (default 6000)
+///   --bug-maximize [n]        D35: a WindowChrome dialog maximized/restored n times (default 12); maximized windows
+///                             are larger than the monitor (8 px border outside the screen). A watchdog reports a
+///                             hung UI thread instead of hanging.
 /// </summary>
 internal static class TestBugs
 {
@@ -47,6 +50,7 @@ internal static class TestBugs
                 "nan" => await RunNaNAsync(window),
                 "aliased" => await RunAliasedAsync(window, arg),
                 "bitmapcache" => await RunBitmapCacheAsync(window, arg),
+                "maximize" => await RunMaximizeAsync(window, arg),
                 _ => "unknown bug scenario",
             };
             // One more frame so a failure in the last pass is seen.
@@ -194,6 +198,69 @@ internal static class TestBugs
         await Flush(window, 800);
         return string.Format(CultureInfo.InvariantCulture, "elements={0} gdiObjects={1}", n, GetGuiResources(System.Diagnostics.Process.GetCurrentProcess().Handle, 0));
     }
+
+    // ---------------------------------------------------------------- D35 maximize / restore
+    private static async Task<string> RunMaximizeAsync(Window window, string? arg)
+    {
+        int n = arg != null && int.TryParse(arg, out int v) ? v : 12;
+        window.Width = 980; window.Height = 500;
+        System.Windows.Shell.WindowChrome.SetWindowChrome(window, new System.Windows.Shell.WindowChrome
+        {
+            CaptionHeight = 32, ResizeBorderThickness = new Thickness(6), GlassFrameThickness = new Thickness(0),
+        });
+        var grid = new Grid { Background = new SolidColorBrush(Color.FromRgb(0x20, 0x24, 0x28)) };
+        for (int i = 0; i < 24; i++)
+        {
+            grid.Children.Add(new Border
+            {
+                Width = 120 + i * 37 % 300, Height = 40 + i * 13 % 90, CornerRadius = new CornerRadius(6),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(i * 53 % 900, i * 29 % 420, 0, 0),
+                Background = new SolidColorBrush(Color.FromRgb((byte)(40 + i * 9), (byte)(90 + i * 5), 200)),
+                Effect = i % 3 == 0 ? new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 12, ShadowDepth = 3 } : null,
+            });
+        }
+        grid.Children.Add(new TextBlock { Text = "maximize / restore", Foreground = Brushes.White, FontSize = 20, Margin = new Thickness(12, 6, 0, 0) });
+        window.Content = grid;
+        await Flush(window, 400);
+
+        // Watchdog: if the UI thread stops pumping (render thread died while the UI waits on it), report and exit.
+        long lastTick = Environment.TickCount64;
+        var watchdog = new System.Threading.Thread(() =>
+        {
+            while (true)
+            {
+                System.Threading.Thread.Sleep(500);
+                if (Environment.TickCount64 - System.Threading.Interlocked.Read(ref lastTick) > 8000)
+                {
+                    Console.WriteLine("bug: maximize survived=false hung UI thread for 8 s");
+                    Console.Out.Flush();
+                    Environment.Exit(3);
+                }
+            }
+        }) { IsBackground = true };
+        watchdog.Start();
+
+        double maxW = 0, maxH = 0;
+        for (int i = 0; i < n && s_failure == null; i++)
+        {
+            window.WindowState = WindowState.Maximized;
+            await Flush(window, 250);
+            System.Threading.Interlocked.Exchange(ref lastTick, Environment.TickCount64);
+            var src = (System.Windows.Interop.HwndSource?)PresentationSource.FromVisual(window);
+            if (src != null && GetWindowRect(src.Handle, out RECTW r)) { maxW = r.Right - r.Left; maxH = r.Bottom - r.Top; }
+            window.WindowState = WindowState.Normal;
+            await Flush(window, 250);
+            System.Threading.Interlocked.Exchange(ref lastTick, Environment.TickCount64);
+        }
+        System.Threading.Interlocked.Exchange(ref lastTick, long.MaxValue / 2);
+        return string.Format(CultureInfo.InvariantCulture, "cycles={0} maximized={1}x{2}", n, maxW, maxH);
+    }
+
+    private struct RECTW { public int Left, Top, Right, Bottom; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECTW lpRect);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetGuiResources(IntPtr hProcess, uint uiFlags);

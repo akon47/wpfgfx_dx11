@@ -381,3 +381,31 @@ WPF 의 CPU 커버리지 래스터라이저 `CHwRasterizer`(안티에일리어�
 재현되지 않아 손대지 않은 것: dotnet/wpf#3501(`EdgeMode.Aliased` 굵은 선, 보고자 데이터로도 스톡·D3D11 모두 재현 안 됨), #2158(화면
 잠금 후 정지, 자동 재현 수단 없음), #4480(D3D9Ex `SWAPEFFECT_COPY` 원인으로 분석된 글리치, 플립 모델(D29)로 경로 자체가 바뀜),
 ARM64 색 채널(#11847)·효과(#9909)는 실행 장비가 없다.
+
+## D35. 새로 만들었거나 크기를 바꾼 플립 체인의 첫 프레젠트는 더티 사각형 없이 하고, Present 거부는 렌더 스레드를 죽이지 않는다 (2026-10-29, D29 보완)
+
+**증상.** WindowChrome 대화상자를 최대화하면(창이 모니터보다 커져 테두리가 8px 씩 화면 밖으로 나감) `Present1` 이 `DXGI_ERROR_INVALID_CALL`
+로 실패하고 렌더 스레드가 끝나, 크기 변경을 동기로 기다리던 UI 스레드가 멈췄다. 스톡 엔진은 문제없다. 스모크 `--bug-maximize` 로 매번 재현됐다.
+
+**원인(DXGI 정보 큐로 확정).** `IDXGISwapChain::Present: Partial Presentation (using scroll or dirty rects) is not valid until first submitting
+a regular Present without scroll or dirty rects.` `ResizeBuffers` 직후 첫 프레젠트에 더티 사각형 `8,8,2576,1408` 하나를 넘겼다. 최대화된
+WindowChrome 창은 내용이 버퍼 안쪽 8px 에서 시작하므로 사각형이 버퍼 전체가 아니다. 보통 크기 변경은 우연히 버퍼 전체 사각형이라 드러나지 않았다.
+
+**수정.**
+- `CD3DSwapChain` 이 생성·`ResizeBuffers` 때 "전체 프레젠트" 를 버퍼 수만큼 예약하고(`TakeFullPresent`), 그동안 `PresentWithD3D` 는 더티 사각형
+  없이 프레젠트한다. 버퍼 내용 보존 복사(D29 `SyncBackBufferAfterPresent`)는 그대로다.
+- 방어: 더티 사각형을 넘긴 `Present1` 이 `INVALID_CALL` 이면 DXGI 메시지를 로그에 남기고 더티 사각형 없이 한 번 다시 프레젠트한다. 그래도
+  거부되면 `WGXERR_NEED_RECREATE_AND_PRESENT` 로 바꿔 창 대상만 다시 만든다(`CSlaveHWndRenderTarget` 이 처리, 렌더 스레드는 산다). 이런 거부가
+  3번 쌓이면 이후 창은 비트블트 모델로 만든다.
+- 진단: 로그 + 디버그 레이어일 때 DXGI 팩터리를 `DXGI_CREATE_FACTORY_DEBUG` 로 만들고, Present1·ResizeBuffers 실패 때 `IDXGIInfoQueue`
+  (`DXGI_DEBUG_ALL`) 메시지와 더티 사각형을 로그에 남긴다.
+- 시험 스위치: `WPFGFX_DX11_FLIP_BUFFERS=2|3`(기본 3), `WPFGFX_DX11_TEST_SKIP_FULL_PRESENT=1`(원래 버그를 일부러 재현해 재시도 경로를 시험).
+
+**같이 드러난 D29 결함.** 첫 프레젠트를 전체로 하자 게이트의 리사이즈 행(검은 픽셀 최대 93%)과 디바이스 손실 행(D3DImage 셀이 빈 채로
+11%)이 실패했다. 프레젠트 뒤 보존 복사가 "방금 보여준 프레임" 을 버퍼 인덱스 1 에서 읽었는데, DXGI 는 플립 프레젠트마다 버퍼 인터페이스 뒤의
+리소스를 돌리므로 방금 보여준 프레임은 **가장 높은 인덱스**(`BufferCount - 1`)다. 버퍼 2개에서는 둘이 같아 맞았고, 3개(D29 수정)에서는
+더 오래된(또는 한 번도 안 그린) 버퍼를 복사했다. 부분 프레젠트는 DWM 이 더티 영역만 갱신해 이 오래된 내용을 가렸다. 인덱스를 고친 뒤
+리사이즈 0.12%(스톡과 같음, 버퍼 2·3개 모두), 디바이스 손실 차이 0.00%.
+
+**검증.** 최대화/복원 12회: 수정 전 3/3 실패, 수정 뒤 버퍼 2·3개 × MSAA 끔·4x 모두 생존·거부 0회. 시험 스위치를 켜면 거부 12회가 모두
+재시도로 구제된다. 게이트 `maximize/restore` 행.

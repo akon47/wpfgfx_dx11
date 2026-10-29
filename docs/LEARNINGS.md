@@ -171,3 +171,12 @@ Map 할 수 없어 `CD3DSurface::LockRect` 가 `WGXERR_INVALIDCALL` 을 내고, 
 `CBaseRenderTarget::Init` 이 더티 영역용 `HRGN` 2개를 모든 렌더타깃에 만들었다. BitmapCache·효과·RenderTargetBitmap 중간 대상은
 프레젠트하지 않으므로 영역을 쓰지 않는데도 GDI 객체를 잡았고, 수천 개에서 `CreateRectRgn` 이 NULL 을 돌려 렌더 스레드가 죽었다
 (dotnet/wpf#8031). 증상은 `UCEERR_RENDERTHREADFAILURE` 뿐이라 원인이 안 보인다. `GetGuiResources(GR_GDIOBJECTS)` 로 확인한다. D34.
+
+## L23. DXGI 의 거부 사유는 DXGI 정보 큐에만 있다. D3D11 디버그 레이어만으로는 안 보인다 (2026-10-29)
+
+`D3D11_CREATE_DEVICE_DEBUG` 는 D3D11 메시지만 `ID3D11InfoQueue` 에 넣는다. 스왑체인·Present 의 거부 사유는 DXGI 쪽 메시지라, 팩터리를
+`CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG)` 로 만들고 `DXGIGetDebugInterface1` → `IDXGIInfoQueue` 를 `DXGI_DEBUG_ALL` 로 읽어야 나온다
+(`dxguid.lib` 없이 GUID 를 직접 정의했다). 이것 없이 `INVALID_CALL` 만 보고 추측하면 엉뚱한 곳을 고치게 된다. 또 플립 모델은 생성·크기 변경
+뒤 첫 프레젠트에 더티 사각형을 받지 않는다(D35). 버퍼 전체를 덮는 사각형이면 우연히 통과해 테스트에서 놓치기 쉽다.
+- 플립 모델에서 방금 프레젠트한 버퍼는 `GetBuffer(BufferCount - 1)` 이다(인덱스 1 이 아니다). 버퍼 2개로만 시험하면 둘이 같아 드러나지 않는다.
+- 더티 사각형 프레젠트는 버퍼 바깥 영역의 잘못된 내용을 화면에서 가린다. 보존 복사 같은 로직은 전체 프레젠트로도 한 번씩 시험해야 한다.

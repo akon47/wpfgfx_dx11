@@ -11,6 +11,8 @@
 //-----------------------------------------------------------------------------
 
 #include "precomp.hpp"
+#include "mildx11log.h"
+#include <dxgi1_3.h>
 
 //#define DdQueryDisplaySettingsUniqueness    GdiEntry13
 //
@@ -231,7 +233,15 @@ CD3DModuleLoaderInternal::CreateD3DObjects(
         m_cD3DRefs++;
     }
 
-    MIL_THR(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&pFactory)));
+    // With the diagnostic log and its debug layer, ask DXGI for its own messages too.
+    if (MilDx11DebugLayerWanted())
+    {
+        MIL_THR(CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, __uuidof(IDXGIFactory1), reinterpret_cast<void **>(&pFactory)));
+    }
+    if (pFactory == NULL)
+    {
+        MIL_THR(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&pFactory)));
+    }
 
     if (FAILED(hr))
     {
