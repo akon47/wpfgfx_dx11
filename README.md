@@ -128,6 +128,18 @@ Replacing `wpfgfx_cor3.dll` and `D3DCompiler_47_cor3.dll` inside
 `C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App\<version>` switches every WPF app of that
 runtime on the machine. Keep a copy of the originals; a runtime update will overwrite your files.
 
+### .NET Framework 4.8.x
+
+The same DLL also runs .NET Framework 4.8.x WPF. 4.8.1 uses the same protocol fingerprint and a subset of
+the exports. With the engine under the name `wpfgfx_v0400.dll`, the test scene matches the stock engine on
+x64 and x86 (`tests/run-netfx.ps1`, decision D37 in [docs/DECISIONS.md](docs/DECISIONS.md)).
+
+There is no clean per-app way to switch, though. .NET Framework loads
+`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\wpfgfx_v0400.dll` (`Framework` for 32-bit) by full path,
+so copying the DLL next to the app or preloading it does nothing. The test host
+`tests/NetFxHost` redirects that load inside its own process. Replacing the system file switches the whole
+machine; the file is owned by TrustedInstaller, and Windows Update may restore it.
+
 ### Checking which engine is running
 
 - `RenderCapability.Tier >> 16` is `2` on both engines; it does not tell them apart.
@@ -292,6 +304,7 @@ on this engine; the engine recognises it through `QueryInterface`.
   D3D11 engine with the stock engine (standard scene, resize, layered window, media, device loss,
   `RenderTargetBitmap`, frame queues, optional multi-monitor and benchmark rows).
 - Upstream tests: `.\tests\run-drts.ps1` runs the milcore DRTs of dotnet/wpf-test on both engines.
+- .NET Framework: `.\tests\run-netfx.ps1` runs a scene on .NET Framework 4.8.x (x64, x86) with both engines.
 - Design decisions are numbered in [docs/DECISIONS.md](docs/DECISIONS.md); pitfalls in
   [docs/LEARNINGS.md](docs/LEARNINGS.md); the D3D9 inventory and its D3D11 mapping in
   [docs/INVENTORY.md](docs/INVENTORY.md) and [docs/DESIGN.md](docs/DESIGN.md). The docs are written in Korean.
@@ -305,6 +318,7 @@ on this engine; the engine recognises it through `QueryInterface`.
 | `src/WpfGfx.Dx11/`, `src/WpfGfx.Dx11.Interop/` | Managed helper assemblies for the extra API. |
 | `eng/`, `build.cmd`, `global.json` | Upstream Arcade build infrastructure, trimmed to the two DLLs. |
 | `tests/SmokeApp/`, `tests/run-smoke.ps1`, `tests/run-drts.ps1` | Smoke app, gate script, upstream DRT runner. |
+| `tests/NetFxHost/`, `tests/run-netfx.ps1` | .NET Framework 4.8.x host and its check script. |
 | `docs/` | Build guide, roadmap, decisions, learnings, design, inventory, frame queue spec. |
 
 ## License

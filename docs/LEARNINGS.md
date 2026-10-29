@@ -187,3 +187,14 @@ Map 할 수 없어 `CD3DSurface::LockRect` 가 `WGXERR_INVALIDCALL` 을 내고, 
 결과가 미세하게 한쪽으로 쏠린다. 크기가 프레임마다 다르면 그 쏠림이 매 프레임 바뀌어 떨림이 된다(D33 철회). 정적인 장면 비교로는 안 보이고,
 회전처럼 크기가 계속 바뀌는 장면의 무게중심 편차로만 잡힌다(`--bug-spinblur`). 텍스처 재사용으로 여백을 허용하려면 셰이더 쪽에서 논리 영역으로
 UV 를 잘라야 한다.
+
+## L25. .NET Framework WPF 는 wpfgfx 를 설치 폴더에서 전체 경로로 올리고, P/Invoke 반환형이 .NET 과 다를 수 있다 (2026-10-30)
+
+- `PresentationCore`(.NET Framework 에서는 혼합 모드)의 `NativeWPFDLLLoader` 는 `<설치 폴더>\WPF\wpfgfx_v0400.dll` 을 `LoadLibraryW(전체 경로)` 로
+  먼저 올린다. 이후 `DllImport("wpfgfx_v0400.dll")` 는 같은 기본 이름의 모듈에 묶인다. 다른 폴더의 같은 이름 DLL 을 먼저 올려도 둘 다 로드되고
+  프레임워크 쪽이 쓰인다. 프로세스 안에서 바꾸려면 그 `LoadLibraryW` 를 가로채 다른 경로를 돌려줘야 하고, 돌려준 모듈의 기본 이름도
+  `wpfgfx_v0400.dll` 이어야 한다(D37).
+- export 집합이 같아도 관리 선언의 반환형이 다를 수 있다. .NET 은 `void`, .NET Framework 는 `int` 로 선언해 `HRESULT.Check` 하는 export 가
+  있었다. `void` 구현은 남은 RAX 를 돌려주므로 실패가 무작위다. 비교는 양쪽 어셈블리를 리플렉션해서 P/Invoke 시그니처를 나란히 놓고 한다.
+  .NET Framework 쪽은 Windows PowerShell 5.1 에서 바로 리플렉션할 수 있다.
+- 오류가 WGXERR(0x8898xxxx)·D3D 계열이 아닌 엉뚱한 HRESULT 면, 값을 돌려주지 않는 함수의 반환값이 읽힌 것을 의심한다.

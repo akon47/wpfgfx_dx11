@@ -137,6 +137,17 @@ frame queues(8, UI blocked), frame queues on stock(폴백), 선택 straddling, �
 `--bench-transparent` 는 벤치 창을 레이어드(`AllowsTransparency`) 창으로, `--bench-partial` 은 움직이는 요소를 24개(왼쪽 위 200×200)로
 줄여 부분 갱신 상황으로 돌린다(D30·D31). 게이트 `-Bench` 는 네 조합(일반·투명·투명+부분)을 스톡과 D3D11 로 각각 기록한다.
 
+## .NET Framework 4.8.x 확인: tests/run-netfx.ps1
+
+같은 DLL 이 .NET Framework 4.8.x WPF 에서도 도는지 본다(D37). `tests/NetFxHost`(net481)를 아키텍처별로 빌드해 스톡 `wpfgfx_v0400.dll`
+과 D3D11 엔진으로 같은 장면을 그리고 비교한다(`tests/out/report-netfx.md`). .NET Framework 는 wpfgfx 를 설치 폴더에서 전체 경로로
+올리므로 호스트가 자기 프로세스 안에서만 그 로드를 돌린다(L25). 머신의 파일은 바꾸지 않는다.
+
+```powershell
+.\tests\run-netfx.ps1              # artifacts 빌드 결과, x64 + x86 (해당 .NET Framework WPF 가 없으면 SKIP)
+.\tests\run-netfx.ps1 -Arch x64 -Dll <폴더>
+```
+
 ## 확인된 사실 (Phase 0)
 
 - 업스트림 소스 그대로 빌드한 DLL이 .NET 8.0.31 런타임에서 Tier 2(하드웨어)로 렌더링된다.

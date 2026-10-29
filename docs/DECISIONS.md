@@ -443,3 +443,24 @@ D32 4x·8x 에서 16~48 px 아이콘과 1 px 테두리가 스톡보다 거칠다
 - 남은 차이: `EdgeMode.Aliased` 콘텐츠는 MSAA 대상에서 여전히 부드러워진다(Aliased 는 커버리지 래스터라이저를 쓰지 않는 경로라 이 규칙과
   무관, 차이>16 11~15%). 픽셀 중심 커버리지를 흉내 내려면 셰이더 작업이 필요하다. 애니메이션 중 크기가 문턱값을 넘나드는 도형은 그 프레임에
   가장자리 계조가 커버리지 ↔ MSAA 로 바뀐다(최대 차이는 위 표의 "전" 수준).
+
+## D37. 같은 DLL 이 .NET Framework 4.8.x WPF 에서도 돌게 한다 (2026-10-30)
+
+.NET Framework 4.8.1 WPF(PresentationCore 4.8.9347)와의 관리/네이티브 계약을 비교했다.
+
+- 프로토콜 지문 `MS.Internal.Composition.Version.MilSdkVersion` 이 `0x200184C0` 으로 우리와 같다. 이 값은 codegen 이 명령 구조체 전체에서
+  계산하므로(`codegen/mcg/generators/ProtocolFingerprint.cs`) DUCE 명령 구조체가 같다는 뜻이다.
+- 스톡 `wpfgfx_v0400.dll` 의 export 106개는 모두 우리 117개 안에 있다.
+- 관리 쪽 wpfgfx P/Invoke 110개의 시그니처 차이는 넷뿐이다: 델리게이트 매개변수의 형식 이름(마샬링은 같음), .NET 8+ 전용
+  `RenderOptions_EnableHardwareAccelerationInRdp`, 선언만 있고 스톡에도 export 가 없는 `MilGlyphCache_SetCreateGlyphBitmapsCallback`,
+  그리고 `WpfGfx_SetDisableBoundsCheckProtection` 의 반환형.
+
+결정: 마지막 하나만 고친다. .NET Framework 는 이 함수를 `int` 로 선언하고 `MediaSystem.Startup` 에서 `HRESULT.Check` 에 넘긴다. 네이티브가 `void`
+면 남은 레지스터 값이 실패 코드로 읽혀 첫 비주얼에서 `COMException`(실측 `0xCF7025A0`)이 난다. 네이티브가 `S_OK` 를 반환하게 했다. .NET 8/10
+은 `void` 로 선언하고 반환값을 보지 않으므로, D1 의 export 집합·명령 구조체·`MIL_SDK_VERSION` 은 그대로다.
+
+교체 방법은 정하지 않았다. .NET Framework 는 `NativeWPFDLLLoader` 가 `<WPF 설치 폴더>\wpfgfx_v0400.dll` 을 전체 경로로 `LoadLibraryW` 해 둔다.
+그래서 앱 폴더 복사, 미리 로드, import resolver 가 모두 통하지 않는다(L25). 남는 길은 두 가지다.
+(a) 프레임워크 폴더의 파일을 바꾼다. 머신 전체에 영향을 주고 TrustedInstaller 소유이며 Windows Update 가 되돌릴 수 있다.
+(b) 앱 프로세스 안에서 그 로드를 돌린다. 테스트 호스트 `tests/NetFxHost` 는 WPF 를 건드리기 전에 `kernelbase!LoadLibraryW` 를 패치한다.
+제품용 방법은 사용자 결정이 필요하다. 검증은 `tests/run-netfx.ps1` 로 한다(스톡과 같은 장면 비교, x64·x86).

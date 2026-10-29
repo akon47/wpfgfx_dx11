@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- .NET Framework 4.8.1 host for the D3D11 engine (D37). Built per architecture by tests/run-netfx.ps1. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net481</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget Condition="'$(NetFxArch)' == ''">x64</PlatformTarget>
+    <PlatformTarget Condition="'$(NetFxArch)' != ''">$(NetFxArch)</PlatformTarget>
+    <!-- Per-architecture output and intermediate folders: a shared obj would skip the compile and copy the other bitness. -->
+    <OutputPath>bin\$(Configuration)\$(PlatformTarget)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\$(PlatformTarget)\</IntermediateOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+</Project>
