@@ -117,6 +117,17 @@ $env:DOTNET_ROOT = $dst
 `C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App\<버전>` 안의 `wpfgfx_cor3.dll` 과 `D3DCompiler_47_cor3.dll` 을 바꾸면
 그 런타임을 쓰는 머신의 모든 WPF 앱이 바뀝니다. 원본을 보관해 두세요. 런타임 업데이트가 파일을 덮어씁니다.
 
+### .NET Framework 4.8.x
+
+같은 DLL 이 .NET Framework 4.8.x WPF 에서도 돕니다. 4.8.1 은 프로토콜 지문이 같고, 쓰는 export 도 모두 이 DLL 에 있습니다.
+엔진을 `wpfgfx_v0400.dll` 이름으로 올리면 테스트 장면이 x64·x86 모두 스톡 엔진과 같게 나옵니다(`tests/run-netfx.ps1`,
+[docs/DECISIONS.md](docs/DECISIONS.md) D37).
+
+다만 앱별로 깔끔하게 바꾸는 방법은 없습니다. .NET Framework 는 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\wpfgfx_v0400.dll`
+(32비트는 `Framework`)을 전체 경로로 올립니다. 그래서 앱 옆에 두거나 미리 로드해도 소용이 없습니다. 테스트 호스트 `tests/NetFxHost` 는
+자기 프로세스 안에서만 그 로드를 돌립니다. 시스템 파일을 바꾸면 머신 전체가 바뀝니다. 그 파일은 TrustedInstaller 소유이고
+Windows Update 가 되돌릴 수 있습니다.
+
 ### 어느 엔진이 도는지 확인
 
 - `RenderCapability.Tier >> 16` 은 두 엔진 모두 `2` 라서 구분이 안 됩니다.
@@ -268,6 +279,7 @@ HRESULT WpfGfxDx11_FrameQueue_QueryCapability(UINT displayIndex, BOOL* hardware)
 - 게이트: `.\tests\run-smoke.ps1` 이 .NET 8·10 스모크 앱을 빌드하고 D3D11 엔진과 스톡 엔진의 스크린샷을 비교합니다(표준 장면,
   리사이즈, 레이어드 창, 미디어, 디바이스 손실, `RenderTargetBitmap`, 프레임 큐, 선택으로 다중 모니터·벤치 행).
 - 업스트림 테스트: `.\tests\run-drts.ps1` 이 dotnet/wpf-test 의 milcore DRT 를 두 엔진으로 실행합니다.
+- .NET Framework: `.\tests\run-netfx.ps1` 이 .NET Framework 4.8.x(x64, x86)에서 장면 하나를 두 엔진으로 실행합니다.
 - 설계 결정은 [docs/DECISIONS.md](docs/DECISIONS.md)에 번호로, 함정은 [docs/LEARNINGS.md](docs/LEARNINGS.md)에, D3D9 인벤토리와
   D3D11 매핑은 [docs/INVENTORY.md](docs/INVENTORY.md)·[docs/DESIGN.md](docs/DESIGN.md)에 있습니다.
 
@@ -280,6 +292,7 @@ HRESULT WpfGfxDx11_FrameQueue_QueryCapability(UINT displayIndex, BOOL* hardware)
 | `src/WpfGfx.Dx11/`, `src/WpfGfx.Dx11.Interop/` | 추가 API 를 감싸는 관리 도우미 어셈블리. |
 | `eng/`, `build.cmd`, `global.json` | 업스트림 Arcade 빌드 인프라. DLL 두 개만 빌드하도록 줄였습니다. |
 | `tests/SmokeApp/`, `tests/run-smoke.ps1`, `tests/run-drts.ps1` | 스모크 앱, 게이트 스크립트, 업스트림 DRT 러너. |
+| `tests/NetFxHost/`, `tests/run-netfx.ps1` | .NET Framework 4.8.x 호스트와 확인 스크립트. |
 | `docs/` | 빌드 절차, 로드맵, 결정, 학습 기록, 설계, 인벤토리, 프레임 큐 명세. |
 
 ## 라이선스
