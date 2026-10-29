@@ -150,6 +150,32 @@ foreach ($t in $Tfm) {
         Add-Row ("maximize/restore x8, " + $cfg[2]) $short $(if ($line) { $line.Trim() -replace "^bug: maximize ", "" } else { "no result" }) ($mh -match "survived=true")
     }
 
+    # ---- blurred element rotating in place: its blurred body must not wobble (regression guard: withdrawn D33 rounding)
+    $sb = Run-Smoke $t $true @("--bug-spinblur", "40")
+    $devB = 99.0; if ($sb -match "centroidMaxDev=([0-9.]+)px") { $devB = [double]$matches[1] }
+    Add-Row "blurred rotation jitter" $short ("D3D11 centroid max dev {0:F2}px" -f $devB) ($devB -lt 0.5)
+
+    # ---- small vector content under GPU anti-aliasing 8x (D36): icons, 1 px borders and thin lines match stock
+    $is = Run-Smoke $t $false @("--icons", "$out\$short-icons-stock.png")
+    $env:WPFGFX_DX11_MSAA = "8"
+    try { [void](Run-Smoke $t $true @("--icons", "$out\$short-icons-msaa8.png")) } finally { Remove-Item Env:\WPFGFX_DX11_MSAA -ErrorAction SilentlyContinue }
+    $worst = 0.0; $worstName = ""
+    Add-Type -AssemblyName System.Drawing
+    $ia = [System.Drawing.Bitmap]::FromFile("$out\$short-icons-stock.png"); $ib = [System.Drawing.Bitmap]::FromFile("$out\$short-icons-msaa8.png")
+    try {
+        foreach ($line in ($is -split "`n" | Where-Object { $_ -match "^icons-region:" })) {
+            $p = ($line -replace "^icons-region:\s*", "").Trim() -split "\s+"
+            # EdgeMode.Aliased under MSAA is a documented difference; icon48 is above the 32 px default and stays on MSAA.
+            if ($p[0] -like "aliased*" -or $p[0] -eq "icon48") { continue }
+            $n = 0; $c = 0
+            for ($y = [int]$p[2]; $y -lt [int]$p[2] + [int]$p[4]; $y++) { for ($x = [int]$p[1]; $x -lt [int]$p[1] + [int]$p[3]; $x++) {
+                $c++; $pa = $ia.GetPixel($x, $y); $pb = $ib.GetPixel($x, $y)
+                if ([Math]::Max([Math]::Abs($pa.R - $pb.R), [Math]::Max([Math]::Abs($pa.G - $pb.G), [Math]::Abs($pa.B - $pb.B))) -gt 16) { $n++ } } }
+            $f = $n / [Math]::Max(1, $c); if ($f -gt $worst) { $worst = $f; $worstName = $p[0] }
+        }
+    } finally { $ia.Dispose(); $ib.Dispose() }
+    Add-Row "small shapes under MSAA 8x (D36)" $short ("worst region within defaults {0}: diff>16 {1:P2}" -f $worstName, $worst) ($worst -lt 0.01)
+
     # ---- GPU anti-aliasing (D32, opt-in): edges differ slightly from stock, nothing else may
     $env:WPFGFX_DX11_MSAA = "4"
     try {

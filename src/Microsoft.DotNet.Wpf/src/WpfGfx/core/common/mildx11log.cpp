@@ -275,6 +275,50 @@ void MilDx11SetGpuAntialiasSamples(UINT cSamples)
     MIL_DX11_LOG("gpu antialiasing set to %u samples", c);
 }
 
+static LONG s_lMsaaSmallShape = -1;   // -1 = not read yet
+static LONG s_lMsaaThinStroke = -1;
+
+static UINT ReadPixelsEnv(const char *pszName, UINT uDefault)
+{
+    char sz[12] = {};
+    if (GetEnvironmentVariableA(pszName, sz, ARRAYSIZE(sz)) > 0)
+    {
+        return static_cast<UINT>(atoi(sz));
+    }
+    return uDefault;
+}
+
+UINT MilDx11MsaaSmallShapePixels()
+{
+    if (s_lMsaaSmallShape < 0)
+    {
+        InterlockedCompareExchange(&s_lMsaaSmallShape, static_cast<LONG>(ReadPixelsEnv("WPFGFX_DX11_MSAA_SMALL_SHAPE", 32)), -1);
+    }
+    return static_cast<UINT>(s_lMsaaSmallShape);
+}
+
+UINT MilDx11MsaaThinStrokePixels()
+{
+    if (s_lMsaaThinStroke < 0)
+    {
+        InterlockedCompareExchange(&s_lMsaaThinStroke, static_cast<LONG>(ReadPixelsEnv("WPFGFX_DX11_MSAA_THIN_STROKE", 2)), -1);
+    }
+    return static_cast<UINT>(s_lMsaaThinStroke);
+}
+
+void MilDx11SetMsaaThreshold(UINT uOption, UINT uPixels)
+{
+    if (uOption == MilDx11Option_MsaaSmallShapePixels)
+    {
+        InterlockedExchange(&s_lMsaaSmallShape, static_cast<LONG>(uPixels));
+    }
+    else if (uOption == MilDx11Option_MsaaThinStrokePixels)
+    {
+        InterlockedExchange(&s_lMsaaThinStroke, static_cast<LONG>(uPixels));
+    }
+    MIL_DX11_LOG("msaa threshold option %u set to %u px", uOption, uPixels);
+}
+
 void MilDx11CountCreate(MilDx11CreateSite site)
 {
     InterlockedIncrement(&s_rgCreateCounts[site]);

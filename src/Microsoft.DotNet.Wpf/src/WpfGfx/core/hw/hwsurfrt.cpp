@@ -52,6 +52,7 @@ CHwSurfaceRenderTarget::CHwSurfaceRenderTarget(
 
     m_fmtTarget = fmtTarget;
 
+    m_fThinStrokeFill = false;
     m_fIn3D = false;
     m_fZBufferEnabled = false;
 
@@ -1218,7 +1219,8 @@ CHwSurfaceRenderTarget::FillPathWithBrush(
         // If we are anti-aliased, go to trapezoidal AA
         //
 
-        if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
+        if (   pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None
+            && UseCoverageAntialiasing(rcShapeBoundsDeviceSpace.Width(), rcShapeBoundsDeviceSpace.Height()))
         {
             pHwRasterizer = new(&localBuffer) CHwRasterizer();
             IFCOOM(pHwRasterizer);
@@ -1397,7 +1399,20 @@ CHwSurfaceRenderTarget::DrawPathInternal(
 
         IFC(pShapeWiden->GetTightBounds(OUT rcShapeBounds));
 
-        IFC(FillPath(
+        //
+        // D36: a stroke thin in device pixels keeps CPU coverage on a
+        // multisampled target, whatever its length.
+        //
+        {
+            UINT uThin = MilDx11MsaaThinStrokePixels();
+            float flScale = pmatShapeToDevice
+                ? sqrtf(fabsf(pmatShapeToDevice->GetDeterminant2D()))
+                : 1.0f;
+            float flDeviceWidth = min(pPen->GetWidth(), pPen->GetHeight()) * flScale;
+            m_fThinStrokeFill = uThin > 0 && flDeviceWidth <= static_cast<float>(uThin);
+        }
+
+        MIL_THR(FillPath(
             pContextState,
             pBrushContext,
             pShapeWiden,
@@ -1406,6 +1421,8 @@ CHwSurfaceRenderTarget::DrawPathInternal(
             pStrokeBrush,
             matBaseSamplingToDevice
             ));
+        m_fThinStrokeFill = false;
+        IFC(hr);
     }
 
 #if DBG
@@ -1781,7 +1798,8 @@ CHwSurfaceRenderTarget::HwShaderFillPath(
     // If we are anti-aliased, go to trapezoidal AA
     //
 
-    if (pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
+    if (   pContextState->RenderState->AntiAliasMode != MilAntiAliasMode::None
+        && UseCoverageAntialiasing(static_cast<float>(rcRenderingBounds.Width()), static_cast<float>(rcRenderingBounds.Height())))
     {
         pHwRasterizer = new(&localBuffer) CHwRasterizer();
         IFCOOM(pHwRasterizer);
@@ -2562,7 +2580,8 @@ HRESULT CHwSurfaceRenderTarget::EndLayerInternal(
         CEffectList effectList;
         AlphaScaleParams alphaParams;
 
-        if (layer.AntiAliasMode != MilAntiAliasMode::None && !IsTargetMultisampled())
+        if (   layer.AntiAliasMode != MilAntiAliasMode::None
+            && UseCoverageAntialiasing(rcLayerFloat.Width(), rcLayerFloat.Height()))
         {
             pHwRasterizer = new(&localBuffer) CHwRasterizer();
             IFCOOM(pHwRasterizer);

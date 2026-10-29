@@ -51,6 +51,7 @@ internal static class TestBugs
                 "aliased" => await RunAliasedAsync(window, arg),
                 "bitmapcache" => await RunBitmapCacheAsync(window, arg),
                 "maximize" => await RunMaximizeAsync(window, arg),
+                "spinblur" => await RunSpinBlurAsync(window, arg),
                 _ => "unknown bug scenario",
             };
             // One more frame so a failure in the last pass is seen.
@@ -255,6 +256,47 @@ internal static class TestBugs
         }
         System.Threading.Interlocked.Exchange(ref lastTick, long.MaxValue / 2);
         return string.Format(CultureInfo.InvariantCulture, "cycles={0} maximized={1}x{2}", n, maxW, maxH);
+    }
+
+    // ---------------------------------------------------------------- blurred rotating element jitter
+    // A rectangle with BlurEffect rotates in place. Its blurred body's centroid must stay put; frame-to-frame
+    // wobble shows up as deviation (the bench's "shaking" panels).
+    private static async Task<string> RunSpinBlurAsync(Window window, string? arg)
+    {
+        int frames = arg != null && int.TryParse(arg, out int v) ? v : 40;
+        window.Width = 420; window.Height = 420;
+        var rotate = new RotateTransform(0);
+        var rect = new Border
+        {
+            Width = 140, Height = 70, CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(Color.FromRgb(0x30, 0x90, 0xF0)),
+            Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 10 },
+            RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = rotate,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        window.Content = new Grid { Background = Brushes.White, Children = { rect } };
+        await Flush(window, 300);
+        var pts = new List<(double x, double y)>();
+        for (int f = 0; f < frames; f++)
+        {
+            rotate.Angle = f * 7.3;
+            await Flush(window, 40);
+            using var bmp = ScreenCapture.CaptureBitmap(window);
+            double sx = 0, sy = 0, sw = 0;
+            for (int y = 0; y < bmp.Height; y += 1)
+            {
+                for (int x = 0; x < bmp.Width; x += 1)
+                {
+                    var c = bmp.GetPixel(x, y);
+                    double w = Math.Max(0, 255 - c.R) / 255.0;   // blue body darkens red; weight by coverage
+                    if (w > 0.02) { sx += x * w; sy += y * w; sw += w; }
+                }
+            }
+            if (sw > 0) pts.Add((sx / sw, sy / sw));
+        }
+        double mx = pts.Average(p => p.x), my = pts.Average(p => p.y);
+        double dev = pts.Max(p => Math.Sqrt((p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my)));
+        return string.Format(CultureInfo.InvariantCulture, "frames={0} centroidMaxDev={1:F2}px", pts.Count, dev);
     }
 
     private struct RECTW { public int Left, Top, Right, Bottom; }

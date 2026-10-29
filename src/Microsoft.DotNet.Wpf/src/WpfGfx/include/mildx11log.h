@@ -39,6 +39,8 @@ enum MilDx11Option
     MilDx11Option_None = 0,
     MilDx11Option_HardwareRenderTargetBitmap = 1,   // env WPFGFX_DX11_HW_RTB=1
     MilDx11Option_GpuAntialiasing = 2,              // env WPFGFX_DX11_MSAA=<samples>; value = samples (D32)
+    MilDx11Option_MsaaSmallShapePixels = 3,         // env WPFGFX_DX11_MSAA_SMALL_SHAPE=<px>; value = px (D36)
+    MilDx11Option_MsaaThinStrokePixels = 4,         // env WPFGFX_DX11_MSAA_THIN_STROKE=<px>; value = px (D36)
     MilDx11Option_Count
 };
 bool MilDx11OptionEnabled(UINT uOption);
@@ -47,6 +49,13 @@ bool MilDx11OptionEnabled(UINT uOption);
 // for swap chains created or resized afterwards.
 UINT MilDx11GpuAntialiasSamples();
 void MilDx11SetGpuAntialiasSamples(UINT cSamples);
+
+// D36: on a multisampled target, fills whose device bounds have a long side of
+// at most this many pixels, and strokes at most this thick, keep the CPU
+// coverage rasterizer. 0 disables the rule.
+UINT MilDx11MsaaSmallShapePixels();
+UINT MilDx11MsaaThinStrokePixels();
+void MilDx11SetMsaaThreshold(UINT uOption, UINT uPixels);
 void MilDx11SetOption(UINT uOption, bool fEnabled);
 
 

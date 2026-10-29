@@ -266,6 +266,24 @@ protected:
         return m_pD3DTargetSurface != NULL && m_pD3DTargetSurface->Desc().SampleDesc.Count > 1;
     }
 
+    //
+    // D36: whether an anti-aliased fill uses CPU coverage (CHwRasterizer).
+    // Always on a single-sampled target. On a multisampled one only for small
+    // shapes and thin strokes: MSAA has just samples+1 edge levels, which is
+    // visible where edge pixels are most of the shape (icons, 1 px borders),
+    // while CPU coverage costs little there. Coverage output is the same in
+    // every sample, so it resolves to the stock result.
+    //
+    bool UseCoverageAntialiasing(float flDeviceWidth, float flDeviceHeight) const
+    {
+        if (!IsTargetMultisampled() || m_fThinStrokeFill)
+        {
+            return true;
+        }
+        UINT uSmall = MilDx11MsaaSmallShapePixels();
+        return uSmall > 0 && max(flDeviceWidth, flDeviceHeight) <= static_cast<float>(uSmall);
+    }
+
     HRESULT SetAsRenderTarget(
         );
 
@@ -402,6 +420,9 @@ protected:
 
     CMILSurfaceRect m_rcBoundsPre3D;
     bool m_fIn3D;
+
+    // D36: set while the widened shape of a thin stroke is being filled.
+    bool m_fThinStrokeFill;
     bool m_fZBufferEnabled;
 
     //
